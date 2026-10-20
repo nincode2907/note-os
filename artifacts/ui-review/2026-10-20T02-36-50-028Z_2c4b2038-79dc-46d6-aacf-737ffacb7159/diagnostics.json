@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "enabled": true,
+  "entries": [
+    {
+      "project": "noteOS Phase 00",
+      "target": "phase00-harness",
+      "viewport": "desktop",
+      "timestamp": "2026-10-20T02:36:50.505Z",
+      "data": {
+        "consoleErrors": [],
+        "consoleWarnings": [],
+        "pageErrors": [],
+        "failedRequests": [],
+        "httpErrors": []
+      }
+    },
+    {
+      "project": "noteOS Phase 00",
+      "target": "phase00-harness",
+      "viewport": "mobile",
+      "timestamp": "2026-10-20T02:36:51.185Z",
+      "data": {
+        "consoleErrors": [],
+        "consoleWarnings": [],
+        "pageErrors": [],
+        "failedRequests": [],
+        "httpErrors": []
+      }
+    }
+  ]
+}

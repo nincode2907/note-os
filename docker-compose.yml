@@ -7,7 +7,7 @@ services:
     volumes:
       - ./spikes/phase-00/web:/app:ro
     ports:
-      - "127.0.0.1:15000:15000"
+      - "127.0.0.1:15700:15000"
     depends_on:
       api:
         condition: service_healthy
@@ -36,7 +36,7 @@ services:
       REDIS_HOST: redis
     command: ["sh", "-lc", "php artisan migrate --force && php artisan serve --host=0.0.0.0 --port=15001"]
     ports:
-      - "127.0.0.1:15001:15001"
+      - "127.0.0.1:15701:15001"
     depends_on:
       mysql:
         condition: service_healthy

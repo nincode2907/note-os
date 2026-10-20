@@ -4,4 +4,4 @@ streams:
   noteos:
     auto_subscribe: true
     queries:
-      - SELECT id, title, body, privacy, updated_at FROM notes WHERE privacy = 'PRIVATE_SERVER'
+      - SELECT id, title, body, privacy, dataset_id, revision, deleted, updated_at FROM notes WHERE privacy = 'PRIVATE_SERVER' AND dataset_id = 'phase00-bakeoff-v1'

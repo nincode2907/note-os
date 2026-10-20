@@ -1,0 +1,427 @@
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 32B 0.0s done
+#1 DONE 0.2s
+
+#2 [internal] load .dockerignore
+#2 DONE 0.0s
+
+#2 [internal] load .dockerignore
+#2 transferring context:
+#2 transferring context: 34B 0.0s done
+#2 DONE 0.2s
+
+#3 [internal] load metadata for docker.io/library/php:8.4-cli
+#3 DONE 4.6s
+
+#4 [stage-0 1/8] FROM docker.io/library/php:8.4-cli@sha256:1d2cf2b7d715b5b3aa959f0150ccbcc7b71e0181b637e443abf40a7fb56bf79a
+#4 DONE 0.0s
+
+#5 [internal] load build context
+#5 DONE 0.0s
+
+#6 FROM docker.io/library/composer:2
+#6 resolve docker.io/library/composer:2
+#6 resolve docker.io/library/composer:2 1.5s done
+#6 DONE 1.5s
+
+#5 [internal] load build context
+#5 transferring context: 32B 0.1s
+#5 transferring context: 3.71kB 0.2s done
+#5 DONE 0.3s
+
+#7 [stage-0 7/8] COPY . .
+#7 CACHED
+
+#8 [stage-0 2/8] COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+#8 CACHED
+
+#9 [stage-0 3/8] RUN apt-get update && apt-get install -y --no-install-recommends unzip libzip-dev && rm -rf /var/lib/apt/lists/*     && docker-php-ext-install pdo_mysql zip
+#9 CACHED
+
+#10 [stage-0 4/8] WORKDIR /var/www/html
+#10 CACHED
+
+#11 [stage-0 5/8] COPY composer.json composer.lock ./
+#11 CACHED
+
+#12 [stage-0 6/8] RUN composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader --no-scripts
+#12 CACHED
+
+#13 [stage-0 8/8] RUN composer dump-autoload --no-dev --optimize --no-scripts && php artisan package:discover
+#13 CACHED
+
+#14 exporting to image
+#14 exporting layers done
+#14 writing image sha256:82719f89e470d9b82603125be9dbfc2d1a3e38232981a30dd26cb5a50913207d 0.0s done
+#14 naming to docker.io/library/noteos-phase00-api done
+#14 DONE 0.1s
+Container noteos-phase00-mongo-1  Running
+Container noteos-phase00-mysql-1  Running
+Container noteos-phase00-powersync-1  Running
+Container noteos-phase00-redis-1  Running
+Container noteos-phase00-api-1  Running
+Container noteos-phase00-mysql-1  Waiting
+Container noteos-phase00-mysql-1  Waiting
+Container noteos-phase00-redis-1  Waiting
+Container noteos-phase00-mongo-1  Waiting
+Container noteos-phase00-mysql-1  Healthy
+Container noteos-phase00-mysql-1  Healthy
+Container noteos-phase00-redis-1  Healthy
+Container noteos-phase00-mongo-1  Healthy
+#1 [noteos-phase00-api internal] load build definition from Dockerfile
+#1 transferring dockerfile: 32B done
+#1 DONE 0.0s
+
+#2 [noteos-phase00-api internal] load .dockerignore
+#2 transferring context: 34B done
+#2 DONE 0.0s
+
+#3 [noteos-phase00-sync-tests internal] load build definition from Dockerfile
+#3 transferring dockerfile: 31B done
+#3 DONE 0.0s
+
+#4 [noteos-phase00-api internal] load metadata for docker.io/library/php:8.4-cli
+#4 ...
+
+#5 [noteos-phase00-sync-tests internal] load .dockerignore
+#5 transferring context: 2B 0.0s done
+#5 DONE 0.1s
+
+#4 [noteos-phase00-api internal] load metadata for docker.io/library/php:8.4-cli
+#4 DONE 2.9s
+
+#6 [noteos-phase00-api internal] load build context
+#6 DONE 0.0s
+
+#7 [noteos-phase00-api stage-0 1/8] FROM docker.io/library/php:8.4-cli@sha256:1d2cf2b7d715b5b3aa959f0150ccbcc7b71e0181b637e443abf40a7fb56bf79a
+#7 DONE 0.0s
+
+#8 [noteos-phase00-api] FROM docker.io/library/composer:2
+#8 resolve docker.io/library/composer:2
+#8 resolve docker.io/library/composer:2 2.7s done
+#8 DONE 2.7s
+
+#6 [noteos-phase00-api internal] load build context
+#6 transferring context: 32B 0.0s
+#6 transferring context: 3.71kB 0.1s done
+#6 DONE 0.2s
+
+#9 [noteos-phase00-api stage-0 4/8] WORKDIR /var/www/html
+#9 CACHED
+
+#10 [noteos-phase00-api stage-0 5/8] COPY composer.json composer.lock ./
+#10 CACHED
+
+#11 [noteos-phase00-api stage-0 7/8] COPY . .
+#11 CACHED
+
+#12 [noteos-phase00-api stage-0 2/8] COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+#12 CACHED
+
+#13 [noteos-phase00-api stage-0 3/8] RUN apt-get update && apt-get install -y --no-install-recommends unzip libzip-dev && rm -rf /var/lib/apt/lists/*     && docker-php-ext-install pdo_mysql zip
+#13 CACHED
+
+#14 [noteos-phase00-api stage-0 6/8] RUN composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader --no-scripts
+#14 CACHED
+
+#15 [noteos-phase00-api stage-0 8/8] RUN composer dump-autoload --no-dev --optimize --no-scripts && php artisan package:discover
+#15 CACHED
+
+#16 [noteos-phase00-api] exporting to image
+#16 exporting layers done
+#16 writing image sha256:82719f89e470d9b82603125be9dbfc2d1a3e38232981a30dd26cb5a50913207d 0.0s done
+#16 naming to docker.io/library/noteos-phase00-api done
+#16 DONE 0.2s
+
+#17 [noteos-phase00-sync-tests internal] load metadata for docker.io/library/node:22.21.1-bookworm-slim
+#17 DONE 2.2s
+
+#18 [noteos-phase00-sync-tests 1/5] FROM docker.io/library/node:22.21.1-bookworm-slim@sha256:25b3eb23a00590b7499f2a2ce939322727fcce1b15fdd69754fcd09536a3ae2c
+#18 DONE 0.0s
+
+#19 [noteos-phase00-sync-tests internal] load build context
+#19 transferring context: 11.90kB 0.0s done
+#19 DONE 0.0s
+
+#20 [noteos-phase00-sync-tests 3/5] COPY package.json package-lock.json ./
+#20 CACHED
+
+#21 [noteos-phase00-sync-tests 2/5] WORKDIR /work
+#21 CACHED
+
+#22 [noteos-phase00-sync-tests 4/5] RUN npm ci
+#22 CACHED
+
+#23 [noteos-phase00-sync-tests 5/5] COPY . .
+#23 DONE 1.0s
+
+#16 [noteos-phase00-sync-tests] exporting to image
+#16 exporting layers 0.0s done
+#16 writing image sha256:badff38fb96f3d9aad380c0bc99877d97d986fe23ffeaaf8d5ccc4598690851b done
+#16 naming to docker.io/library/noteos-phase00-sync-tests 0.0s done
+#16 DONE 0.3s
+
+> test
+> node --test --test-concurrency=1
+
+TAP version 13
+# (node:25) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: minimal custom SQLite outbox: full pull, pending mutation survives restart, replay and schema migration
+ok 1 - minimal custom SQLite outbox: full pull, pending mutation survives restart, replay and schema migration
+  ---
+  duration_ms: 225.775417
+  type: 'test'
+  ...
+# Subtest: custom Delta prototype handles lost ACK, idempotency, concurrent edit, delete and privacy boundary
+ok 2 - custom Delta prototype handles lost ACK, idempotency, concurrent edit, delete and privacy boundary
+  ---
+  duration_ms: 646.467584
+  type: 'test'
+  ...
+# (node:47) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:47) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:47) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:47) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:47) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:47) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# [PowerSync]: Could not apply checkpoint due to local data. Will retry at completed upload or next checkpoint.
+# [PowerSync]: Could not apply checkpoint due to local data. Will retry at completed upload or next checkpoint.
+# (node:47) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:47) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:47) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:47) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:47) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:47) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: PowerSync experimental Node SQLite client: full sync, upload, lost ACK replay and restart persistence
+not ok 3 - PowerSync experimental Node SQLite client: full sync, upload, lost ACK replay and restart persistence
+  ---
+  duration_ms: 27136.135345
+  type: 'test'
+  location: '/work/tests/powersync-client.test.js:19:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    PowerSync initial download contains the shared 100-row fixture
+    
+    0 !== 100
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 100
+  actual: 0
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (file:///work/tests/powersync-client.test.js:124:10)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# Subtest: PowerSync Open Edition MySQL replication service is healthy
+ok 4 - PowerSync Open Edition MySQL replication service is healthy
+  ---
+  duration_ms: 47.863542
+  type: 'test'
+  ...
+# [🍉] LokiJSAdapter {useIncrementalIndexedDB: false} option is now deprecated. If you rely on this feature, please file an issue
+# [🍉] [Loki] Initializing IndexedDB
+# [🍉] LokiJSAdapter {useIncrementalIndexedDB: false} option is now deprecated. If you rely on this feature, please file an issue
+# [🍉] [Loki] Initializing IndexedDB
+# [🍉] [Loki] Database loaded
+# [🍉] [Loki] Database loaded
+# [🍉] [Loki] Empty database, setting up
+# [🍉] [Loki] Empty database, setting up
+# [🍉] [Loki] Database is now reset
+# [🍉] [Loki] Initializing IndexedDB
+# [🍉] [Loki] Database is now reset
+# [🍉] [Loki] Initializing IndexedDB
+# [🍉] [Loki] Database loaded
+# [🍉] [Loki] Database loaded
+# [🍉] [Loki] Setting up schema
+# [🍉] [Loki] Database collections set up
+# [🍉] [Loki] Setting up schema
+# [🍉] [Loki] Database collections set up
+# Diagnostic error: [Sync] Server wants client to create record notes\#e97e94b92f4e453f, but it already exists locally. This may suggest last sync partially executed, and then failed; or it could be a serious bug. Will update existing record instead.
+#     at diagnosticError (/work/node_modules/@nozbe/watermelondb/utils/common/diagnosticError/index.js:17:15)
+#     at logError (/work/node_modules/@nozbe/watermelondb/utils/common/logError/index.js:12:44)
+#     at /work/node_modules/@nozbe/watermelondb/sync/impl/applyRemote.js:251:28
+#     at Array.forEach (<anonymous>)
+#     at prepareApplyRemoteChangesToCollection (/work/node_modules/@nozbe/watermelondb/sync/impl/applyRemote.js:247:11)
+#     at /work/node_modules/@nozbe/watermelondb/sync/impl/applyRemote.js:303:7
+#     at Array.forEach (<anonymous>)
+#     at /work/node_modules/@nozbe/watermelondb/sync/impl/applyRemote.js:302:38
+#     at new Promise (<anonymous>)
+#     at applyAllRemoteChanges (/work/node_modules/@nozbe/watermelondb/sync/impl/applyRemote.js:296:10) {
+#   framesToPop: 2
+# }
+# [🍉] LokiJSAdapter {useIncrementalIndexedDB: false} option is now deprecated. If you rely on this feature, please file an issue
+# [🍉] [Loki] Initializing IndexedDB
+# [🍉] [Loki] Database loaded
+# [🍉] [Loki] Empty database, setting up
+# [🍉] [Loki] Database is now reset
+# [🍉] [Loki] Initializing IndexedDB
+# [🍉] [Loki] Database loaded
+# [🍉] [Loki] Setting up schema
+# [🍉] [Loki] Database collections set up
+# Subtest: WatermelonDB real synchronize adapter: common full sync and offline scenarios against Laravel
+ok 5 - WatermelonDB real synchronize adapter: common full sync and offline scenarios against Laravel
+  ---
+  duration_ms: 387.867
+  type: 'test'
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 4
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 29448.016596
+Container noteos-phase00-mysql-1  Running
+Container noteos-phase00-mongo-1  Running
+Container noteos-phase00-redis-1  Running
+Container noteos-phase00-powersync-1  Running
+Container noteos-phase00-api-1  Running
+Container noteos-phase00-mysql-1  Waiting
+Container noteos-phase00-mysql-1  Waiting
+Container noteos-phase00-redis-1  Waiting
+Container noteos-phase00-mongo-1  Waiting
+Container noteos-phase00-mysql-1  Healthy
+Container noteos-phase00-mongo-1  Healthy
+Container noteos-phase00-redis-1  Healthy
+Container noteos-phase00-mysql-1  Healthy
+
+> test
+> node --test --test-concurrency=1
+
+TAP version 13
+# (node:25) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: minimal custom SQLite outbox: full pull, pending mutation survives restart, replay and schema migration
+ok 1 - minimal custom SQLite outbox: full pull, pending mutation survives restart, replay and schema migration
+  ---
+  duration_ms: 157.780167
+  type: 'test'
+  ...
+# Subtest: custom Delta prototype handles lost ACK, idempotency, concurrent edit, delete and privacy boundary
+ok 2 - custom Delta prototype handles lost ACK, idempotency, concurrent edit, delete and privacy boundary
+  ---
+  duration_ms: 248.140167
+  type: 'test'
+  ...
+# (node:47) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:47) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:47) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:47) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:47) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:47) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# [PowerSync]: Could not apply checkpoint due to local data. Will retry at completed upload or next checkpoint.
+# [PowerSync]: Could not apply checkpoint due to local data. Will retry at completed upload or next checkpoint.
+# (node:47) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:47) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:47) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:47) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:47) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:47) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:47) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:47) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:47) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:47) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:47) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# (node:47) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+# (Use `node --trace-warnings ...` to show where the warning was created)
+# Subtest: PowerSync experimental Node SQLite client: full sync, upload, lost ACK replay and restart persistence
+ok 3 - PowerSync experimental Node SQLite client: full sync, upload, lost ACK replay and restart persistence
+  ---
+  duration_ms: 28787.375471
+  type: 'test'
+  ...
+# Subtest: PowerSync Open Edition MySQL replication service is healthy
+ok 4 - PowerSync Open Edition MySQL replication service is healthy
+  ---
+  duration_ms: 92.550459
+  type: 'test'
+  ...
+# [🍉] LokiJSAdapter {useIncrementalIndexedDB: false} option is now deprecated. If you rely on this feature, please file an issue
+# [🍉] [Loki] Initializing IndexedDB
+# [🍉] LokiJSAdapter {useIncrementalIndexedDB: false} option is now deprecated. If you rely on this feature, please file an issue
+# [🍉] [Loki] Initializing IndexedDB
+# [🍉] [Loki] Database loaded
+# [🍉] [Loki] Database loaded
+# [🍉] [Loki] Empty database, setting up
+# [🍉] [Loki] Empty database, setting up
+# [🍉] [Loki] Database is now reset
+# [🍉] [Loki] Initializing IndexedDB
+# [🍉] [Loki] Database is now reset
+# [🍉] [Loki] Initializing IndexedDB
+# [🍉] [Loki] Database loaded
+# [🍉] [Loki] Database loaded
+# [🍉] [Loki] Setting up schema
+# [🍉] [Loki] Database collections set up
+# [🍉] [Loki] Setting up schema
+# [🍉] [Loki] Database collections set up
+# Diagnostic error: [Sync] Server wants client to create record notes\#e55cb9c134524188, but it already exists locally. This may suggest last sync partially executed, and then failed; or it could be a serious bug. Will update existing record instead.
+#     at diagnosticError (/work/node_modules/@nozbe/watermelondb/utils/common/diagnosticError/index.js:17:15)
+#     at logError (/work/node_modules/@nozbe/watermelondb/utils/common/logError/index.js:12:44)
+#     at /work/node_modules/@nozbe/watermelondb/sync/impl/applyRemote.js:251:28
+#     at Array.forEach (<anonymous>)
+#     at prepareApplyRemoteChangesToCollection (/work/node_modules/@nozbe/watermelondb/sync/impl/applyRemote.js:247:11)
+#     at /work/node_modules/@nozbe/watermelondb/sync/impl/applyRemote.js:303:7
+#     at Array.forEach (<anonymous>)
+#     at /work/node_modules/@nozbe/watermelondb/sync/impl/applyRemote.js:302:38
+#     at new Promise (<anonymous>)
+#     at applyAllRemoteChanges (/work/node_modules/@nozbe/watermelondb/sync/impl/applyRemote.js:296:10) {
+#   framesToPop: 2
+# }
+# [🍉] LokiJSAdapter {useIncrementalIndexedDB: false} option is now deprecated. If you rely on this feature, please file an issue
+# [🍉] [Loki] Initializing IndexedDB
+# [🍉] [Loki] Database loaded
+# [🍉] [Loki] Empty database, setting up
+# [🍉] [Loki] Database is now reset
+# [🍉] [Loki] Initializing IndexedDB
+# [🍉] [Loki] Database loaded
+# [🍉] [Loki] Setting up schema
+# [🍉] [Loki] Database collections set up
+# Subtest: WatermelonDB real synchronize adapter: common full sync and offline scenarios against Laravel
+ok 5 - WatermelonDB real synchronize adapter: common full sync and offline scenarios against Laravel
+  ---
+  duration_ms: 377.466584
+  type: 'test'
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 5
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 30346.55893

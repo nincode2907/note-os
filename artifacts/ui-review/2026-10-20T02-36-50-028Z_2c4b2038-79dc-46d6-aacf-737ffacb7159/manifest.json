@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "tool": "UI Lens",
+  "tool_version": "0.1.0",
+  "project": "noteOS Phase 00",
+  "captured_at": "2026-10-20T02:36:50.028Z",
+  "base_url": "http://noteos.localhost",
+  "git": {
+    "branch": "main",
+    "commit": "fcedd476cf1d77bdf9c3bbe4d02cb6ac689b56a9",
+    "dirty": true
+  },
+  "targets": [
+    {
+      "target_id": "phase00-harness",
+      "target_name": "Môi trường kiểm chứng",
+      "route": "/",
+      "url": "http://noteos.localhost/",
+      "viewport": {
+        "id": "desktop",
+        "width": 1440,
+        "height": 1000,
+        "deviceScaleFactor": 1
+      },
+      "screenshot": "phase00-harness/desktop.png",
+      "pdf": "phase00-harness/desktop.pdf",
+      "capture_mode": "fullPage",
+      "duration_ms": 680,
+      "captured_at": "2026-10-20T02:36:50.505Z",
+      "console_error_count": 0,
+      "console_warning_count": 0,
+      "page_error_count": 0,
+      "failed_request_count": 0,
+      "http_error_count": 0,
+      "success": true
+    },
+    {
+      "target_id": "phase00-harness",
+      "target_name": "Môi trường kiểm chứng",
+      "route": "/",
+      "url": "http://noteos.localhost/",
+      "viewport": {
+        "id": "mobile",
+        "width": 390,
+        "height": 844,
+        "deviceScaleFactor": 1
+      },
+      "screenshot": "phase00-harness/mobile.png",
+      "pdf": "phase00-harness/mobile.pdf",
+      "capture_mode": "fullPage",
+      "duration_ms": 326,
+      "captured_at": "2026-10-20T02:36:51.185Z",
+      "console_error_count": 0,
+      "console_warning_count": 0,
+      "page_error_count": 0,
+      "failed_request_count": 0,
+      "http_error_count": 0,
+      "success": true
+    }
+  ],
+  "summary": {
+    "passed": 2,
+    "failed": 0
+  }
+}
