@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Tổng quan trực quan về phạm vi, sáu spike và tiêu chí bàn giao Phase 00 của noteOS.">
+  <title>noteOS · Kế hoạch kiểm chứng Phase 00</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%231a4d43'/%3E%3Cpath d='M19 17h21a7 7 0 0 1 7 7v24H25a6 6 0 0 1-6-6z' fill='none' stroke='%23e5f4e8' stroke-width='4' stroke-linejoin='round'/%3E%3Cpath d='M19 40a6 6 0 0 1 6-6h22' fill='none' stroke='%23d5b76a' stroke-width='4'/%3E%3C/svg%3E">
+  <style>
+    :root{color-scheme:light;--ink:#172823;--muted:#566a63;--paper:#f4f3eb;--card:#fffef9;--line:#d9dfd5;--green:#1a4d43;--mint:#e5f4e8;--gold:#d5b76a;--coral:#b34e37;--blue:#35677b}
+    *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif}
+    a{color:var(--green);text-underline-offset:3px}a:focus-visible{outline:3px solid var(--gold);outline-offset:3px}.shell{max-width:1120px;margin:auto;padding:24px}
+    .top{display:flex;justify-content:space-between;align-items:center;gap:16px;color:var(--muted);font-size:.9rem}.top a{font-weight:700}
+    .hero{margin:36px 0 28px;padding:clamp(26px,6vw,64px);border-radius:28px;color:#f5f7ef;background:radial-gradient(circle at 82% 10%,#42796b 0,transparent 30%),linear-gradient(135deg,#173b35,#1a4d43 70%,#263f3b);position:relative;overflow:hidden}
+    .hero:after{content:"00";position:absolute;right:3%;bottom:-.55em;font-size:clamp(10rem,28vw,23rem);line-height:1;font-weight:800;color:#ffffff0b;pointer-events:none}.eyebrow{text-transform:uppercase;letter-spacing:.16em;font-size:.78rem;color:#d5b76a;font-weight:800}.hero h1{max-width:760px;font-size:clamp(2.4rem,6vw,4.8rem);line-height:1.03;margin:.35em 0}.hero p{max-width:680px;color:#d7e2dc;font-size:1.08rem}.badge{display:inline-flex;border:1px solid #93b7a5;border-radius:99px;padding:5px 12px;font-size:.83rem;font-weight:700}
+    .grid{display:grid;gap:16px}.summary{grid-template-columns:repeat(4,1fr)}.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:22px;box-shadow:0 4px 16px #142d2410}.metric{font-size:1.55rem;font-weight:800;color:var(--green);line-height:1.1}.label{color:var(--muted);font-size:.88rem;margin-top:8px}
+    section{margin:38px 0}.section-head{display:flex;align-items:end;justify-content:space-between;gap:18px;margin-bottom:16px}.section-head h2{font-size:clamp(1.45rem,3vw,2.1rem);margin:0;line-height:1.2}.section-head p{max-width:560px;margin:0;color:var(--muted)}
+    .baseline{grid-template-columns:repeat(3,1fr)}.baseline .card{min-height:155px}.icon{font-size:1.5rem}.card h3{margin:8px 0 6px;line-height:1.25}.card p{margin:0;color:var(--muted)}
+    .flow{display:grid;grid-template-columns:repeat(4,1fr);gap:0;align-items:stretch}.flow-step{position:relative;padding:18px 22px 18px 18px;background:var(--mint);border:1px solid #c9e0cd}.flow-step:first-child{border-radius:14px 0 0 14px}.flow-step:last-child{border-radius:0 14px 14px 0}.flow-step b{display:block;color:var(--green);margin-bottom:5px}.flow-step span{font-size:.9rem;color:var(--muted)}
+    .spikes{grid-template-columns:repeat(2,1fr)}.spike{position:relative;padding-left:68px;min-height:160px}.spike .num{position:absolute;left:20px;top:20px;width:34px;height:34px;display:grid;place-items:center;border-radius:50%;background:var(--green);color:white;font-weight:800;font-size:.9rem}.spike h3{margin:0 0 8px}.spike p{font-size:.94rem}.tag{display:inline-block;padding:2px 9px;background:#f4ecd4;border-radius:99px;color:#644e1d;font-size:.77rem;font-weight:700;margin-top:12px}
+    .guardrails{grid-template-columns:1fr 1fr}.guard{border-left:4px solid var(--green);padding:4px 0 4px 16px}.guard.block{border-color:var(--coral)}.guard h3{margin:0 0 8px}.guard ul{margin:0;padding-left:19px;color:var(--muted)}.guard li+li{margin-top:5px}
+    .deliver{display:grid;grid-template-columns:1fr 1fr;gap:20px}.deliver .card{padding:24px}.deliver ul{margin:8px 0 0;padding-left:20px;color:var(--muted)}.callout{padding:20px 24px;border-radius:18px;background:#e9eff0;border:1px solid #cbd9dc;color:#304e56}
+    footer{margin:48px 0 10px;padding-top:18px;border-top:1px solid var(--line);display:flex;justify-content:space-between;gap:20px;color:var(--muted);font-size:.9rem}
+    @media(max-width:760px){.summary{grid-template-columns:repeat(2,1fr)}.baseline{grid-template-columns:1fr 1fr}.flow{grid-template-columns:1fr 1fr;gap:8px}.flow-step,.flow-step:first-child,.flow-step:last-child{border-radius:12px}.spikes,.guardrails,.deliver{grid-template-columns:1fr}.section-head{align-items:start;flex-direction:column}}
+    @media(max-width:440px){.shell{padding:15px}.summary,.baseline,.flow{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}.hero{border-radius:20px}}
+    @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <nav class="top" aria-label="Điều hướng tài liệu"><span>noteOS / Technical Validation</span><a href="technical-validation-plan.md">Mở brief đầy đủ ↗</a></nav>
+    <header class="hero">
+      <div class="eyebrow">Giai đoạn 00 · Kiểm chứng kỹ thuật</div>
+      <h1>Kiểm chứng trước khi chọn kiến trúc</h1>
+      <p>Chạy các spike có thể tái lập để đánh giá âm thanh, editor, đồng bộ offline, hạ tầng, quyền riêng tư và khả năng khôi phục dữ liệu.</p>
+      <span class="badge">Phạm vi được duyệt: chỉ Phase 00</span>
+    </header>
+
+    <div class="grid summary" aria-label="Tóm tắt phạm vi">
+      <article class="card"><div class="metric">6</div><div class="label">spike kỹ thuật</div></article>
+      <article class="card"><div class="metric">8</div><div class="label">tài liệu Phase 00 bắt buộc</div></article>
+      <article class="card"><div class="metric">3</div><div class="label">mức riêng tư</div></article>
+      <article class="card"><div class="metric">0</div><div class="label">bước sang Phase 01</div></article>
+    </div>
+
+    <section>
+      <div class="section-head"><h2>Baseline kiến trúc</h2><p>Các lựa chọn định hướng cho spike; engine đồng bộ offline vẫn để mở cho tới khi có kết quả benchmark.</p></div>
+      <div class="grid baseline">
+        <article class="card"><div class="icon" aria-hidden="true">⌘</div><h3>Ứng dụng</h3><p>Monorepo pnpm · Web với Next.js, React, Tiptap · iPhone với Expo và React Native.</p></article>
+        <article class="card"><div class="icon" aria-hidden="true">▤</div><h3>Server</h3><p>Laravel 12, PHP 8.4, MySQL và Redis; Web, backend, database, worker chạy qua Docker Compose.</p></article>
+        <article class="card"><div class="icon" aria-hidden="true">◈</div><h3>Dữ liệu</h3><p>ProseMirror/Tiptap JSON có schema version là nguồn chuẩn; Markdown chỉ là bản xuất dẫn xuất.</p></article>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head"><h2>Luồng kiểm chứng</h2><p>Mỗi quyết định phải dẫn tới phần mềm chạy thật, bằng chứng có thể truy xuất và trạng thái trung thực.</p></div>
+      <div class="flow" aria-label="Brief, spike, bằng chứng, bàn giao">
+        <div class="flow-step"><b>01 · Brief</b><span>Giữ scope, điều kiện và tiêu chí chấp nhận.</span></div>
+        <div class="flow-step"><b>02 · Spike</b><span>Prototype tối thiểu, chạy trong môi trường cô lập.</span></div>
+        <div class="flow-step"><b>03 · Bằng chứng</b><span>Ghi phiên bản, thiết bị, dữ liệu, số đo và giới hạn.</span></div>
+        <div class="flow-step"><b>04 · Bàn giao</b><span>PASS / FAIL / BLOCKED, đề xuất kiến trúc và câu hỏi cần duyệt.</span></div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head"><h2>Sáu spike</h2><p>Chi tiết kịch bản, các trường hợp bắt buộc và tiêu chí đánh giá nằm trong brief Markdown đầy đủ.</p></div>
+      <div class="grid spikes">
+        <article class="card spike"><span class="num">A</span><h3>Âm thanh và phục hồi</h3><p>Đánh giá expo-audio trên iPhone: background, pause/resume, interruption, phân đoạn, manifest, restart và phát lại.</p><span class="tag">Cần thiết bị thật để PASS native</span></article>
+        <article class="card spike"><span class="num">B</span><h3>Editor và document chuẩn</h3><p>So sánh Tiptap Web, nhập nhanh native, Markdown editor và rich editor; kiểm tra Việt/Telex, Nhật IME và chuyển đổi JSON.</p><span class="tag">Không mất node hoặc thuộc tính được hỗ trợ</span></article>
+        <article class="card spike"><span class="num">C</span><h3>So sánh sync offline</h3><p>PowerSync + MySQL, WatermelonDB với adapter thật, và custom Delta Sync; kiểm tra conflict, retry, crash, delete và migration.</p><span class="tag">Quyết định kiến trúc quan trọng nhất</span></article>
+        <article class="card spike"><span class="num">D</span><h3>Docker, lưu trữ và tìm kiếm</h3><p>Stack cô lập, persistence, healthcheck, backup/restore và tìm kiếm tối thiểu 5.000 note đa ngôn ngữ.</p><span class="tag">Đo recall, precision, p50 và p95</span></article>
+        <article class="card spike"><span class="num">E</span><h3>Riêng tư và hợp đồng AI</h3><p>Xác minh ranh giới provider thực tế cho DEVICE_ONLY, PRIVATE_SERVER, CLOUD_ALLOWED và hành vi fail-closed.</p><span class="tag">Không suy đoán API hoặc chính sách</span></article>
+        <article class="card spike"><span class="num">F</span><h3>Độ bền và khôi phục</h3><p>Truy vết capture → local commit → sync → server commit → backup → restore, gồm media và dữ liệu chưa đồng bộ.</p><span class="tag">Nêu rõ dữ liệu chưa có trong backup</span></article>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head"><h2>Ranh giới bắt buộc</h2><p>Các giới hạn này áp dụng trong toàn Phase 00.</p></div>
+      <div class="grid guardrails">
+        <article class="card guard"><h3>Điều kiện vận hành</h3><ul><li>Chạy backend, database, Web và worker bằng Docker Compose.</li><li>Test có thể phá dữ liệu phải dùng database Docker cô lập; không reset volume dữ liệu thật.</li><li>Không thay đổi project/container của MemoryOS, AI Gateway hay ứng dụng khác.</li></ul></article>
+        <article class="card guard block"><h3>Riêng tư và báo cáo trung thực</h3><ul><li>Không dùng AI cloud trả phí hoặc gửi dữ liệu cá nhân ra ngoài.</li><li>Không tự tạo tài khoản hay dùng thông tin xác thực chưa được cấp.</li><li>Thiếu iPhone thật, signing hoặc quyền truy cập: ghi BLOCKED và bằng chứng còn thiếu.</li></ul></article>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head"><h2>Bàn giao</h2><p>Để ChatGPT (Lead Architect) và Gemini review trước khi quyết định Phase 01.</p></div>
+      <div class="deliver">
+        <article class="card"><h3>Tài liệu trong `docs/phase-00/`</h3><ul><li>architecture-decisions.md</li><li>framework-comparison.md</li><li>editor-benchmark.md</li><li>sync-benchmark.md</li><li>audio-recovery.md</li><li>privacy-contracts.md</li><li>backup-restore.md</li><li>phase-00-report.md</li></ul></article>
+        <article class="card"><h3>Bằng chứng có thể tái lập</h3><ul><li>Source spike, automated tests và Docker Compose.</li><li>Test output/logs, screenshot prototype và bước tái hiện.</li><li>Phiên bản dependency, ghi chú license và giới hạn còn lại.</li><li>Số đo phải ghi thiết bị, OS/browser, dataset, iterations, p50/p95 và PASS/FAIL/BLOCKED.</li></ul></article>
+      </div>
+    </section>
+    <aside class="callout"><strong>Điểm dừng:</strong> hoàn tất Phase 00 rồi bàn giao báo cáo. Không triển khai production UI, không mở rộng feature và không bắt đầu Phase 01.</aside>
+    <footer><span>Trạng thái brief: APPROVED FOR PHASE 00 ONLY</span><a href="technical-validation-plan.md">Đọc toàn bộ tiêu chí và báo cáo cuối cùng</a></footer>
+  </div>
+</body>
+</html>

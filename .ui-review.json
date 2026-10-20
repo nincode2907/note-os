@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "project": "noteOS Phase 00",
+  "baseUrl": "http://noteos.localhost",
+  "outputDir": "artifacts/ui-review",
+  "viewports": {
+    "desktop": { "width": 1440, "height": 1000 },
+    "mobile": { "width": 390, "height": 844 }
+  },
+  "targets": [
+    { "id": "phase00-harness", "name": "Môi trường kiểm chứng", "route": "/", "viewports": ["desktop", "mobile"], "pdf": true }
+  ]
+}

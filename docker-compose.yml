@@ -1,0 +1,147 @@
+name: noteos-phase00
+services:
+  web:
+    image: node:22.21.1-alpine
+    working_dir: /app
+    command: ["node", "server.mjs"]
+    volumes:
+      - ./spikes/phase-00/web:/app:ro
+    ports:
+      - "127.0.0.1:15000:15000"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:15000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 2s
+      retries: 20
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    environment:
+      APP_ENV: local
+      APP_DEBUG: "false"
+      APP_KEY: base64:7A0rDbn/0Ne75Ee97BrxBhZHed8gNIOk7hdukgR8ReM=
+      APP_URL: http://api.noteos.localhost
+      DB_CONNECTION: mysql
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_DATABASE: noteos
+      DB_USERNAME: noteos
+      DB_PASSWORD: noteos_phase00_local
+      QUEUE_CONNECTION: database
+      CACHE_STORE: redis
+      REDIS_HOST: redis
+    command: ["sh", "-lc", "php artisan migrate --force && php artisan serve --host=0.0.0.0 --port=15001"]
+    ports:
+      - "127.0.0.1:15001:15001"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "php", "-r", "exit(@file_get_contents('http://127.0.0.1:15001/api/health')===false?1:0);"]
+      interval: 5s
+      timeout: 2s
+      retries: 30
+  worker:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    environment:
+      APP_ENV: local
+      APP_DEBUG: "false"
+      APP_KEY: base64:7A0rDbn/0Ne75Ee97BrxBhZHed8gNIOk7hdukgR8ReM=
+      DB_CONNECTION: mysql
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_DATABASE: noteos
+      DB_USERNAME: noteos
+      DB_PASSWORD: noteos_phase00_local
+      QUEUE_CONNECTION: database
+      CACHE_STORE: redis
+      REDIS_HOST: redis
+    command: ["php", "artisan", "queue:work", "--sleep=1", "--tries=1"]
+    depends_on:
+      api:
+        condition: service_healthy
+  mysql:
+    image: mysql:8.4.7
+    command:
+      - --server-id=1001
+      - --log-bin=mysql-bin
+      - --binlog-format=ROW
+      - --binlog-row-image=FULL
+      - --gtid-mode=ON
+      - --enforce-gtid-consistency=ON
+    environment:
+      MYSQL_ROOT_PASSWORD: noteos_root_phase00_local
+      MYSQL_DATABASE: noteos
+      MYSQL_USER: noteos
+      MYSQL_PASSWORD: noteos_phase00_local
+    volumes:
+      - noteos_phase00_mysql:/var/lib/mysql
+      - ./spikes/phase-00/mysql/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -unoteos -pnoteos_phase00_local --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+  redis:
+    image: redis:7.4.3-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - noteos_phase00_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  mongo:
+    image: mongo:8.0.16
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
+    volumes:
+      - noteos_phase00_mongo:/data/db
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval 'try { rs.status().ok } catch (e) { rs.initiate({_id:\"rs0\",members:[{_id:0,host:\"mongo:27017\"}]}).ok }' | grep 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+  powersync:
+    image: journeyapps/powersync-service:1.20.0
+    environment:
+      POWERSYNC_CONFIG_PATH: /config/service.yaml
+      PS_DATA_SOURCE_URI: mysql://powersync:noteos_powersync_local@mysql:3306/noteos
+      PS_MONGO_URI: mongodb://mongo:27017/powersync?replicaSet=rs0
+    volumes:
+      - ./spikes/phase-00/powersync:/config:ro
+    depends_on:
+      mysql:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8080/probes/liveness').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 2s
+      retries: 30
+  sync-tests:
+    build:
+      context: ./spikes/phase-00/sync
+      dockerfile: Dockerfile
+    environment:
+      API_URL: http://api:15001
+      POWERSYNC_URL: http://powersync:8080
+    depends_on:
+      api:
+        condition: service_healthy
+      powersync:
+        condition: service_healthy
+    profiles: ["tests"]
+volumes:
+  noteos_phase00_mysql:
+  noteos_phase00_redis:
+  noteos_phase00_mongo:

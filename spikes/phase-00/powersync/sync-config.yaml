@@ -1,0 +1,7 @@
+config:
+  edition: 3
+streams:
+  noteos:
+    auto_subscribe: true
+    queries:
+      - SELECT id, title, body, privacy, updated_at FROM notes WHERE privacy = 'PRIVATE_SERVER'

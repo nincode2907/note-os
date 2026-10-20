@@ -1,0 +1,10 @@
+{
+  "name": "noteos-phase00-sync-spikes",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test" },
+  "dependencies": {
+    "@nozbe/watermelondb": "0.28.0",
+    "@powersync/node": "1.2.0"
+  }
+}
