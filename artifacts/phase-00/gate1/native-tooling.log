@@ -1,0 +1,9 @@
+noteOS Gate 1 native tooling check — 2026-10-20
+
+$ xcodebuild -version
+xcode-select: error: tool 'xcodebuild' requires Xcode, but active developer directory '/Library/Developer/CommandLineTools' is a command line tools instance
+
+$ xcrun simctl list devices available
+xcrun: error: unable to find utility "simctl", not a developer tool or in PATH
+
+Result: G1-01 BLOCKED. No native build or simulator evidence. No claim about iPhone behavior.

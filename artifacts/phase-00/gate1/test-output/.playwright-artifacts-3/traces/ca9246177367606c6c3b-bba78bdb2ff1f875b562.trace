@@ -1,0 +1,15 @@
+{"version":10,"type":"context-options","origin":"library","browserName":"","playwrightVersion":"1.64.1","options":{},"platform":"linux","wallTime":1792476969043,"monotonicTime":126406.228,"sdkLanguage":"javascript","title":"runtime.spec.ts:26 › watermelon: production browser persistence, privacy and multilingual offline query"}
+{"type":"before","callId":"hdat@37","startTime":126418.829,"class":"APIRequestContext","method":"fetch","params":{"url":"/api/gate1/server-state","method":"GET"}}
+{"type":"log","callId":"hdat@37","time":126439.808,"message":"→ GET http://gate1-api:15001/api/gate1/server-state"}
+{"type":"log","callId":"hdat@37","time":126439.991,"message":"  user-agent: Playwright/1.64.1 (arm64; ubuntu 24.04) node/24.21"}
+{"type":"log","callId":"hdat@37","time":126440.145,"message":"  accept: */*"}
+{"type":"log","callId":"hdat@37","time":126440.243,"message":"  accept-encoding: gzip,deflate,br"}
+{"type":"log","callId":"hdat@37","time":126546.905,"message":"← 200 OK"}
+{"type":"log","callId":"hdat@37","time":126546.937,"message":"  host: gate1-api:15001"}
+{"type":"log","callId":"hdat@37","time":126546.943,"message":"  connection: close"}
+{"type":"log","callId":"hdat@37","time":126546.95,"message":"  x-powered-by: PHP/8.4.26"}
+{"type":"log","callId":"hdat@37","time":126546.966,"message":"  cache-control: no-cache, private"}
+{"type":"log","callId":"hdat@37","time":126546.998,"message":"  date: Tue, 20 Oct 2026 06:16:09 GMT"}
+{"type":"log","callId":"hdat@37","time":126547.016,"message":"  content-type: application/json"}
+{"type":"log","callId":"hdat@37","time":126547.056,"message":"  access-control-allow-origin: *"}
+{"type":"after","callId":"hdat@37","endTime":126549.114,"result":{"response":{"url":"http://gate1-api:15001/api/gate1/server-state","status":200,"statusText":"OK","headers":[{"name":"Host","value":"gate1-api:15001"},{"name":"Connection","value":"close"},{"name":"X-Powered-By","value":"PHP/8.4.26"},{"name":"Cache-Control","value":"no-cache, private"},{"name":"Date","value":"Tue, 20 Oct 2026 06:16:09 GMT"},{"name":"Content-Type","value":"application/json"},{"name":"Access-Control-Allow-Origin","value":"*"}],"serverAddr":{"ipAddress":"172.18.0.10","port":15001},"timing":{"startTime":1792476969064,"domainLookupStart":0,"domainLookupEnd":21.639999999999418,"connectStart":21.639999999999418,"secureConnectionStart":-1,"connectEnd":23.45999999999185,"requestStart":23.45999999999185,"responseStart":119.2609999999986},"responseEndTiming":121.10599999999977,"fetchUid":"48ea28d3c4ee910b3797aba225caab04"}}}

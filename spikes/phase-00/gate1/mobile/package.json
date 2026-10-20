@@ -1,0 +1,16 @@
+{
+  "name": "noteos-gate1-ios",
+  "private": true,
+  "main": "node_modules/expo/AppEntry.js",
+  "scripts": { "start": "expo start", "prebuild:ios": "expo prebuild --platform ios" },
+  "dependencies": {
+    "@morrowdigital/watermelondb-expo-plugin": "2.3.3",
+    "@nozbe/watermelondb": "0.28.0",
+    "@op-engineering/op-sqlite": "18.2.5",
+    "@powersync/react-native": "2.3.3",
+    "expo": "57.0.30",
+    "expo-dev-client": "7.0.20",
+    "react": "19.2.3",
+    "react-native": "0.86.0"
+  }
+}

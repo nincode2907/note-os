@@ -6,6 +6,32 @@ use Illuminate\Support\Facades\Route;
 
 Route::get('/health', fn () => response()->json(['status' => 'ok']));
 
+// Gate 1 only: scoped to the isolated gate1-api service and synthetic dataset.
+Route::get('/gate1/server-state', function (Request $request) {
+    abort_unless(filter_var(env('NOTEOS_GATE1_ENABLED'), FILTER_VALIDATE_BOOLEAN), 404);
+    $query = DB::table('notes')->where('dataset_id', 'phase00-gate1-v1');
+    if ($id = $request->query('id')) $query->where('id', $id);
+    return $query->orderBy('id')->get()->map(fn ($row) => [
+        'id' => $row->id,
+        'title' => $row->title,
+        'body' => $row->body,
+        'privacy' => $row->privacy,
+        'dataset_id' => $row->dataset_id,
+        'revision' => (int) $row->revision,
+        'deleted' => (bool) $row->deleted,
+    ]);
+});
+
+Route::get('/gate1/powersync-credentials', function () {
+    abort_unless(filter_var(env('NOTEOS_GATE1_ENABLED'), FILTER_VALIDATE_BOOLEAN), 404);
+    $encode = fn (array $data) => rtrim(strtr(base64_encode(json_encode($data, JSON_UNESCAPED_SLASHES)), '+/', '-_'), '=');
+    $now = time();
+    $header = $encode(['alg' => 'HS256', 'kid' => 'noteos-phase00', 'typ' => 'JWT']);
+    $payload = $encode(['sub' => 'gate1-synthetic-client', 'aud' => 'powersync', 'iat' => $now, 'exp' => $now + 3600]);
+    $signature = rtrim(strtr(base64_encode(hash_hmac('sha256', "$header.$payload", env('POWERSYNC_HMAC_KEY', 'secret-noteos-phase-00-local'), true)), '+/', '-_'), '=');
+    return ['endpoint' => env('POWERSYNC_URL', 'http://gate1-powersync:8080'), 'token' => "$header.$payload.$signature"];
+});
+
 function nextRevision(): int
 {
     $clock = DB::table('sync_clock')->where('id', 1)->lockForUpdate()->first();
@@ -18,6 +44,7 @@ function recordNoteChange(string $id, string $operation, ?array $payload): int
 {
     $revision = nextRevision();
     DB::table('notes')->where('id', $id)->update(['revision' => $revision, 'updated_at' => now()]);
+    if ($payload !== null) $payload['revision'] = $revision;
     DB::table('sync_changes')->insert(['revision' => $revision, 'note_id' => $id, 'operation' => $operation, 'payload' => $payload ? json_encode($payload) : null]);
     return $revision;
 }
@@ -78,14 +105,14 @@ Route::post('/sync', function (Request $request) {
             }
             $dataset = $row['dataset_id'] ?? '';
             DB::table('notes')->insert(['id' => $id, 'title' => $row['title'] ?? '', 'body' => $row['body'] ?? '', 'privacy' => 'PRIVATE_SERVER', 'dataset_id' => $dataset, 'created_at' => now(), 'updated_at' => now()]);
-            recordNoteChange($id, 'created', ['id' => $id, 'title' => $row['title'] ?? '', 'body' => $row['body'] ?? '', 'privacy' => 'PRIVATE_SERVER', 'dataset_id' => $dataset]);
+            recordNoteChange($id, 'created', ['id' => $id, 'title' => $row['title'] ?? '', 'body' => $row['body'] ?? '', 'privacy' => 'PRIVATE_SERVER', 'dataset_id' => $dataset, 'deleted' => false]);
         }
         foreach ($notes['updated'] ?? [] as $row) {
             $id = $row['id'];
             $existing = DB::table('notes')->where('id', $id)->first();
             $values = ['title' => $row['title'] ?? '', 'body' => $row['body'] ?? '', 'privacy' => 'PRIVATE_SERVER', 'dataset_id' => $row['dataset_id'] ?? ($existing->dataset_id ?? ''), 'deleted' => false, 'updated_at' => now()];
             if ($existing) DB::table('notes')->where('id', $id)->update($values); else DB::table('notes')->insert($values + ['id' => $id, 'created_at' => now()]);
-            recordNoteChange($id, $existing ? 'updated' : 'created', ['id' => $id, 'title' => $values['title'], 'body' => $values['body'], 'privacy' => 'PRIVATE_SERVER', 'dataset_id' => $values['dataset_id']]);
+            recordNoteChange($id, $existing ? 'updated' : 'created', ['id' => $id, 'title' => $values['title'], 'body' => $values['body'], 'privacy' => 'PRIVATE_SERVER', 'dataset_id' => $values['dataset_id'], 'deleted' => false]);
         }
         foreach ($notes['deleted'] ?? [] as $id) {
             $existing = DB::table('notes')->where('id', $id)->first();

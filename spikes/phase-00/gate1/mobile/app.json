@@ -1,0 +1,11 @@
+{
+  "expo": {
+    "name": "noteOS Gate 1",
+    "slug": "noteos-gate1",
+    "scheme": "noteos-gate1",
+    "version": "0.0.1",
+    "newArchEnabled": true,
+    "ios": { "bundleIdentifier": "local.noteos.gate1", "supportsTablet": true },
+    "plugins": ["expo-dev-client", "@morrowdigital/watermelondb-expo-plugin"]
+  }
+}

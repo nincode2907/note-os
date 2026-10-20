@@ -1,0 +1,22 @@
+[
+  {"id":"00000000-0000-4000-8000-000000000001","title":"Tiếng Việt có dấu","text":"Tiếng Việt: đồng bộ ghi chú ngoại tuyến."},
+  {"id":"00000000-0000-4000-8000-000000000002","title":"English search term","text":"Offline notebook synchronization keeps this sentence."},
+  {"id":"00000000-0000-4000-8000-000000000003","title":"日本語の検索","text":"かなと漢字で検索できます。"},
+  {"id":"00000000-0000-4000-8000-000000000004","title":"Vietnamese không dấu","text":"Ghi chu ngoai tuyen va tim kiem tieng Viet."},
+  {"id":"00000000-0000-4000-8000-000000000005","title":"Conflict fixture","text":"Preserve concurrent offline edits without dropping either value."},
+  {"id":"00000000-0000-4000-8000-000000000006","title":"Crash restart","text":"Persistent browser storage survives a reload."},
+  {"id":"00000000-0000-4000-8000-000000000007","title":"Schema version","text":"Canonical document version one."},
+  {"id":"00000000-0000-4000-8000-000000000008","title":"Privacy levels","text":"DEVICE_ONLY and PRIVATE_SERVER have distinct boundaries."},
+  {"id":"00000000-0000-4000-8000-000000000009","title":"Duplicate delivery","text":"Mutation retries must not create duplicate server state."},
+  {"id":"00000000-0000-4000-8000-000000000010","title":"Lost acknowledgement","text":"Retry after a lost acknowledgement is safe."},
+  {"id":"00000000-0000-4000-8000-000000000011","title":"Deletion tombstone","text":"A deleted note should not be resurrected by stale clients."},
+  {"id":"00000000-0000-4000-8000-000000000012","title":"Full initial sync","text":"Client begins with the same twenty-note fixture."},
+  {"id":"00000000-0000-4000-8000-000000000013","title":"iPhone persistence","text":"Native SQLite adapter requires a real native runtime."},
+  {"id":"00000000-0000-4000-8000-000000000014","title":"Web storage","text":"IndexedDB and OPFS are browser persistence targets."},
+  {"id":"00000000-0000-4000-8000-000000000015","title":"Worker runtime","text":"WebAssembly and worker bootstrap are checked in browser."},
+  {"id":"00000000-0000-4000-8000-000000000016","title":"Laravel endpoint","text":"The sync adapter targets the isolated Laravel API."},
+  {"id":"00000000-0000-4000-8000-000000000017","title":"MySQL source","text":"Synthetic fixture rows are stored in isolated MySQL."},
+  {"id":"00000000-0000-4000-8000-000000000018","title":"Tìm kiếm nhanh","text":"Tìm kiếm offline vẫn dùng dữ liệu local."},
+  {"id":"00000000-0000-4000-8000-000000000019","title":"かな検索","text":"日本語のかな検索と漢字検索を試す。"},
+  {"id":"00000000-0000-4000-8000-000000000020","title":"Privacy check","text":"No local-only document may enter any upload payload."}
+]

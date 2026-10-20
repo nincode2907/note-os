@@ -1,0 +1,26 @@
+_type: self-hosted
+telemetry:
+  disable_telemetry_sharing: true
+replication:
+  connections:
+    - type: mysql
+      uri: !env PS_DATA_SOURCE_URI
+storage:
+  type: mongodb
+  uri: !env PS_MONGO_URI
+port: 8080
+sync_config:
+  path: sync-config.yaml
+client_auth:
+  audience: ["powersync"]
+  jwks:
+    keys:
+      - kty: oct
+        alg: HS256
+        kid: noteos-phase00
+        k: c2VjcmV0LW5vdGVvcy1waGFzZS0wMC1sb2NhbA
+api:
+  tokens:
+    - gate1-local-admin-only
+config:
+  edition: 3

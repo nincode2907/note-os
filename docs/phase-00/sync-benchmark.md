@@ -1,5 +1,25 @@
 # Spike 00-C — Offline Sync Engine Bake-off
 
+## Gate 1 target-runtime follow-up — 2026-10-20
+
+Gate 1 is **INCOMPLETE; UNDECIDED**. The Next.js production build passed, but the browser contract failed initial pull: Chromium returned 0/20 rows for both Web candidates, and WebKit returned 0/20 for PowerSync. Offline reload, privacy upload and multilingual search assertions did not run. Native G1-01 and cross-device G1-03 are BLOCKED without Xcode/simulator/iPhone. See [framework-comparison.md](framework-comparison.md) for the full matrix, actual versions, traces, topology and reproduction. No engine is selected; Gate 2 is not started.
+
+The earlier Node/LokiJS/Custom Sync results below remain historical Gate 0 evidence and do not count as Gate 1 target-runtime results.
+
+### Controlled Web recovery — 2026-10-20
+
+**Status: BLOCKED before retest. Sync Engine stays UNDECIDED.** Read-only Docker forensics showed the existing noteOS MySQL and isolated Gate 1 MySQL both stopped with exit `137` and `OOMKilled=true`. noteOS MySQL did not complete recovery: its last startup log reaches InnoDB initialization, container state is stopped/unhealthy, and the dependent noteOS API/Web/Mongo services are also stopped. Docker Desktop has 4 CPUs and 4.818 GiB memory; at the snapshot, other local workloads were using substantial memory (MemoryOS Web 1.062 GiB, MemoryOS MySQL 396.3 MiB, and `mysql-local` 543.4 MiB). No additional build, container start, browser, or fixture workload was run.
+
+The OOM kill is **confirmed for both MySQL containers**. The specific source of peak host pressure is unknown. Other noteOS services with exit `137` had `OOMKilled=false`, so they are not classified as OOM. Docker events retained no matching noteOS OOM record in the queried window. Gate 1 named volumes remain present and were not removed; Docker prune was not run.
+
+| Candidate | Observed Web attempt | Recovery-pass classification | RCA status |
+| --- | --- | --- | --- |
+| PowerSync | Chromium and WebKit initial-pull assertions timed out at 0/20. Server had logged 40 source changes, a stream start and checkpoint 40. | **FAIL — initial-pull assertion**; all later scenarios **NOT TESTED**. | **BLOCKED / unknown** — no client local-table evidence or full delivery trace. Checkpoint 40 alone does not prove rows arrived. |
+| WatermelonDB | Chromium initial-pull assertion timed out at 0/20; WatermelonDB WebKit was not run. | **FAIL — initial-pull assertion**; all later scenarios **NOT TESTED**. | **BLOCKED / unknown** — no captured pull response/error and no direct local collection inspection. |
+| Recovery prerequisite | noteOS MySQL stopped/unhealthy after OOM; host resource safety not established. | **BLOCKED** — no retest was started. | Must restore noteOS MySQL and verify healthy/resources before a new workload. |
+
+The saved `error-context.md` files show only the count assertion (expected 20, received 0); traces/screenshots and `gate1-run.log` are in [`artifacts/phase-00/gate1/`](../../artifacts/phase-00/gate1/). This evidence does not localize whether fixture delivery, SDK ingestion, schema mapping or the UI query caused either candidate's failure. Recovery RCA and Docker snapshot are recorded in [framework-comparison.md](framework-comparison.md#controlled-recovery-and-rca--2026-10-20).
+
 Ngày chạy: 2026-10-20. Môi trường: macOS 15.7.7, Docker Compose `noteos-phase00`, Laravel 12.70.0 + MySQL 8.4.7, Node 22.21.1 trong test container. Chỉ dùng dữ liệu tổng hợp.
 
 ## Kết luận và trạng thái

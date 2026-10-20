@@ -1,3 +1,13 @@
+# 00-C Gate 1 — Target runtime (2026-10-20)
+
+**Decision: UNDECIDED.** Gate 1 is incomplete. The Next.js `16.4.2` production build passed, and real Chromium/WebKit browser processes launched. The browser harness failed full initial pull for PowerSync and WatermelonDB (0 of 20 fixture rows materialized). Offline persistence, `DEVICE_ONLY`, search and cross-platform round trip remain unverified. iOS native validation is BLOCKED because the host lacks Xcode and `simctl`. This result is a harness failure and does not establish a framework limitation.
+
+**Controlled recovery update (2026-10-20): BLOCKED before retest.** Read-only Docker inspection confirmed `OOMKilled=true`, exit `137` for noteOS baseline MySQL and isolated Gate 1 MySQL. Baseline MySQL is stopped/unhealthy and its startup log ends during InnoDB initialization. Docker Desktop has 4.818 GiB total memory with other local workloads still active. No further Gate 1 containers, builds, or browser tests were started; both Gate 1 volumes remain intact. Root cause of the 0/20 local results is still unknown for both PowerSync and WatermelonDB because the previous attempt did not capture end-to-end pull and local-store evidence. See [framework-comparison.md](framework-comparison.md#controlled-recovery-and-rca--2026-10-20) and [sync-benchmark.md](sync-benchmark.md#controlled-web-recovery--2026-10-20).
+
+Do not admit either candidate to Gate 2 based on this run. After a separately safe recovery state is available, resume the approved Web diagnosis by tracing fixture source, delivery, SDK local store and UI query for each candidate, then run the missing Web assertions. Native SDK 57 development builds and remaining shared cases stay outside this Gate 1 Web recovery. SDK 58 requires a WatermelonDB `0.28.0` compatibility resolution; see [framework-comparison.md](framework-comparison.md). Full matrix and reproduction: [sync-benchmark.md](sync-benchmark.md#gate-1-target-runtime-follow-up--2026-10-20).
+
+---
+
 # 00-D — Docker foundation tối thiểu
 
 Ngày chạy: 2026-10-20. Đây là kết quả nền tảng ban đầu, không phải hoàn tất toàn bộ spike 00-D.

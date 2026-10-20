@@ -1,0 +1,224 @@
+name: noteos-gate1
+
+# Run exactly one profile at a time. This file contains no baseline noteOS
+# services and publishes no host ports.
+services:
+  gate1-watermelon-mysql:
+    image: mysql:8.4.7
+    profiles: ["gate1-watermelon"]
+    environment:
+      MYSQL_ROOT_PASSWORD: gate1_root_local
+      MYSQL_DATABASE: noteos_gate1
+      MYSQL_USER: noteos_gate1
+      MYSQL_PASSWORD: gate1_db_local
+    volumes:
+      - gate1_watermelon_mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -unoteos_gate1 -pgate1_db_local --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  gate1-watermelon-api:
+    image: noteos-phase00-gate1-api
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    profiles: ["gate1-watermelon"]
+    environment:
+      APP_ENV: local
+      APP_DEBUG: "false"
+      APP_KEY: base64:7A0rDbn/0Ne75Ee97BrxBhZHed8gNIOk7hdukgR8ReM=
+      APP_URL: http://gate1-api:15001
+      DB_CONNECTION: mysql
+      DB_HOST: gate1-watermelon-mysql
+      DB_PORT: 3306
+      DB_DATABASE: noteos_gate1
+      DB_USERNAME: noteos_gate1
+      DB_PASSWORD: gate1_db_local
+      QUEUE_CONNECTION: sync
+      CACHE_STORE: array
+      NOTEOS_GATE1_ENABLED: "true"
+    command: ["sh", "-lc", "php artisan migrate --force && php artisan serve --host=0.0.0.0 --port=15001"]
+    depends_on:
+      gate1-watermelon-mysql:
+        condition: service_healthy
+    networks:
+      default:
+        aliases: ["gate1-api"]
+    healthcheck:
+      test: ["CMD", "php", "-r", "exit(@file_get_contents('http://127.0.0.1:15001/api/health')===false?1:0);"]
+      interval: 5s
+      timeout: 2s
+      retries: 30
+
+  gate1-watermelon-web:
+    image: noteos-phase00-gate1-web
+    build:
+      context: ./spikes/phase-00/gate1/web
+      dockerfile: Dockerfile
+    profiles: ["gate1-watermelon"]
+    depends_on:
+      gate1-watermelon-api:
+        condition: service_healthy
+    networks:
+      default:
+        aliases: ["gate1-web"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/watermelon').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  gate1-powersync-mysql:
+    image: mysql:8.4.7
+    profiles: ["gate1-powersync"]
+    command: ["--server-id=1002", "--log-bin=mysql-bin", "--binlog-format=ROW", "--binlog-row-image=FULL", "--gtid-mode=ON", "--enforce-gtid-consistency=ON"]
+    environment:
+      MYSQL_ROOT_PASSWORD: gate1_root_local
+      MYSQL_DATABASE: noteos_gate1
+      MYSQL_USER: noteos_gate1
+      MYSQL_PASSWORD: gate1_db_local
+    volumes:
+      - gate1_powersync_mysql:/var/lib/mysql
+      - ./spikes/phase-00/mysql/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -unoteos_gate1 -pgate1_db_local --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  gate1-powersync-api:
+    image: noteos-phase00-gate1-api
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    profiles: ["gate1-powersync"]
+    environment:
+      APP_ENV: local
+      APP_DEBUG: "false"
+      APP_KEY: base64:7A0rDbn/0Ne75Ee97BrxBhZHed8gNIOk7hdukgR8ReM=
+      APP_URL: http://gate1-api:15001
+      DB_CONNECTION: mysql
+      DB_HOST: gate1-powersync-mysql
+      DB_PORT: 3306
+      DB_DATABASE: noteos_gate1
+      DB_USERNAME: noteos_gate1
+      DB_PASSWORD: gate1_db_local
+      QUEUE_CONNECTION: sync
+      CACHE_STORE: array
+      POWERSYNC_URL: http://localhost:8080
+      POWERSYNC_HMAC_KEY: secret-noteos-phase-00-local
+      NOTEOS_GATE1_ENABLED: "true"
+    command: ["sh", "-lc", "php artisan migrate --force && php artisan serve --host=0.0.0.0 --port=15001"]
+    depends_on:
+      gate1-powersync-mysql:
+        condition: service_healthy
+    networks:
+      default:
+        aliases: ["gate1-api"]
+    healthcheck:
+      test: ["CMD", "php", "-r", "exit(@file_get_contents('http://127.0.0.1:15001/api/health')===false?1:0);"]
+      interval: 5s
+      timeout: 2s
+      retries: 30
+
+  gate1-mongo:
+    image: mongo:8.0.16
+    profiles: ["gate1-powersync"]
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
+    volumes:
+      - gate1_powersync_mongo:/data/db
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval 'try { rs.status().ok } catch (e) { rs.initiate({_id:\"rs0\",members:[{_id:0,host:\"gate1-mongo:27017\"}]}).ok }' | grep 1"]
+      interval: 15s
+      timeout: 15s
+      retries: 30
+
+  gate1-powersync:
+    image: journeyapps/powersync-service:1.20.0
+    profiles: ["gate1-powersync"]
+    environment:
+      POWERSYNC_CONFIG_PATH: /config/service.yaml
+      PS_DATA_SOURCE_URI: mysql://powersync:noteos_powersync_local@gate1-powersync-mysql:3306/noteos_gate1
+      PS_MONGO_URI: mongodb://gate1-mongo:27017/powersync?replicaSet=rs0
+    volumes:
+      - ./spikes/phase-00/gate1/powersync:/config:ro
+    depends_on:
+      gate1-powersync-mysql:
+        condition: service_healthy
+      gate1-mongo:
+        condition: service_healthy
+    networks:
+      default:
+        aliases: ["gate1-powersync"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8080/probes/liveness').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 2s
+      retries: 30
+
+  gate1-powersync-web:
+    image: noteos-phase00-gate1-web
+    build:
+      context: ./spikes/phase-00/gate1/web
+      dockerfile: Dockerfile
+    profiles: ["gate1-powersync"]
+    depends_on:
+      gate1-powersync-api:
+        condition: service_healthy
+      gate1-powersync:
+        condition: service_healthy
+    networks:
+      default:
+        aliases: ["gate1-web"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/powersync').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  gate1-watermelon-playwright:
+    image: noteos-phase00-gate1-playwright
+    build:
+      context: ./spikes/phase-00/gate1
+      dockerfile: Dockerfile.tests
+    profiles: ["gate1-watermelon"]
+    volumes:
+      - ./spikes/phase-00/gate1:/runner/gate1:ro
+      - ./artifacts/phase-00/gate1:/artifacts
+    environment:
+      BASE_URL: http://localhost:3000
+      API_URL: http://gate1-api:15001
+      POWERSYNC_URL: http://gate1-powersync:8080
+      ARTIFACTS_DIR: /artifacts
+      GATE1_SOURCE_DIR: /runner/gate1
+    command: ["npm", "test", "--", "--grep=watermelon"]
+
+  gate1-powersync-playwright:
+    image: noteos-phase00-gate1-playwright
+    build:
+      context: ./spikes/phase-00/gate1
+      dockerfile: Dockerfile.tests
+    profiles: ["gate1-powersync"]
+    volumes:
+      - ./spikes/phase-00/gate1:/runner/gate1:ro
+      - ./artifacts/phase-00/gate1:/artifacts
+    environment:
+      BASE_URL: http://localhost:3000
+      API_URL: http://gate1-api:15001
+      POWERSYNC_URL: http://gate1-powersync:8080
+      ARTIFACTS_DIR: /artifacts
+      GATE1_SOURCE_DIR: /runner/gate1
+    command: ["npm", "test", "--", "--grep=powersync"]
+
+volumes:
+  gate1_watermelon_mysql:
+    name: noteos-gate1-watermelon-mysql
+  gate1_powersync_mysql:
+    external: true
+    name: noteos-phase00_noteos_gate1_mysql
+  gate1_powersync_mongo:
+    external: true
+    name: noteos-phase00_noteos_gate1_mongo
+

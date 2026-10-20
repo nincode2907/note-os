@@ -1,0 +1,31 @@
+noteOS Phase 00-C Gate 1 evidence record
+Run date: 2026-10-20 (Asia/Ho_Chi_Minh)
+
+BUILD
+Command: docker compose --profile gate1 build gate1-web gate1-playwright
+Next.js 16.4.2 production build: COMPILED, TypeScript passed, static routes generated: /, /powersync, /watermelon.
+Playwright runner image: mcr.microsoft.com/playwright:1.64.1-noble; npm audit found 0 vulnerabilities for runner dependencies.
+Web package lock: spikes/phase-00/gate1/web/package-lock.json.
+Test package lock: spikes/phase-00/gate1/package-lock.json.
+
+ISOLATED SERVICES
+Gate 1 used project noteos-phase00 service names gate1-*. New named volumes: noteos_gate1_mysql, noteos_gate1_mongo. No host ports published.
+Synthetic fixture API state: 20 notes, IDs 00000000-0000-4000-8000-000000000001 through ...0020; dataset phase00-gate1-v1; revisions 1–20; canonical JSON schemaVersion=1.
+PowerSync Service 1.20.0 loaded Sync Streams edition 3. MySQL replication processed fixture inserts and revision updates (40 source changes). Browser stream log: PowerSync JS stream started; checkpoint 40 acknowledged.
+
+PLAYWRIGHT
+Initial attempt: page was loaded on Docker DNS hostname and PowerSync Web reported "Navigator locks are not available in an insecure context". Harness changed to a reverse proxy on localhost inside Playwright container; no host port was published.
+Corrected attempt: Playwright `1.64.1`, Chromium and WebKit actual browser engines. Assertions for initial 20-row materialization failed with expected 20, received 0:
+- Chromium / PowerSync: FAIL (trace + error context saved)
+- Chromium / WatermelonDB: FAIL (trace + error context saved)
+- WebKit / PowerSync: FAIL (trace + error context saved)
+- WebKit / WatermelonDB: NOT TESTED (run interrupted after Gate 1 Mongo healthcheck timed out)
+Offline reload, local durable storage inspection, DEVICE_ONLY upload checks and multilingual search were not reached.
+
+Artifacts: test-output/runtime-*/ contains Playwright screenshots, traces, and error-context.md. Test source: spikes/phase-00/gate1/tests/runtime.spec.ts.
+
+RESOURCE / RECOVERY
+During repeated image builds and browser attempts, Docker reported noteOS MySQL container exit status 137 (OOM-kill). Several Docker healthchecks timed out while host was under resource pressure. Gate 1 services were stopped without removing their volumes. The existing noteOS MySQL container was started again for recovery; no other project container was intentionally changed. Gate 1 containers remain stopped; named volumes are retained.
+
+VALIDATION LIMITS
+No Xcode or simctl is installed; no iOS build, simulator run, or real-iPhone test was performed. Native G1-01 and two-client iPhone/Web G1-03 are BLOCKED. No latency/resource benchmark or engine recommendation is claimed.
