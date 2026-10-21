@@ -57,22 +57,35 @@ test('one active session per note, pause/resume transitions, and reload recovery
   await assert.rejects(audio.create(note.id, { mimeType: 'audio/webm', ownerId: 'other-tab' }), NoteStateError);
   await audio.setStatus(recording.id, 'paused'); await audio.setStatus(recording.id, 'recording');
   await audio.appendChunk(recording.id, 0, new Blob(['partial']), 500);
-  const recovered = await createAudioRepository(indexedDB, databaseName).recoverOwned('same-tab');
-  assert.equal(recovered.length, 1); assert.equal(recovered[0].status, 'interrupted');
+  const recovered = await createAudioRepository(indexedDB, databaseName).recover(recording.id);
+  assert.equal(recovered.status, 'interrupted');
   assert.equal((await audio.get(recording.id)).status, 'interrupted');
   assert.equal((await audio.chunks(recording.id)).length, 1);
-  assert.deepEqual(await audio.recoverOwned('same-tab'), []);
+  assert.equal(await audio.recover(recording.id), null);
 });
 
-test('stale recording sessions are marked interrupted while recently active sessions remain untouched', async () => {
+test('timestamps alone never recover recording or paused sessions', async () => {
   const databaseName = name(), notes = createNotesRepository(indexedDB, databaseName), audio = createAudioRepository(indexedDB, databaseName);
-  const oldNote = await notes.create(fixture('stale')), liveNote = await notes.create(fixture('live'));
-  const stale = await audio.create(oldNote.id, { mimeType: 'audio/webm', ownerId: 'closed-tab', createdAt: 100 });
-  const live = await audio.create(liveNote.id, { mimeType: 'audio/webm', ownerId: 'open-tab', createdAt: Date.now() });
-  const recovered = await audio.recoverStale({ recordingBefore: 1000 });
-  assert.deepEqual(recovered.map((row) => row.id), [stale.id]);
-  assert.equal((await audio.get(stale.id)).status, 'interrupted');
-  assert.equal((await audio.get(live.id)).status, 'recording');
+  const oldNote = await notes.create(fixture('stale'));
+  const stale = await audio.create(oldNote.id, { mimeType: 'audio/webm', ownerId: 'copied-token', createdAt: 100 });
+  await audio.setStatus(stale.id, 'paused');
+  assert.equal((await audio.get(stale.id)).status, 'paused');
+  assert.deepEqual(await audio.listUnfinished().then((rows) => rows.map((row) => row.id)), [stale.id]);
+  assert.equal((await audio.chunks(stale.id)).length, 0);
+});
+
+test('active recording blocks cross-tab recording and destructive deletion races', async () => {
+  const databaseName = name(), notes = createNotesRepository(indexedDB, databaseName), audio = createAudioRepository(indexedDB, databaseName);
+  const otherTabNotes = createNotesRepository(indexedDB, databaseName), otherTabAudio = createAudioRepository(indexedDB, databaseName);
+  const note = await notes.create(fixture('live-delete'));
+  const recording = await audio.create(note.id, { mimeType: 'audio/webm', ownerId: 'same-copied-session-id' });
+  await audio.appendChunk(recording.id, 0, new Blob(['committed']), 1000);
+  const trashed = await notes.setLifecycle(note.id, 'trashed', note.revision);
+  await assert.rejects(otherTabAudio.create(note.id, { mimeType: 'audio/webm', ownerId: 'same-copied-session-id' }), NoteStateError);
+  await assert.rejects(otherTabAudio.remove(recording.id), NoteStateError);
+  await assert.rejects(otherTabNotes.deleteForever(note.id, trashed.revision), NoteStateError);
+  assert.equal((await audio.get(recording.id)).status, 'recording');
+  assert.equal(await (await audio.chunks(recording.id))[0].blob.text(), 'committed');
 });
 
 test('archive and trash keep media; confirmed permanent note delete cascades atomically to recordings and chunks', async () => {

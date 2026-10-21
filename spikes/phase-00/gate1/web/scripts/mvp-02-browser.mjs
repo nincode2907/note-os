@@ -64,7 +64,7 @@ async function waitForNewRecordingChunk(page, noteId, existingCount) {
   throw new Error('Timed out waiting for a chunk from the new recording session.');
 }
 async function start(page) { await page.getByRole('button', { name: /Record audio/ }).click(); await page.getByText('Recording — audio chunks are being saved on this device.').waitFor(); }
-async function stop(page) { await page.getByRole('button', { name: 'Stop and save' }).click(); await page.getByText('Recording saved on this device.').waitFor({ timeout: 15000 }); }
+async function stop(page) { await page.getByRole('button', { name: 'Stop and save' }).click(); try { await page.getByText('Recording saved on this device.').waitFor({ timeout: 15000 }); } catch (error) { const body = await page.locator('body').innerText().catch(() => ''); throw new Error(`Stop did not complete: ${body}\n${error instanceof Error ? error.message : String(error)}`); } }
 
 try {
   await scenario('unsupported-browser-api', async (page) => {
@@ -115,6 +115,42 @@ try {
     const rows = await records(page, id); check(rows.length === 1 && rows[0].status === 'interrupted' && rows[0].chunkCount > 0, 'Reload did not retain an explicitly partial recording.');
     await page.getByRole('button', { name: 'Play', exact: true }).click(); await page.locator('audio.recording-player').waitFor();
     await page.getByRole('button', { name: 'Export', exact: true }).click(); await page.waitForURL(url);
+  });
+  await scenario('copied-session-id-and-live-owner-protection', async (page, context) => {
+    await context.grantPermissions(['microphone'], { origin: baseUrl });
+    await context.addInitScript(() => sessionStorage.setItem('noteos:mvp02:tab', 'deliberately-copied-owner-id'));
+    const { id, url } = await openNote(page); await start(page); await waitForChunks(page, id);
+    await page.getByRole('button', { name: 'Pause' }).click(); await page.getByText('Paused — saved chunks are retained locally.').waitFor();
+    const otherTab = await context.newPage(); await otherTab.goto(url);
+    await otherTab.getByRole('button', { name: /Record audio/ }).waitFor({ state: 'visible' });
+    await otherTab.evaluate(async () => new Promise((resolve, reject) => {
+      const request = indexedDB.open('noteos-mvp-01'); request.onerror = () => reject(request.error);
+      request.onsuccess = () => { const db = request.result, tx = db.transaction('recordings', 'readwrite'), store = tx.objectStore('recordings'), query = store.getAll(); query.onsuccess = () => { for (const row of query.result) if (['recording', 'paused'].includes(row.status) && row.noteId === location.pathname.split('/').pop()) { row.updatedAt = 1; store.put(row); } }; tx.oncomplete = () => { db.close(); resolve(); }; tx.onerror = () => reject(tx.error); };
+    }));
+    await otherTab.reload();
+    let rows = await records(page, id); check(rows.length === 1 && rows[0].status === 'paused' && rows[0].updatedAt === 1, 'A long-paused session was rewritten while its live owner held the lock.');
+    await otherTab.getByRole('button', { name: /Record audio/ }).click();
+    await otherTab.getByRole('alert').filter({ hasText: 'already owns audio' }).waitFor();
+    check((await records(page, id)).length === 1, 'A second tab created a competing active session.');
+    await page.getByRole('button', { name: 'Resume' }).click(); await page.getByText('Recording — audio chunks are being saved on this device.').waitFor();
+    await stop(page); await otherTab.getByRole('button', { name: /Record audio/ }).click();
+    await otherTab.getByText('Recording — audio chunks are being saved on this device.').waitFor();
+    await waitForChunks(otherTab, id); await stop(otherTab);
+    check((await records(page, id)).filter((row) => row.status === 'complete').length === 2, 'The per-note lock was not released after final chunk persistence.');
+    await otherTab.close();
+  });
+  await scenario('unsupported-locks-preserve-unfinished-session', async (page, context) => {
+    await context.grantPermissions(['microphone'], { origin: baseUrl });
+    const { id, url } = await openNote(page); await start(page); await waitForChunks(page, id);
+    const fallbackTab = await context.newPage();
+    await fallbackTab.addInitScript(() => Object.defineProperty(navigator, 'locks', { configurable: true, value: undefined }));
+    await fallbackTab.goto(url); await fallbackTab.getByRole('button', { name: 'Recover partial' }).waitFor();
+    await fallbackTab.screenshot({ path: `${evidence}/unsupported-locks-recovery-state.png`, fullPage: true });
+    const before = await records(page, id); check(before.length === 1 && before[0].status === 'recording', 'Unsupported-lock initialization changed an unfinished session.');
+    await fallbackTab.getByRole('button', { name: /Record audio/ }).click();
+    await fallbackTab.getByRole('alert').filter({ hasText: 'cannot safely coordinate' }).waitFor();
+    check((await records(page, id))[0].status === 'recording', 'Unsupported Web Locks allowed a competing recorder or rewrote saved state.');
+    await stop(page); await fallbackTab.close();
   });
   await scenario('active-recording-blocks-navigation-and-lifecycle', async (page, context) => {
     await context.grantPermissions(['microphone'], { origin: baseUrl }); const { id, url } = await openNote(page); await start(page); await waitForChunks(page, id);

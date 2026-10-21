@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createAudioRepository } from '../lib/local-notes.js';
+import { acquireRecordingLock } from '../lib/recording-lock.mjs';
 
 type Recording = { id: string; noteId: string; title: string; mimeType: string; status: 'recording' | 'paused' | 'complete' | 'interrupted' | 'failed'; createdAt: number; durationMs: number; chunkCount: number };
 const repo = createAudioRepository();
@@ -31,7 +32,7 @@ export function AudioRecorder({ noteId, disabled = false, onActivityChange }: { 
   const [elapsed, setElapsed] = useState(0), [editId, setEditId] = useState(''), [editTitle, setEditTitle] = useState('');
   const [players, setPlayers] = useState<Record<string, string>>({});
   const recorderRef = useRef<MediaRecorder | null>(null), streamRef = useRef<MediaStream | null>(null), sessionRef = useRef<Recording | null>(null);
-  const ownerRef = useRef(''), writerRef = useRef<Promise<unknown>>(Promise.resolve()), sequenceRef = useRef(0), elapsedBeforeRef = useRef(0), segmentStartedRef = useRef(0);
+  const lockReleaseRef = useRef<(() => Promise<void>) | null>(null), writerRef = useRef<Promise<unknown>>(Promise.resolve()), sequenceRef = useRef(0), elapsedBeforeRef = useRef(0), segmentStartedRef = useRef(0);
   const stopReasonRef = useRef<'complete' | 'interrupted' | 'failed'>('complete'), writeFailedRef = useRef(false), startingRef = useRef(false), mountedRef = useRef(true), objectUrlsRef = useRef(new Set<string>());
   const refresh = useCallback(async () => { try { const next = await repo.list(noteId); if (mountedRef.current) setRecordings(next); } catch (cause) { if (mountedRef.current) setError(cause instanceof Error ? cause.message : 'Could not read local recordings.'); } }, [noteId]);
 
@@ -39,11 +40,19 @@ export function AudioRecorder({ noteId, disabled = false, onActivityChange }: { 
     mountedRef.current = true;
     void (async () => {
       try {
-        let ownerId = sessionStorage.getItem('noteos:mvp02:tab');
-        if (!ownerId) { ownerId = crypto.randomUUID(); sessionStorage.setItem('noteos:mvp02:tab', ownerId); }
-        ownerRef.current = ownerId;
-        const recovered = await repo.recoverOwned(ownerId), stale = await repo.recoverStale();
-        if (recovered.length + stale.length) setStatusText(`${recovered.length + stale.length} unfinished recording${recovered.length + stale.length === 1 ? '' : 's'} recovered as partial audio.`);
+        const unfinished = await repo.listUnfinished();
+        let recoveredCount = 0;
+        if (typeof (navigator as any).locks?.request === 'function') {
+          for (const recording of unfinished) {
+            const claim = await acquireRecordingLock(navigator.locks, recording.noteId);
+            if (!claim.release) continue;
+            try { if (await repo.recover(recording.id)) recoveredCount += 1; }
+            finally { await claim.release(); }
+          }
+        } else if (unfinished.length) {
+          setStatusText('Unfinished audio is preserved. This browser cannot verify ownership for automatic recovery.');
+        }
+        if (recoveredCount) setStatusText(`${recoveredCount} unfinished recording${recoveredCount === 1 ? '' : 's'} recovered as partial audio.`);
         await refresh();
         if (mountedRef.current) setAudioReady(true);
       } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not open local audio storage.'); }
@@ -79,19 +88,32 @@ export function AudioRecorder({ noteId, disabled = false, onActivityChange }: { 
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') { setError('Audio recording is not supported by this browser.'); setStatusText('Unsupported browser'); startingRef.current = false; setStarting(false); return; }
     const mimeType = supportedMimeType();
     if (!mimeType) { setError('This browser does not report a supported audio format.'); setStatusText('Unsupported audio format'); startingRef.current = false; setStarting(false); return; }
+    let claim;
+    try { claim = await acquireRecordingLock(navigator.locks, noteId); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not verify recording ownership.'); setStatusText('Safe recording ownership is unavailable'); startingRef.current = false; setStarting(false); return; }
+    if (!claim.supported) {
+      setError('This browser cannot safely coordinate recording across tabs. Audio recording is unavailable here.');
+      setStatusText('Safe recording ownership is unavailable'); startingRef.current = false; setStarting(false); return;
+    }
+    if (!claim.release) {
+      setError('Another tab or recorder already owns audio for this note. Stop it there before starting another recording.');
+      startingRef.current = false; setStarting(false); return;
+    }
+    lockReleaseRef.current = claim.release;
     let stream: MediaStream;
     try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
     catch (cause: any) {
       const message = cause?.name === 'NotAllowedError' || cause?.name === 'SecurityError' ? 'Microphone permission was denied. Allow microphone access in browser settings and try again.' : cause?.name === 'NotFoundError' || cause?.name === 'DevicesNotFoundError' ? 'No microphone is available on this device.' : 'Could not start the microphone. Check browser permission and device settings.';
+      await claim.release(); lockReleaseRef.current = null;
       if (mountedRef.current) { setError(message); setStatusText('Recording did not start'); setStarting(false); }
       startingRef.current = false; return;
     }
-    if (!mountedRef.current) { for (const track of stream.getTracks()) track.stop(); startingRef.current = false; return; }
+    if (!mountedRef.current) { for (const track of stream.getTracks()) track.stop(); await claim.release(); lockReleaseRef.current = null; startingRef.current = false; return; }
     let session: Recording | null = null;
     try {
-      const createdSession = await repo.create(noteId, { mimeType, ownerId: ownerRef.current || crypto.randomUUID() }) as Recording;
+      const createdSession = await repo.create(noteId, { mimeType, ownerId: crypto.randomUUID() }) as Recording;
       session = createdSession;
-      if (!mountedRef.current) { await repo.setStatus(createdSession.id, 'interrupted'); for (const track of stream.getTracks()) track.stop(); startingRef.current = false; return; }
+      if (!mountedRef.current) { await repo.setStatus(createdSession.id, 'interrupted'); for (const track of stream.getTracks()) track.stop(); await claim.release(); lockReleaseRef.current = null; startingRef.current = false; return; }
       const recorder = new MediaRecorder(stream, { mimeType });
       setPauseSupported(typeof recorder.pause === 'function' && typeof recorder.resume === 'function');
       streamRef.current = stream; recorderRef.current = recorder; sessionRef.current = createdSession;
@@ -116,6 +138,7 @@ export function AudioRecorder({ noteId, disabled = false, onActivityChange }: { 
             const saved = await repo.setStatus(createdSession.id, finalStatus, { durationMs: elapsedBeforeRef.current });
             if (mountedRef.current) { setActive(null); onActivityChange?.(false); setStatusText(finalStatus === 'complete' ? 'Recording saved on this device.' : reason === 'complete' ? 'No audio was captured. The empty recording was not marked saved.' : 'Recording stopped unexpectedly. Any saved audio is available as a partial recording.'); }
           } catch (cause) { if (mountedRef.current) setError(cause instanceof Error ? cause.message : 'Could not finalize recording.'); }
+          finally { await lockReleaseRef.current?.(); lockReleaseRef.current = null; }
           for (const track of stream.getTracks()) track.stop();
           if (streamRef.current === stream) streamRef.current = null;
           if (recorderRef.current === recorder) recorderRef.current = null;
@@ -130,6 +153,7 @@ export function AudioRecorder({ noteId, disabled = false, onActivityChange }: { 
       startingRef.current = false; setStarting(false);
     } catch (cause: any) {
       if (session) await repo.setStatus(session.id, 'failed').catch(() => {});
+      await claim.release(); lockReleaseRef.current = null;
       for (const track of stream.getTracks()) track.stop(); streamRef.current = null;
       recorderRef.current = null; sessionRef.current = null;
       if (mountedRef.current) {
@@ -188,6 +212,21 @@ export function AudioRecorder({ noteId, disabled = false, onActivityChange }: { 
     try { await repo.rename(recording.id, editTitle); setEditId(''); setEditTitle(''); await refresh(); }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not rename recording.'); }
   }
+  async function recoverRecording(recording: Recording) {
+    try {
+      if (typeof (navigator as any).locks?.request === 'function') {
+        const claim = await acquireRecordingLock(navigator.locks, recording.noteId);
+        if (!claim.release) { setError('This recording still has a live owner. Stop it in its original tab first.'); return; }
+        try { await repo.recover(recording.id); }
+        finally { await claim.release(); }
+      } else {
+        const confirmed = window.confirm('Confirm every noteOS tab with this note is closed and no recording is active. Recover the saved chunks as a partial recording?');
+        if (!confirmed) return;
+        await repo.recover(recording.id);
+      }
+      setStatusText('Saved audio chunks were recovered as a partial recording.'); await refresh();
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not recover the partial recording.'); }
+  }
 
   return <section className="audio-panel" aria-labelledby="audio-title">
     <div className="audio-heading"><div><p className="eyebrow">On this device</p><h2 id="audio-title" className="section-title">Audio recordings</h2><p className="audio-copy">Private local audio. Recordings are separate from note backups and are never uploaded.</p></div></div>
@@ -202,7 +241,7 @@ export function AudioRecorder({ noteId, disabled = false, onActivityChange }: { 
         <div className="recording-meta"><span>{formatDuration(recording.durationMs)}</span><span>{new Date(recording.createdAt).toLocaleString()}</span><span>{recording.mimeType}</span></div>
         {players[recording.id] && <audio className="recording-player" controls preload="metadata" src={players[recording.id]} aria-label={`Play ${recording.title}`} />}
       </div>
-      <div className="recording-actions">{recording.chunkCount > 0 && <><button className="tool-button" onClick={() => void playRecording(recording)}>{players[recording.id] ? 'Reload audio' : 'Play'}</button><button className="tool-button" onClick={() => void downloadRecording(recording)}>Export</button></>}<button className="tool-button" onClick={() => { setEditId(recording.id); setEditTitle(recording.title); }}>Rename</button><button className="tool-button" onClick={() => void removeRecording(recording)}>Delete</button></div>
+      <div className="recording-actions">{['recording', 'paused'].includes(recording.status) && <button className="tool-button" onClick={() => void recoverRecording(recording)}>Recover partial</button>}{recording.chunkCount > 0 && <><button className="tool-button" onClick={() => void playRecording(recording)}>{players[recording.id] ? 'Reload audio' : 'Play'}</button><button className="tool-button" onClick={() => void downloadRecording(recording)}>Export</button></>}<button className="tool-button" onClick={() => { setEditId(recording.id); setEditTitle(recording.title); }}>Rename</button><button className="tool-button" onClick={() => void removeRecording(recording)}>Delete</button></div>
     </li>)}</ul>}
   </section>;
 }

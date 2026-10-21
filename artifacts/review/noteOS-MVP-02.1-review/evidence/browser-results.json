@@ -1,0 +1,51 @@
+{
+  "browser": "156.0.8078.4",
+  "launch": "Chromium fake audio device; no physical microphone input",
+  "results": [
+    {
+      "name": "unsupported-browser-api",
+      "status": "PASS"
+    },
+    {
+      "name": "permission-denied",
+      "status": "PASS"
+    },
+    {
+      "name": "record-pause-resume-reload-play-export",
+      "status": "PASS"
+    },
+    {
+      "name": "multiple-recordings-and-explicit-delete",
+      "status": "PASS"
+    },
+    {
+      "name": "storage-failure-keeps-interrupted-chunks",
+      "status": "PASS"
+    },
+    {
+      "name": "reload-recovers-partial-session",
+      "status": "PASS"
+    },
+    {
+      "name": "copied-session-id-and-live-owner-protection",
+      "status": "PASS"
+    },
+    {
+      "name": "unsupported-locks-preserve-unfinished-session",
+      "status": "PASS"
+    },
+    {
+      "name": "active-recording-blocks-navigation-and-lifecycle",
+      "status": "PASS"
+    },
+    {
+      "name": "archive-trash-preserve-recordings-and-delete-cascade",
+      "status": "PASS"
+    }
+  ],
+  "diagnostics": {
+    "consoleErrors": [],
+    "pageErrors": [],
+    "externalRequests": []
+  }
+}

@@ -211,6 +211,9 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
       const recordings = transaction.objectStore(RECORDINGS_STORE);
       const chunks = transaction.objectStore(RECORDING_CHUNKS_STORE);
       const linked = await requestResult(recordings.index('noteId').getAll(id));
+      if (linked.some((recording) => ['recording', 'paused'].includes(recording.status))) {
+        throw abort(transaction, new NoteStateError('Stop the active recording before permanently deleting this note.'));
+      }
       for (const recording of linked) {
         const keys = await requestResult(chunks.index('recordingId').getAllKeys(recording.id));
         for (const key of keys) chunks.delete(key);
@@ -293,6 +296,12 @@ export function createAudioRepository(indexedDBFactory = globalThis.indexedDB, d
     const rows = await run(tx, tx.objectStore(RECORDINGS_STORE).index('noteId').getAll(noteId));
     return rows.sort((a, b) => b.createdAt - a.createdAt);
   }
+  async function listUnfinished() {
+    const database = await openDatabase();
+    const tx = database.transaction(RECORDINGS_STORE, 'readonly');
+    const rows = await run(tx, tx.objectStore(RECORDINGS_STORE).getAll());
+    return rows.filter((recording) => ['recording', 'paused'].includes(recording.status));
+  }
   async function get(recordingId) {
     const database = await openDatabase();
     const tx = database.transaction(RECORDINGS_STORE, 'readonly');
@@ -371,28 +380,25 @@ export function createAudioRepository(indexedDBFactory = globalThis.indexedDB, d
     try {
       const recording = await requestResult(recordings.get(recordingId));
       if (!recording) throw abort(tx, new NoteNotFoundError(recordingId));
+      if (['recording', 'paused'].includes(recording.status)) throw abort(tx, new NoteStateError('Stop the active recording before deleting it.'));
       const keys = await requestResult(chunkStore.index('recordingId').getAllKeys(recordingId));
       for (const key of keys) chunkStore.delete(key);
       recordings.delete(recordingId); await done; return recording;
     } catch (error) { try { await done; } catch { /* Consume the abort. */ } throw error; }
   }
-  async function recoverOwned(ownerId) {
-    if (!ownerId) return [];
+  async function recover(recordingId) {
     const database = await openDatabase(), tx = database.transaction(RECORDINGS_STORE, 'readwrite'), done = transactionResult(tx), store = tx.objectStore(RECORDINGS_STORE);
-    const all = await requestResult(store.getAll()), recovered = [];
-    for (const recording of all) if (recording.ownerId === ownerId && ['recording', 'paused'].includes(recording.status)) {
-      const next = { ...recording, status: 'interrupted', updatedAt: Date.now() }; store.put(next); recovered.push(next);
-    }
-    await done; return recovered;
+    try {
+      const recording = await requestResult(store.get(recordingId));
+      if (!recording || !['recording', 'paused'].includes(recording.status)) {
+        await done;
+        return null;
+      }
+      const next = { ...recording, status: 'interrupted', updatedAt: Date.now() };
+      store.put(next);
+      await done;
+      return next;
+    } catch (error) { try { await done; } catch { /* Consume transaction abort. */ } throw error; }
   }
-  async function recoverStale({ recordingBefore = Date.now() - 120_000, pausedBefore = Date.now() - 86_400_000 } = {}) {
-    const database = await openDatabase(), tx = database.transaction(RECORDINGS_STORE, 'readwrite'), done = transactionResult(tx), store = tx.objectStore(RECORDINGS_STORE);
-    const all = await requestResult(store.getAll()), recovered = [];
-    for (const recording of all) {
-      const stale = recording.status === 'recording' ? recording.updatedAt < recordingBefore : recording.status === 'paused' && recording.updatedAt < pausedBefore;
-      if (stale) { const next = { ...recording, status: 'interrupted', updatedAt: Date.now() }; store.put(next); recovered.push(next); }
-    }
-    await done; return recovered;
-  }
-  return { list, get, create, appendChunk, setStatus, rename, chunks, remove, recoverOwned, recoverStale };
+  return { list, listUnfinished, get, create, appendChunk, setStatus, rename, chunks, remove, recover };
 }
