@@ -1,12 +1,13 @@
 noteOS — MVP-04.1 Native Safety Hotfix Audit
 Date: 2026-10-21
-Status: SOURCE HOTFIX COMMITTED · AUTOMATED CHECKS PASS · NATIVE GATES A/B/C BLOCKED
+Status: SOURCE AND REVIEW PACKAGE PUSHED · AUTOMATED CHECKS PASS · NATIVE GATES A/B/C BLOCKED
 
 SCOPE
 Implemented only the approved MVP-04.1 Phase 00 native prototype safety hotfix. No MVP-05, sync, AI, STT, cloud, background audio, release build, or App Store/TestFlight work.
 
 SOURCE COMMIT
 1db2a882537806c649e1871960e0dfc44e7fe4a8  fix(mvp04.1): harden native session and data safety
+a4bfc7cad8fec45cff4538171b5559d9553a3f28  docs(mvp04.1): package native safety review evidence
 
 IMPLEMENTED
 - Synchronous recording session state gate blocks duplicate starts/stops and navigation while a session is active or finalizing. Complete status waits for finalized file existence/size and SQLite recording metadata commit.
@@ -42,6 +43,6 @@ LIMITATIONS
 Automated tests do not execute Expo SQLite, Expo Audio, navigation gestures or iOS native APIs. Native rollback/race/SQLITE_BUSY behavior, recording persistence, app-restart recovery and cleanup interruption tests remain BLOCKED. SQLite and filesystem changes are not claimed to be atomic together.
 
 PUSH STATUS
-The source commit above is prepared for push to origin/main. Record the verified remote SHA after push in the delivery note; do not force push.
+Both commits above were pushed to origin/main. Verified remote `refs/heads/main` SHA: a4bfc7cad8fec45cff4538171b5559d9553a3f28. No force push was used.
 
 The archive has a detached SHA-256 sidecar so its own digest does not create a circular checksum inside the archive.
