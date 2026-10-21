@@ -1,0 +1,47 @@
+noteOS — MVP-04.1 Native Safety Hotfix Audit
+Date: 2026-10-21
+Status: SOURCE HOTFIX COMMITTED · AUTOMATED CHECKS PASS · NATIVE GATES A/B/C BLOCKED
+
+SCOPE
+Implemented only the approved MVP-04.1 Phase 00 native prototype safety hotfix. No MVP-05, sync, AI, STT, cloud, background audio, release build, or App Store/TestFlight work.
+
+SOURCE COMMIT
+1db2a882537806c649e1871960e0dfc44e7fe4a8  fix(mvp04.1): harden native session and data safety
+
+IMPLEMENTED
+- Synchronous recording session state gate blocks duplicate starts/stops and navigation while a session is active or finalizing. Complete status waits for finalized file existence/size and SQLite recording metadata commit.
+- Exclusive SQLite transactions and additive schema v2 for recovery drafts and cleanup queue. Transaction queries use the callback txn. Import, revision updates and destructive multi-step operations are isolated.
+- Note permanent delete requires the expected revision and trashed lifecycle. Recording metadata and note rows are committed before physical cleanup. Cleanup URIs are queued and retried after restart.
+- Draft journal records schema version, note/base revision, title, canonical body/checklist, tags, pin and save time. Debounced latest-wins persistence, AppState best-effort flush, recovery prompt, stale-draft preservation and atomic matching-journal clear on successful save.
+- Shared pin/tag/search behavior; pin revision guard does not touch updatedAt and works with valid schema-v1 rich-text notes. Legacy backups receive read-only view defaults for absent pin/tags.
+- Lifecycle restriction, caught rename errors, lazy player mount, and missing-file checks. Expo Audio directory:'document' retained per approved SDK 58 correction.
+
+VERIFICATION
+- PASS: Expo SDK dependency check, dependencies up to date.
+- PASS: TypeScript `tsc --noEmit`.
+- PASS: 11 synthetic/pure-helper tests; 0 failures.
+- PASS: iOS JavaScript export, 978 Metro modules, 3.1 MB bundle. This is not a native binary.
+- PASS: `git diff --check`.
+- FAIL: npm audit: 23 findings (15 high, 8 moderate, 0 critical). The `--omit=dev` audit also reports 23.
+- BLOCKED: Native iOS build, Simulator Gates A/B/C and physical-iPhone validation. macOS 15.7.7 has Command Line Tools but no full Xcode; simctl is unavailable; no iPhone was connected.
+
+AUDIT PATHS
+- braces@3.0.3 → micromatch@4.0.8 → metro-file-map@0.87.1 → Expo Metro/CLI. Toolchain path; runtime reachability unknown; advisory reports no patched version.
+- node-forge@1.4.0 → @expo/code-signing-certificates@0.0.7 / @expo/cli@58.1.13. Signing/CLI path; runtime reachability unknown; advisory reports no patched version.
+- uuid@7.0.3 → xcode@3.0.1 → @expo/config-plugins@58.0.9 (also via expo-sharing). Toolchain path; runtime reachability unknown. Advisory lists uuid@11.1.1 as patched, but xcode override compatibility is unverified.
+- npm's force-fix recommendation downgrades Expo to 44.0.6; not applied. No compatible Expo 58 remediation was verified.
+- Advisory references: https://github.com/advisories/GHSA-vfj7-8cjw-p6xm ; https://github.com/advisories/GHSA-86w9-cpqp-85rv ; https://github.com/advisories/GHSA-w5hq-g745-h8pq
+
+EVIDENCE FILES
+- noteOS-MVP-04.1-review.zip — approved brief, source snapshot, report, verification evidence and blocked native checklist.
+- noteOS-MVP-04.1-review.zip.sha256 — archive SHA-256.
+- noteOS-MVP-04.1-review/report.md — resolution table, test scope, risk and native checklist.
+- noteOS-MVP-04.1-review/evidence/verification.txt — versions, commands and results.
+
+LIMITATIONS
+Automated tests do not execute Expo SQLite, Expo Audio, navigation gestures or iOS native APIs. Native rollback/race/SQLITE_BUSY behavior, recording persistence, app-restart recovery and cleanup interruption tests remain BLOCKED. SQLite and filesystem changes are not claimed to be atomic together.
+
+PUSH STATUS
+The source commit above is prepared for push to origin/main. Record the verified remote SHA after push in the delivery note; do not force push.
+
+The archive has a detached SHA-256 sidecar so its own digest does not create a circular checksum inside the archive.

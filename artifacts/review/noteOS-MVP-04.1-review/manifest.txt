@@ -1,0 +1,11 @@
+noteOS MVP-04.1 source-only review bundle
+
+Contents
+- approved-brief.txt: approved task and hard-stop constraints
+- report.md: source resolution table, test evidence, audit and limitations
+- source/mobile/: implementation snapshot and new focused test
+- evidence/verification.txt: environment, commands and actual results
+- validation/native-checklist.md: remaining simulator/iPhone checks (BLOCKED)
+- screenshots/: intentionally empty; no native screenshots were captured
+
+Scope: Phase 00 source spike only. No iOS binary, simulator execution, physical iPhone test, production rollout, or MVP-05 work is included.

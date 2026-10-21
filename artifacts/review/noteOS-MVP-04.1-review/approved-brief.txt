@@ -1,0 +1,272 @@
+# noteOS — APPROVED MVP-04.1 Native Safety Hotfix
+
+**Lead Architect:** ChatGPT  
+**Independent Reviewer:** Gemini Round 07 completed  
+**Implementer:** Codex  
+**Status:** APPROVED — SOURCE HOTFIX ONLY
+
+## 0. Decision
+
+Gemini Round 07 returned CONDITIONAL HOLD.
+
+Lead Architect independently reviewed the supplied MVP-04 source and checked Expo SDK 58 documentation.
+
+Implement the confirmed data-safety defects before native validation.
+
+IMPORTANT REVIEW CORRECTION:
+
+Gemini's F-04-02 is FALSE POSITIVE.
+
+Expo SDK 58 `expo-audio@58.0.9` explicitly supports `RecordingOptions.directory: 'cache' | 'document'`.
+
+The current call:
+
+`useAudioRecorder({ ...RecordingPresets.HIGH_QUALITY, directory: 'document' })`
+
+is valid according to the official SDK 58 documentation and installed-version type definitions.
+
+DO NOT replace this with unnecessary filesystem move/copy logic.
+
+Retain the option. Native runtime validation must later verify the actual persisted URI, file size and reopen behavior.
+
+## 1. Protect Recording Sessions
+
+Files: `App.tsx`
+
+Fix:
+- Navigation away from Editor while recording, starting or finalizing must be blocked.
+- Include header Back, swipe-back and programmatic navigation.
+- Do not rely only on `dirty`.
+- Prevent double-tap Record from starting concurrent sessions.
+- Prevent multiple concurrent Stop/finalization operations.
+- Use synchronous refs or an explicit recording state machine where necessary; React setState alone is not a mutex.
+- Do not label recording complete until file verification and SQLite metadata commit succeed.
+- Handle AppState backgrounding as best effort, without claiming crash-proof recording.
+
+Tests:
+- Record → Back with no text edits.
+- Record → swipe Back.
+- Double-tap Record.
+- Double-tap Stop.
+- Background while starting/recording/finalizing.
+- Failed recorder stop or SQLite save.
+
+## 2. Safe Audio and Note Deletion
+
+Files: `store.ts`, `App.tsx`
+
+Current code deletes physical audio files before confirming the corresponding SQLite delete.
+
+Correct the order.
+
+`permanentlyDeleteNote` must:
+- Accept an expected revision.
+- Require lifecycle `trashed`.
+- Use revision-guarded deletion.
+- Collect associated recording file URIs inside the transaction.
+- Delete the note and dependent recording rows atomically in SQLite.
+- Return the file URIs only after a successful commit.
+- Trigger physical file cleanup afterward.
+
+If the DB operation fails, no audio file may be deleted.
+
+If physical cleanup fails, report or retain a safe retry mechanism. Do not claim filesystem/SQLite atomicity.
+
+For individual audio deletion:
+- Commit metadata deletion first.
+- Then remove the physical file.
+- Handle cleanup failure without hiding the outcome.
+
+Protect against deletion races and stale revisions.
+
+Tests:
+- DB delete fails.
+- Stale revision.
+- Non-trashed note.
+- Successful cascade.
+- Audio-file deletion fails.
+- App interruption between DB commit and file cleanup.
+
+Do not change unrelated Web deletion behavior.
+
+## 3. SQLite Transaction Safety
+
+File: `store.ts`
+
+Review the current `withTransactionAsync()` usages.
+
+Use the appropriate supported exclusive transaction API for operations requiring isolation, particularly import and destructive multi-step mutations.
+
+Inside `withExclusiveTransactionAsync`, use the callback's `txn` object for every query belonging to that transaction.
+
+Do not mix `db.runAsync` with transactional `txn` operations.
+
+Review bootstrap/user_version behavior separately.
+
+Keep all existing records and recordings intact through additive migrations.
+
+Cover:
+- Duplicate ID import rollback.
+- Concurrent import/save behavior.
+- SQLite busy/locked errors.
+- Revision CAS.
+- Crash/interruption limits.
+
+Do not assume exclusive transactions guarantee waiting instead of SQLITE_BUSY errors.
+
+## 4. Native Draft Recovery
+
+Files: `store.ts`, `App.tsx`
+
+Manual Save and navigation warnings are insufficient when iOS terminates the process while dirty content exists.
+
+Add minimal SQLite-backed recovery drafts.
+
+Requirements:
+- Versioned additive schema migration.
+- Record note ID, base revision, draft content, timestamp.
+- Debounced persistence during editing, not only on background.
+- Best-effort flush on background.
+- Reopen Editor detects a recovery candidate.
+- User chooses Restore, Discard or another safe path.
+- Never silently overwrite a newer committed note.
+- Never clear a recovery draft on failed save or conflict.
+- Clear after confirmed matching commit or explicit discard.
+- Preserve title, body, checklist, pin and tags.
+- Use version/revision checks.
+- Keep future unsupported schemas read-only.
+
+Do not replace the whole editor or build a complex global autosave engine.
+
+Document the remaining uncommitted-keystroke window, process-kill limitations and any pending async-write uncertainty.
+
+Tests:
+- Edit without Save, remount, restore.
+- Draft revision is stale.
+- Save fails.
+- Recovery succeeds then clears journal.
+- User discards.
+- New edit during in-flight draft write.
+
+## 5. Native Pin/Tag/Search Parity
+
+Files: `store.ts`, `App.tsx`
+
+Fix:
+- Pinned notes sort first, matching Web semantics.
+- Pin/unpin does not change content updatedAt.
+- Pin works for valid schema-v1 rich-text notes even when body editing is read-only.
+- Unknown future record schemas remain protected.
+- Metadata mutations have revision guards.
+- Duplicate/case-equivalent tags show understandable validation errors.
+- Invalid tag entry does not discard an otherwise unsaved document draft.
+- Use shared tag normalization and sorting logic where appropriate.
+
+Do not silently deduplicate user-supplied tags unless an explicit, documented UX rule requires it.
+
+Prevent duplicate pin requests while pending.
+
+Keep the native editor's deliberately limited body format.
+
+## 6. Legacy Web Backup Compatibility
+
+Additional finding from Lead Architect.
+
+Older valid Web backup v1 note records may omit `pinned` and `tags`.
+
+Current native code assumes both always exist:
+
+- `item.tags.length`
+- `value.tags.join(...)`
+
+This can throw during Home rendering or Editor loading.
+
+Fix using safe defaults in a view model or runtime normalization.
+
+Requirements:
+- Older backups import and render without exceptions.
+- Missing tags behave as `[]`; missing pinned behaves as false.
+- Do not silently rewrite imported canonical JSON merely when reading.
+- Edits of supported records may explicitly add normalized metadata.
+- Future-schema records remain preserved.
+
+Add focused regression tests with old backup records lacking both fields.
+
+## 7. Lifecycle and Small Audio Hardening
+
+- Reject invalid transition `trashed → archived` without restore.
+- Ensure lifecycle transitions preserve future-schema documents without content rewriting.
+- Handle audio rename promise rejection.
+- Avoid eager initialization of many native players when not required.
+- Handle missing audio files without crashing a note screen.
+- Preserve committed data on errors.
+
+Stay focused on real defects.
+
+## 8. Dependency Audit
+
+Re-run npm audit and document the affected dependency paths.
+
+Do not run `npm audit fix --force` or downgrade Expo incompatibly.
+
+Classify:
+- CLI/build-time.
+- Shipped application runtime.
+- Reachability unknown.
+- Available compatible remediation.
+
+Do not claim exploit probability is zero without evidence.
+
+Do not implement unrelated dependency upgrades in this hotfix unless required to unblock the approved code.
+
+## 9. Verification
+
+Run:
+- Expo dependency check.
+- TypeScript typecheck.
+- All existing synthetic tests.
+- New targeted regression tests.
+- iOS JavaScript export.
+- `git diff --check`.
+- Relevant Web tests only if shared Web code changes.
+
+Verify as much storage logic as reasonably possible without native runtime, but do not substitute mocks for actual SQLite/iOS evidence.
+
+Native Gates A/B/C remain BLOCKED until real simulator/device testing.
+
+If Xcode is unavailable, do not claim an iOS binary was built.
+
+## 10. GitHub and Handoff
+
+After implementation and supported checks:
+- Commit only relevant noteOS changes.
+- Push to existing `origin/main`.
+- No force push.
+- Preserve unrelated Phase 00 changes.
+- Do not modify Docker, other projects or persistent user data.
+
+Produce:
+1. `noteOS-MVP-04.1-review.zip`
+2. `noteOS-MVP-04.1-Audit.txt`
+3. Source-level findings resolution table.
+4. Tests and actual evidence.
+5. Updated native validation checklist.
+6. Dependency audit summary.
+7. Commit SHAs and verified push status.
+8. SHA-256 hashes.
+
+The audit TXT must be readable directly by ChatGPT/Gemini.
+
+## HARD STOP
+
+Do not start MVP-05.
+
+Do not implement sync, AI, STT, cloud or background audio.
+
+Do not deploy to App Store/TestFlight.
+
+Do not purchase developer services.
+
+Do not claim physical-iPhone or simulator verification.
+
+Stop after MVP-04.1 source implementation, verification and handoff.
