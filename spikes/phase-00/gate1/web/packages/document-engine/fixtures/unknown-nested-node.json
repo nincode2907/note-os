@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "type": "doc",
+  "content": [
+    {
+      "type": "bulletList",
+      "content": [
+        {
+          "type": "listItem",
+          "content": [
+            { "type": "paragraph", "content": [{ "type": "text", "text": "preserve" }] },
+            { "type": "futureInlineWidget", "attrs": { "payload": { "keep": true } } }
+          ]
+        }
+      ]
+    }
+  ]
+}

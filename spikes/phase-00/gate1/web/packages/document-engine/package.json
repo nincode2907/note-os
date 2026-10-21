@@ -1,0 +1,17 @@
+{
+  "name": "@noteos/document-engine-spike",
+  "private": true,
+  "type": "module",
+  "description": "Phase 00-B canonical ProseMirror document validation and projections",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "benchmark": "node bench/document-engine.bench.mjs",
+    "check": "node --check src/index.js"
+  },
+  "dependencies": {
+    "@tiptap/core": "3.32.0",
+    "@tiptap/extension-document": "3.32.0",
+    "@tiptap/extension-list": "3.32.0",
+    "@tiptap/starter-kit": "3.32.0"
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "schemaVersion": 1,
+  "type": "doc",
+  "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "keep me", "marks": [{ "type": "futureHighlight", "attrs": { "color": "violet" } }] }] }]
+}

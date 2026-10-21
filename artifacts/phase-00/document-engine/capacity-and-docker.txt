@@ -1,0 +1,20 @@
+Read-only post-run snapshot; no Docker lifecycle action was taken.
+Windows memory counters (3 samples, 2 seconds apart):
+23:35:49 available mbytes = 2577
+23:35:49 % committed bytes in use = 68.5849474669865
+23:35:49 pages/sec = 0.497089392480211
+23:35:51 available mbytes = 2564
+23:35:51 % committed bytes in use = 68.6604303700525
+23:35:51 pages/sec = 8.95913157743977
+23:35:53 available mbytes = 2539
+23:35:53 % committed bytes in use = 68.7806759655431
+23:35:53 pages/sec = 0
+Running Docker containers:
+NAMES                    STATUS                       PORTS
+noteos-phase00-web-1     Up About an hour (healthy)   127.0.0.1:15700->15000/tcp
+noteos-phase00-api-1     Up About an hour (healthy)   127.0.0.1:15701->15001/tcp
+noteos-phase00-redis-1   Up About an hour (healthy)   6379/tcp
+noteos-phase00-mysql-1   Up About an hour (healthy)   3306/tcp, 33060/tcp
+dev-hub-caddy            Up 59 minutes                443/tcp, 127.0.0.1:80->80/tcp, 2019/tcp, 443/udp
+Docker OOM events in the previous hour:
+(none returned)

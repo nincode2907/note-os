@@ -1,0 +1,11 @@
+# JavaScript package installs
+node_modules/
+
+# Framework build output and local caches
+.next/
+.expo/
+coverage/
+
+# Local operating-system metadata
+.DS_Store
+Thumbs.db

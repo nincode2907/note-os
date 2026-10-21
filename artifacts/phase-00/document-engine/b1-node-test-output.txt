@@ -1,0 +1,42 @@
+
+> test
+> node --test tests/*.test.mjs
+
+✔ accepts empty and minimal v1 documents (6.9999ms)
+✔ accepts supported blocks, marks, task lists, nested lists and attachment references (1.6271ms)
+✔ preserves Vietnamese combining marks without Unicode normalization (0.4571ms)
+✔ preserves Japanese Kanji, Hiragana, Katakana and punctuation (0.1721ms)
+✔ preserves actual mixed Japanese Kanji and Kana code points (0.1814ms)
+✔ preserves emoji including surrogate pairs and joined emoji sequences (0.144ms)
+✔ plain text conversion preserves multiline input, blank lines and edge whitespace (0.2128ms)
+✔ empty plain text produces an empty document and a trailing newline remains observable (0.1891ms)
+✔ plain-text API rejects non-string input instead of coercing it (0.4484ms)
+✔ converts links to Markdown and keeps href and link text (8.8661ms)
+✔ projects nested lists and checklists with an explicit GFM warning (0.6498ms)
+✔ projects attachments with a warning and leaves the canonical reference intact (0.5944ms)
+✔ reports omitted formatting for plain-text projection (0.435ms)
+✔ malformed JSON is explicit (0.1975ms)
+✔ rejects unsupported schema versions read-only without modifying input (2.0945ms)
+✔ unknown node types are unsupported rather than discarded (4.4535ms)
+✔ unknown marks are unsupported rather than stripped (2.8924ms)
+✔ unknown nested nodes and deeply nested marks remain unsupported and untouched (3.2968ms)
+✔ unknown node fields and attributes are kept out of the editable path (0.6634ms)
+✔ rejects partial/corrupt trees and schema-invalid nesting (3.6576ms)
+✔ rejects invalid known attributes and invalid link marks (0.9384ms)
+✔ plain text and Markdown warn when export drops code/list metadata (0.5702ms)
+✔ rejects executable and ambiguous link protocols (0.4244ms)
+✔ round-trips canonical JSON through serialization and parsing (1.4871ms)
+✔ editor JSON conversion wraps and validates schemaVersion 1 (0.5489ms)
+✔ repeated serialize/deserialize cycles remain stable (7.7366ms)
+✔ batched projection and serialization calls do not mutate canonical input (1.0457ms)
+✔ saved JSON fixture survives reload and still validates (4.6568ms)
+✔ exports never mutate canonical source objects (1.465ms)
+✔ generative Unicode and whitespace cases preserve every input string (1.0203ms)
+ℹ tests 30
+ℹ suites 0
+ℹ pass 30
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 255.1277

@@ -112,3 +112,11 @@ Log lượt tổng hợp gần nhất: [`artifacts/phase-00/sync/00-c-run.log`](
 ## Recommendation
 
 **Không chọn engine trong lượt này; giữ `UNDECIDED`.** Không chọn Custom chỉ vì ít container, cũng không chọn ứng viên khác chỉ vì có nhiều PASS hơn. Bằng chứng còn thiếu làm thay đổi kết luận: WatermelonDB cần adapter/runtime SQLite mục tiêu; PowerSync cần thêm conflict/delete/privacy/migration cases; Custom cần client full-pull apply/merge; cả ba cần chạy cùng workload nhiều lần trên Web và iPhone được hỗ trợ. Những nội dung đó cần kiến trúc review trước khi mở rộng tiếp.
+
+## Recovery 00-R.2 — minimal Watermelon runtime verification
+
+**BLOCKED before Laravel runtime tests and browser sync.** Gate A stopped the run: Docker VM showed 5.7 GiB available, but Windows host free RAM was ~465 MiB with six unlimited noteOS containers already active. A Chromium workload is estimated at 2–3 GiB but has no measured peak, so it could pressure existing workloads. No PHP test, fixture seed, browser, or `synchronize()` call ran. Watermelon result for this attempt: **NOT RUN**; it is neither 20/20 nor 0/20. Existing noteOS MySQL is healthy, but Gate 1 Watermelon volume readiness is unverified. Sync engine remains **UNDECIDED**. See [recovery-00-r.md](recovery-00-r.md#recovery-00-r2--controlled-capacity-gate-2026-10-20).
+
+## Recovery 00-R.3 — controlled retest status
+
+PowerSync/MongoDB were gracefully stopped; healthy MySQL/API were retained. Post-stop Windows availability was 1.3–1.8 GiB, while the Docker VM had 5.9 GiB available and no swap/PSI pressure. Gate B was **BLOCKED** because the existing PHP 8.4.26 container has no `vendor/bin/phpunit`; the configured SQLite in-memory isolation was verified, but tests could not be executed without PHPUnit. No installation was attempted. Gate C was **NOT RUN** because Gate B did not PASS and Windows headroom remains below the 2–3 GiB browser estimate. No Watermelon API/browser/local-store evidence was produced; prior 0/20 RCA remains unknown. Sync Engine stays **UNDECIDED**. See [recovery-00-r.md](recovery-00-r.md#recovery-00-r3--controlled-workload-reduction-2026-10-20).

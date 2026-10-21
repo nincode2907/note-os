@@ -1,0 +1,38 @@
+
+> test
+> node --test tests/*.test.mjs
+
+✔ accepts empty and minimal v1 documents (7.2634ms)
+✔ accepts supported blocks, marks, task lists, nested lists and attachment references (2.5492ms)
+✔ preserves Vietnamese combining marks without Unicode normalization (0.5558ms)
+✔ preserves Japanese Kanji, Hiragana, Katakana and punctuation (0.1992ms)
+✔ preserves emoji including surrogate pairs and joined emoji sequences (0.5955ms)
+✔ plain text conversion preserves multiline input, blank lines and edge whitespace (0.6308ms)
+✔ empty plain text produces an empty document and a trailing newline remains observable (0.4129ms)
+✔ plain-text API rejects non-string input instead of coercing it (0.5852ms)
+✔ converts links to Markdown and keeps href and link text (16.2266ms)
+✔ projects nested lists and checklists with an explicit GFM warning (1.5778ms)
+✔ projects attachments with a warning and leaves the canonical reference intact (0.8069ms)
+✔ reports omitted formatting for plain-text projection (0.4672ms)
+✔ malformed JSON is explicit (0.2167ms)
+✔ rejects unsupported schema versions read-only without modifying input (2.5181ms)
+✔ unknown node types are unsupported rather than discarded (1.121ms)
+✔ unknown marks are unsupported rather than stripped (1.0694ms)
+✔ unknown node fields and attributes are kept out of the editable path (0.2972ms)
+✔ rejects partial/corrupt trees and schema-invalid nesting (2.2124ms)
+✔ rejects invalid known attributes and invalid link marks (0.2398ms)
+✔ rejects executable and ambiguous link protocols (0.1701ms)
+✔ round-trips canonical JSON through serialization and parsing (0.6951ms)
+✔ editor JSON conversion wraps and validates schemaVersion 1 (0.2162ms)
+✔ repeated serialize/deserialize cycles remain stable (3.9388ms)
+✔ saved JSON fixture survives reload and still validates (4.5966ms)
+✔ exports never mutate canonical source objects (0.8807ms)
+✔ generative Unicode and whitespace cases preserve every input string (0.9455ms)
+ℹ tests 26
+ℹ suites 0
+ℹ pass 26
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 289.6817

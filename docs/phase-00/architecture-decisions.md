@@ -92,3 +92,34 @@ Redis/Web/worker là app foundation; không tính là dependency riêng của Po
 **Không chốt engine ở lượt này.** PASS count không tương đương vì mỗi adapter/runtime thực hiện khác scenario. Trước khi có quyết định cần: cùng test contract trên target runtime; client full pull/apply cho Custom; SQLite adapter và migration/restart cho WatermelonDB; PowerSync conflict/delete/DEVICE_ONLY/migration và process-kill tests; nhiều iteration latency p50/p95, throughput, CPU/RSS và dung lượng cùng workload. Không có kết luận iPhone thật.
 
 Giữ block Dev Hub `15700–15799`, mapping và các entry khác nguyên trạng. 00-A, 00-B, 00-E, 00-F và Phase 01 chưa chạy.
+
+## 00-B — Document engine and editor spike
+
+Updated 2026-10-20. Status: **Core schema/conversion PASS (26/26); browser editor BLOCKED; native/iPhone validation BLOCKED; Laravel sync contract tests NOT RUN.** Detailed measurements and reproduction are in [editor-benchmark.md](editor-benchmark.md).
+
+### Spike decisions
+
+- Record the candidate v1 envelope as `{schemaVersion: 1, type: "doc", content: [...]}` with ProseMirror/Tiptap JSON as the canonical editing representation. Markdown and plain text remain derived projections.
+- Unknown future versions, nodes, marks, fields and attributes must stay intact and read-only when schema v1 cannot safely edit them. Invalid trees are rejected; no lossy “best effort” canonical rewrite is allowed.
+- Use Tiptap `3.32.0` for the isolated Web spike. Schema validation, JSON serialization/reload, Unicode preservation, common rich nodes/marks, projection warnings and unsafe link schemes pass the Node contract suite. Browser build, editing, localStorage and UI-query behavior were not run, so Web editor runtime remains BLOCKED.
+- Keep `attachmentReference` as a spike-only node (`attachmentId`, `label`). It carries no attachment storage, upload, encryption or privacy contract and needs architecture approval before reuse.
+- Keep Native `TextInput` Quick Capture as a source prototype. TenTap is the more plausible shared-ProseMirror full editor candidate; React Native Live Markdown is a string-oriented Markdown input candidate. Neither has been built against the checked-in Expo 57 / RN 0.86 app or tested on an iPhone. Do not treat package compatibility tables as runtime evidence.
+- Keep the sync engine and production editor choice **UNDECIDED**. The Laravel contract tests were not run because the current API image omits Composer dev dependencies, including PHPUnit. No missing test result is inferred from lint or from the Node schema suite.
+
+### Versions and source checks
+
+As checked on 2026-10-20, npm reported Tiptap packages `3.32.0`, `@10play/tentap-editor` `1.1.0`, and `@expensify/react-native-live-markdown` `0.1.343`. The repository Expo baseline is SDK `57.0.30`, RN `0.86.0`, React `19.2.3`.
+
+- [Tiptap React installation](https://tiptap.dev/docs/editor/getting-started/install/react), [StarterKit](https://tiptap.dev/docs/editor/extensions/functionality/starterkit), [Task List](https://tiptap.dev/docs/editor/extensions/nodes/task-list), and [JSON persistence](https://tiptap.dev/docs/editor/core-concepts/persistence).
+- [TenTap editor upstream](https://github.com/10play/10tap-editor) documents its Tiptap/ProseMirror and WebView bridge basis, supported React Native range and development-client/native rebuild requirements.
+- [React Native Live Markdown upstream](https://github.com/Expensify/react-native-live-markdown) documents its TextInput string/range API, New Architecture requirement and RN compatibility matrix.
+- [Expo SDK compatibility table](https://docs.expo.dev/versions/latest/) lists the SDK 57 React Native / React baseline.
+
+### Review gates still open
+
+1. Recheck Windows and Docker VM capacity before Next + Chromium, then run one browser worker against the isolated `/editor` route. Capture load/save/reload, unsupported read-only JSON, node counts and localStorage content.
+2. Run the four `SyncPullContractTest` cases with a test-only PHP 8.4 runtime, Composer dev dependencies and the configured isolated SQLite `:memory:` database.
+3. Build the native Quick Capture/editor candidate in an Expo development client and validate Vietnamese Telex/VNI, Japanese IME, autocorrect, caret/selection and keyboard behavior on an actual iPhone.
+4. Review whether attachment references belong in canonical schema v1 and define a versioned migration policy before production use.
+
+No Sync Engine was selected; no Gate 1 PowerSync run, Gate 2 work, or Phase 01 work occurred.

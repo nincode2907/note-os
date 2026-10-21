@@ -3,11 +3,18 @@
   "private": true,
   "scripts": {
     "build": "next build",
-    "start": "next start -H 0.0.0.0 -p 3000"
+    "start": "next start -H 0.0.0.0 -p 3000",
+    "test:documents": "npm --prefix packages/document-engine test",
+    "benchmark:documents": "npm --prefix packages/document-engine run benchmark"
   },
   "dependencies": {
     "@nozbe/watermelondb": "0.28.0",
     "@powersync/web": "2.5.0",
+    "@tiptap/core": "3.32.0",
+    "@tiptap/extension-document": "3.32.0",
+    "@tiptap/extension-list": "3.32.0",
+    "@tiptap/extension-link": "3.32.0",
+    "@tiptap/starter-kit": "3.32.0",
     "next": "16.4.2",
     "react": "19.3.1",
     "react-dom": "19.3.1"

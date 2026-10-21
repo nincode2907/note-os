@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 2,
+  "type": "doc",
+  "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "future content must remain untouched" }] }],
+  "futureMetadata": { "preserve": true }
+}

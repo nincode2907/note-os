@@ -1,0 +1,96 @@
+
+> benchmark
+> node bench/document-engine.bench.mjs
+
+{
+  "environment": {
+    "node": "v24.21.0",
+    "platform": "win32 10.0.26300",
+    "architecture": "x64",
+    "logicalCpus": 16
+  },
+  "methodology": "5 warmups + 30 sequential iterations per operation and document size; one plain-text ProseMirror paragraph; performance.now(); p95 is nearest-rank.",
+  "memoryBytes": {
+    "rssBefore": 59793408,
+    "rssAfter": 66146304,
+    "sampledPeakRss": 66146304,
+    "heapUsedBefore": 10408040,
+    "heapUsedAfter": 11816536
+  },
+  "cpuMilliseconds": {
+    "user": 31,
+    "system": 0
+  },
+  "localSaveNote": "JSON encode/decode proxy only; browser localStorage write and read were not measured.",
+  "results": [
+    {
+      "words": 100,
+      "jsonBytes": 794,
+      "iterations": 30,
+      "measurements": {
+        "jsonParseAndSchemaValidation": {
+          "p50Ms": 0.015,
+          "p95Ms": 0.043
+        },
+        "canonicalSerialization": {
+          "p50Ms": 0.016,
+          "p95Ms": 0.038
+        },
+        "markdownProjection": {
+          "p50Ms": 0.015,
+          "p95Ms": 0.034
+        },
+        "localSaveProxyJsonEncodeDecode": {
+          "p50Ms": 0.004,
+          "p95Ms": 0.005
+        }
+      }
+    },
+    {
+      "words": 1000,
+      "jsonBytes": 7995,
+      "iterations": 30,
+      "measurements": {
+        "jsonParseAndSchemaValidation": {
+          "p50Ms": 0.044,
+          "p95Ms": 0.147
+        },
+        "canonicalSerialization": {
+          "p50Ms": 0.033,
+          "p95Ms": 0.113
+        },
+        "markdownProjection": {
+          "p50Ms": 0.034,
+          "p95Ms": 0.096
+        },
+        "localSaveProxyJsonEncodeDecode": {
+          "p50Ms": 0.024,
+          "p95Ms": 0.048
+        }
+      }
+    },
+    {
+      "words": 5000,
+      "jsonBytes": 43995,
+      "iterations": 30,
+      "measurements": {
+        "jsonParseAndSchemaValidation": {
+          "p50Ms": 0.091,
+          "p95Ms": 0.117
+        },
+        "canonicalSerialization": {
+          "p50Ms": 0.11,
+          "p95Ms": 0.454
+        },
+        "markdownProjection": {
+          "p50Ms": 0.08,
+          "p95Ms": 0.097
+        },
+        "localSaveProxyJsonEncodeDecode": {
+          "p50Ms": 0.065,
+          "p95Ms": 0.078
+        }
+      }
+    }
+  ]
+}

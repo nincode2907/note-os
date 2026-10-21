@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "type": "doc",
+  "content": [
+    {
+      "type": "heading",
+      "attrs": { "level": 2 },
+      "content": [{ "type": "text", "text": "noteOS document v1" }]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        { "type": "text", "text": "Tiếng Việt: á, " },
+        { "type": "text", "text": "東京・かな・カナ 🙂", "marks": [{ "type": "bold" }, { "type": "italic" }] },
+        { "type": "text", "text": " — " },
+        { "type": "text", "text": "link", "marks": [{ "type": "link", "attrs": { "href": "https://example.test/notes" } }] },
+        { "type": "hardBreak" },
+        { "type": "text", "text": "second line" }
+      ]
+    },
+    {
+      "type": "bulletList",
+      "content": [
+        {
+          "type": "listItem",
+          "content": [
+            { "type": "paragraph", "content": [{ "type": "text", "text": "outer item" }] },
+            {
+              "type": "orderedList",
+              "attrs": { "start": 3 },
+              "content": [{ "type": "listItem", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "nested item" }] }] }]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "taskList",
+      "content": [
+        { "type": "taskItem", "attrs": { "checked": false }, "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "open task" }] }] },
+        { "type": "taskItem", "attrs": { "checked": true }, "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "done task" }] }] }
+      ]
+    },
+    { "type": "blockquote", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "quoted" }] }] },
+    { "type": "codeBlock", "attrs": { "language": "ts" }, "content": [{ "type": "text", "text": "const answer = `42`;" }] },
+    { "type": "paragraph", "content": [{ "type": "attachmentReference", "attrs": { "attachmentId": "asset-01", "label": "diagram.png" } }] }
+  ]
+}

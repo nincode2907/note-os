@@ -4,6 +4,34 @@
 **Scope:** 00-R read-only Docker capacity analysis; 00-R.1 minimal Laravel contract fix, feature tests, static PowerSync diagnosis and Gate 1 Compose profile preparation. No container was started/stopped, no image was built, no Docker setting or test volume was changed, and no browser or sync test was run.  
 **Gate status:** Gate 1 remains **BLOCKED**. Sync Engine remains **UNDECIDED**.
 
+# Recovery 00-R.2 — controlled capacity gate (2026-10-20)
+
+**Gate A: BLOCKED — `CAPACITY_UNVERIFIED`; HARD STOP.** This turn performed read-only inspection only. Gates B and C were not started; no Laravel command, Compose `up`/`run`/`build`, browser process, or fixture write was attempted. No container, image, setting, or volume was changed.
+
+| Check | Current evidence | Result |
+| --- | --- | --- |
+| Docker VM capacity | `wsl -d docker-desktop` reported 7.6 GiB RAM total, 1.7 GiB used, 2.9 GiB free, 5.7 GiB available; 2.0 GiB swap total and free. HostConfig on the six running containers has no memory or swap limit. | VM-level snapshot available, but insufficient by itself to establish safe end-to-end headroom. |
+| Windows host capacity | `Win32_OperatingSystem`: 16,393,116 KiB visible RAM, 475,680 KiB free (~465 MiB). `vmmemWSL` working set ~4.2 GB; Docker backend ~97 MiB. | **Host memory pressure risk.** |
+| Current containers | Six `noteos-phase00` services are running: Web (59.7 MiB), API (89.1 MiB), PowerSync 1.20.0 (220.1 MiB), Redis (6.8 MiB), MySQL 8.4.7 (483.9 MiB), MongoDB 8.0.16 (314.8 MiB). All report no per-container memory limit; each is owned by this noteOS Compose project. PowerSync and MongoDB were already running and were not touched. | Existing workload must be preserved; candidate browser run would add unmeasured demand while host free RAM is ~465 MiB. |
+| Recent OOM/events | Docker event query returned no OOM events in its 7-day window. Current six containers show `OOMKilled=false`, restart count 0. | No recent OOM event observed; prior recovery report still records historical OOM kills. |
+| MySQL health/recovery | noteOS MySQL is `running`, health `healthy`, version 8.4.7, restart count 0. Logs show InnoDB initialization ended, XA crash recovery started and finished at 2026-10-20 15:31:41 UTC, and “ready for connections.” | **PASS for current DB health/readiness only.** Does not attest candidate test-volume integrity. |
+| Test volumes | Existing `noteos-phase00_noteos-phase00_{mysql,mongo,redis}` volumes were listed. No candidate Gate 1 containers exist. The Watermelon Compose volume is declared separately and no matching created volume was observed. Existing volumes were not mounted or modified. | Candidate volume integrity/readiness **NOT VERIFIED**; no volume was created or inspected by starting a service. |
+| Watermelon profile / image reuse | Compose lists only `gate1-watermelon-mysql`, `gate1-watermelon-api`, `gate1-watermelon-playwright`, and `gate1-watermelon-web`. The prior report estimates 2–3 GiB for an isolated Watermelon browser run, explicitly unmeasured. | Resource budget is an estimate, not evidence of safe headroom; no run. |
+
+**Decision:** Gate A does not pass. The measured Docker VM `MemAvailable` is 5.7 GiB, but the Windows host has only ~465 MiB free while six unlimited noteOS containers are active; the proposed browser workload's actual peak is unknown. Starting it could pressure existing host/container workloads. Stop here under the approved safety gate. **Gate B Laravel tests: NOT RUN. Gate C Watermelon initial pull: NOT RUN (not 0/20; no result). Root cause of prior browser 0/20 remains UNKNOWN.** No files under application/test source changed in this turn. Docker health at handoff: all six current noteOS containers were listed running; noteOS MySQL healthy. See the other 00-R.2 report addenda for the same gate verdict.
+
+## Recovery 00-R.3 — controlled workload reduction (2026-10-20)
+
+**Step 1 — PASS.** `docker compose ps --all` confirmed `noteos-phase00` ownership for services. Graceful `docker compose stop --timeout 30 powersync mongo` stopped only `noteos-phase00-powersync-1` and `noteos-phase00-mongo-1`; both exited 0. MySQL/API were healthy and kept running. Redis/Web were left running. Worker was already `Exited (1)` and was not touched. `dev-hub-caddy` was outside this Compose project and was not touched. No volume, image, setting, database or other project was changed.
+
+**Step 2 — PASS for a lightweight Laravel test only; NOT PASS for Chromium.** Immediately before stopping, Windows already showed ~1.68 GiB available. Three post-stop samples over ~20 seconds fluctuated between ~1.28 and 1.71 GiB, with a final snapshot of 1,838 MiB; a sustained host-memory increase from stopping the two services was not established. Committed memory was ~23.6–24.0 GB of 33.6 GB. Paging samples settled at 21–93 pages input/sec and 2–6 page reads/sec. Docker VM reported 7.6 GiB RAM, 5.9 GiB available, 2 GiB swap entirely free; memory PSI `some`/`full` averages were 0.0. Existing Web/API/Redis/MySQL usage stayed around 63/90/7/485 MiB across samples. No Docker OOM event appeared in the 15-minute post-stop query; retained containers reported `OOMKilled=false`, restart count 0. MySQL/API/Redis/Web remained healthy. The 1.28–1.80 GiB Windows headroom does not establish safe capacity for the unmeasured 2–3 GiB Chromium/browser envelope, so Step 4 remains gated off.
+
+**Step 3 — BLOCKED; no test started.** The existing API container provides PHP 8.4.26 and Laravel 12.70.0, and `vendor/autoload.php` exists, but `vendor/bin/phpunit` is absent (`phpunit-missing`). The test configuration specifies SQLite `:memory:` with `RefreshDatabase`, so its database target is isolated; however, without PHPUnit the approved test cannot run. No dependencies were installed. All four `SyncPullContractTest` cases are **NOT RUN**.
+
+**Step 4 — NOT RUN.** Gate C requires Gate B PASS, which did not occur; remaining Windows headroom also falls below the prior 2–3 GiB browser planning estimate. Watermelon result is **NOT RUN**, neither 20/20 nor 0/20. No Gate 1 service/container/volume was started or created, no fixture was seeded, and the prior 0/20 root cause remains **UNKNOWN**.
+
+**Handoff inventory:** running containers are `noteos-phase00-api-1`, `noteos-phase00-mysql-1`, `noteos-phase00-redis-1`, `noteos-phase00-web-1`, and external `dev-hub-caddy`. PowerSync and MongoDB are stopped cleanly; worker was already exited. No source/test code changed. See corresponding 00-R.3 entries in the framework, sync and final reports.
+
 ## Recovery 00-R.1 update
 
 - **00-R.1a contract review:** confirmed the endpoint already returns `changes.notes.deleted` as an array of record IDs (including `[]` when empty). No collection-level tombstone field was missing, so the endpoint and cursor algorithm needed no further change. The `deleted: false` raw record field is declared in the Watermelon client schema and remains in created/updated records.

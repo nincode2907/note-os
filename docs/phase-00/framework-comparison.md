@@ -114,3 +114,11 @@ docker compose -f docker-compose.gate1.yml --profile gate1-powersync config --se
 ```
 
 After a future capacity approval, start only one profile's listed services and run the Playwright runner after health checks. Do not run both profiles together or use `down -v`; all Gate 1 volumes must be preserved.
+
+## Recovery 00-R.2 — controlled runtime gate (2026-10-20)
+
+**Gate A BLOCKED (`CAPACITY_UNVERIFIED`); HARD STOP.** Read-only evidence: Docker VM reports 7.6 GiB RAM / 5.7 GiB available and 2 GiB free swap, while Windows reports only ~465 MiB free physical RAM. Six noteOS containers are already running without per-container memory limits, including PowerSync and MongoDB. The Watermelon browser budget remains an unmeasured 2–3 GiB estimate, so safe host headroom is not established. No workload was started. Laravel contract tests are **NOT RUN** and Watermelon initial pull is **NOT RUN** (no 0/20 result for this attempt). Current noteOS MySQL is healthy after XA crash recovery; candidate test-volume readiness is unverified. No project source or Docker state changed. Full evidence: [recovery-00-r.md](recovery-00-r.md#recovery-00-r2--controlled-capacity-gate-2026-10-20).
+
+## Recovery 00-R.3 — workload reduction and conditional tests (2026-10-20)
+
+PowerSync and MongoDB were graceful-stopped after Compose ownership verification. Windows had ~1.68 GiB available immediately before the stop and fluctuated between 1.28–1.80 GiB afterward; a sustained increase from the stop was not established. Docker VM showed 5.9 GiB available with swap unused and zero memory PSI pressure. This supports a light test workload in principle, but not the estimated 2–3 GiB Chromium envelope. The existing PHP 8.4.26/Laravel 12.70.0 container lacks `vendor/bin/phpunit`, so all four Laravel contract tests are **NOT RUN** and no dependencies were installed. Watermelon browser test was consequently **NOT RUN**. Retained services and full evidence: [recovery-00-r.md](recovery-00-r.md#recovery-00-r3--controlled-workload-reduction-2026-10-20).

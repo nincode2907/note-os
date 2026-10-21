@@ -1,0 +1,5 @@
+Phase 00-B1 read-only Windows capacity snapshot (2026-10-21, Asia/Saigon):
+07:05:40 available mbytes = 1524; committed bytes = 70.7833%; pages/sec = 50.7575
+07:05:44 available mbytes = 1512; committed bytes = 70.9493%; pages/sec = 53.4167
+07:05:47 available mbytes = 1531; committed bytes = 70.7740%; pages/sec = 0.9973
+Decision: CAPACITY_BLOCKED. Available memory was about 1.48-1.50 GiB with active paging observations; no local server, browser, Next build, install, or browser worker was started. Browser evidence is NOT RUN (no screenshot or console capture).
