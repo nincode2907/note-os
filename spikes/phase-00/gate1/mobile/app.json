@@ -1,11 +1,16 @@
 {
   "expo": {
-    "name": "noteOS Gate 1",
-    "slug": "noteos-gate1",
-    "scheme": "noteos-gate1",
-    "version": "0.0.1",
+    "name": "noteOS MVP-04 Prototype",
+    "slug": "noteos-mvp04-prototype",
+    "scheme": "noteos",
+    "version": "0.4.0",
     "newArchEnabled": true,
-    "ios": { "bundleIdentifier": "local.noteos.gate1", "supportsTablet": true },
-    "plugins": ["expo-dev-client", "@morrowdigital/watermelondb-expo-plugin"]
+    "platforms": ["ios"],
+    "ios": { "bundleIdentifier": "local.noteos.mvp04", "supportsTablet": false },
+    "plugins": [
+      "expo-dev-client",
+      ["expo-audio", { "microphonePermission": "Allow noteOS to record audio for notes stored on this device.", "enableBackgroundRecording": false, "enableBackgroundPlayback": false }],
+      ["expo-file-system", { "enableFileSharing": true, "supportsOpeningDocumentsInPlace": false }]
+    ]
   }
 }
