@@ -1,0 +1,29 @@
+noteOS Web local runtime verification
+Captured: 2026-10-21
+
+Runtime
+- URL: http://127.0.0.1:3000/ — HTTP 200 (measured with curl; 0.026 s at capture).
+- Docker Compose project: noteos; service/container: web / noteos-web-1.
+- Compose health: healthy; running noteOS containers: web only; container mounts: 0.
+- No database/API/PowerSync/Mongo/Redis services were started.
+- Existing noteos-phase00 services and named DB volumes remain untouched.
+
+Build and tests
+- `rtk docker compose -f docker-compose.web.yml config` — PASS; project resolves to noteos, one web service, no volumes.
+- `rtk docker compose -f docker-compose.web.yml build web` — PASS; Next.js 16.4.2 production build, 9 routes.
+- `rtk npm --prefix spikes/phase-00/gate1/web run test:mvp` — PASS; 41 tests, 0 failures.
+- `rtk npm --prefix spikes/phase-00/gate1/web run typecheck` — PASS; `tsc --noEmit`.
+- Docker build's `npm install` reported 2 moderate advisories. No audit fix/dependency change was applied.
+
+Chrome browser acceptance
+- Home and note editor loaded; no fatal UI errors; console error list empty in both tested tabs.
+- QA note create/edit, checklist check/uncheck, tag, pin and refresh persistence — PASS.
+- Same-note two-tab stale edit produced conflict UI and preserved the draft; “Save this draft as a new note” created a separate copy — PASS.
+- Archive, restore, search — PASS.
+- Both disposable QA records were moved to Trash; they remain recoverable. No permanent delete. Home was reloaded and left ready for everyday use.
+- Desktop page visually checked. Mobile viewport override was unavailable in the selected Chrome session; narrow viewport visual validation is BLOCKED.
+
+Persistence
+- Source confirms ordinary note records use IndexedDB `noteos-mvp-01`, version 2; local preferences/recovery use localStorage.
+- Refresh persistence was observed in the same Chrome profile/origin. No backend is needed for the verified workflow.
+- Audio/microphone, AI, STT, cloud, PowerSync and API-backed experiment routes were not tested.

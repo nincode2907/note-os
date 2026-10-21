@@ -1,0 +1,17 @@
+name: noteos
+
+services:
+  web:
+    build:
+      context: ./spikes/phase-00/gate1/web
+      dockerfile: Dockerfile
+    image: noteos-web-local
+    environment:
+      NEXT_TELEMETRY_DISABLED: "1"
+    ports:
+      - "127.0.0.1:${NOTEOS_WEB_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
