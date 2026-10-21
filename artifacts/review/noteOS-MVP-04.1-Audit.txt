@@ -8,6 +8,8 @@ Implemented only the approved MVP-04.1 Phase 00 native prototype safety hotfix. 
 SOURCE COMMIT
 1db2a882537806c649e1871960e0dfc44e7fe4a8  fix(mvp04.1): harden native session and data safety
 a4bfc7cad8fec45cff4538171b5559d9553a3f28  docs(mvp04.1): package native safety review evidence
+4b6c962a0f7ce981f6ffd8dbf4d1c46a88c18bce  docs(mvp04.1): record verified push and final checksum
+10a713c4ac8ab2fe70f3d400518257c47eb3cc2d  fix(mvp04.1): guard native stack navigation gestures
 
 IMPLEMENTED
 - Synchronous recording session state gate blocks duplicate starts/stops and navigation while a session is active or finalizing. Complete status waits for finalized file existence/size and SQLite recording metadata commit.
@@ -43,6 +45,6 @@ LIMITATIONS
 Automated tests do not execute Expo SQLite, Expo Audio, navigation gestures or iOS native APIs. Native rollback/race/SQLITE_BUSY behavior, recording persistence, app-restart recovery and cleanup interruption tests remain BLOCKED. SQLite and filesystem changes are not claimed to be atomic together.
 
 PUSH STATUS
-Both commits above were pushed to origin/main. Verified remote `refs/heads/main` SHA: a4bfc7cad8fec45cff4538171b5559d9553a3f28. No force push was used.
+The source and review commits above were pushed to origin/main. Verified remote `refs/heads/main` SHA: 10a713c4ac8ab2fe70f3d400518257c47eb3cc2d. The archive and checksum are refreshed with the native-stack navigation correction in the subsequent packaging commit. No force push was used.
 
 The archive has a detached SHA-256 sidecar so its own digest does not create a circular checksum inside the archive.
