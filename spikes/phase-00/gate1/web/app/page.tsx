@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createNotesRepository, makeEmptyNote } from './lib/local-notes.js';
 import { filterNotes, filterNotesByTags, sortNotes } from './lib/mvp-utils.mjs';
 import { tagKey } from './lib/note-organization.mjs';
@@ -35,6 +35,8 @@ export default function Home() {
   const [preferencesReady, setPreferencesReady] = useState(false);
   const [error, setError] = useState('');
   const [ready, setReady] = useState(false);
+  const [busyPinIds, setBusyPinIds] = useState<string[]>([]);
+  const busyPinIdsRef = useRef(new Set<string>());
 
   const refresh = useCallback(async (clearError = true) => {
     try { setNotes(await createNotesRepository().list()); if (clearError) setError(''); }
@@ -50,7 +52,8 @@ export default function Home() {
 
   useEffect(() => {
     if (!preferencesReady) return;
-    localStorage.setItem(HOME_PREFERENCES_KEY, JSON.stringify({ query, sort, tags: selectedTags }));
+    try { localStorage.setItem(HOME_PREFERENCES_KEY, JSON.stringify({ query, sort, tags: selectedTags })); }
+    catch { /* Preferences are best effort; current-session controls remain usable. */ }
   }, [preferencesReady, query, sort, selectedTags]);
 
   const availableTags = useMemo(() => {
@@ -72,13 +75,16 @@ export default function Home() {
   }
 
   async function togglePin(note: any) {
+    if (busyPinIdsRef.current.has(note.id)) return;
+    busyPinIdsRef.current.add(note.id);
+    setBusyPinIds((current) => [...current, note.id]);
     try {
       const updated = await createNotesRepository().updateOrganization(note.id, { pinned: !note.pinned }, note.revision);
       setNotes((current) => current.map((row) => row.id === updated.id ? updated : row)); setError('');
     } catch (cause) {
       await refresh(false);
       setError(cause instanceof Error ? cause.message : 'Could not update this note. Refresh and try again.');
-    }
+    } finally { busyPinIdsRef.current.delete(note.id); setBusyPinIds((current) => current.filter((id) => id !== note.id)); }
   }
 
   function toggleTag(tag: string) {
@@ -98,7 +104,7 @@ export default function Home() {
     </div>
     {availableTags.length > 0 && <div className="tag-filter-row" aria-label="Filter notes by tag"><span className="toolbar-label">Tags</span>{availableTags.map((tag) => <button key={tagKey(tag)} type="button" className={`tag-chip tag-filter ${selectedTags.some((item) => tagKey(item) === tagKey(tag)) ? 'is-selected' : ''}`} aria-pressed={selectedTags.some((item) => tagKey(item) === tagKey(tag))} onClick={() => toggleTag(tag)}>{tag}</button>)}{selectedTags.length > 0 && <button className="text-button" onClick={() => setSelectedTags([])}>Clear tags</button>}</div>}
     {visibleNotes.length ? <section className="notes-grid" aria-label="Active notes">{visibleNotes.map((note: any) => <article className="note-card" key={note.id}>
-      <div className="note-card-top"><span className="note-pin-state">{note.pinned ? 'Pinned' : ''}</span>{note.schemaVersion === 1 && <button className="pin-button" type="button" aria-label={note.pinned ? `Unpin ${note.title || 'Untitled note'}` : `Pin ${note.title || 'Untitled note'}`} aria-pressed={Boolean(note.pinned)} onClick={() => void togglePin(note)}>{note.pinned ? '★ Pinned' : '☆ Pin'}</button>}</div>
+      <div className="note-card-top"><span className="note-pin-state">{note.pinned ? 'Pinned' : ''}</span>{note.schemaVersion === 1 && <button className="pin-button" type="button" disabled={busyPinIds.includes(note.id)} aria-label={note.pinned ? `Unpin ${note.title || 'Untitled note'}` : `Pin ${note.title || 'Untitled note'}`} aria-pressed={Boolean(note.pinned)} onClick={() => void togglePin(note)}>{note.pinned ? '★ Pinned' : '☆ Pin'}</button>}</div>
       <Link className="note-card-link" href={`/notes/${encodeURIComponent(note.id)}`}><h2>{note.title || 'Untitled note'}</h2><p className="note-preview">{textOf(note.document) || 'Start with a thought…'}</p><span className="note-open-label">Open note ↗</span></Link>
       {Array.isArray(note.tags) && note.tags.length > 0 && <div className="note-card-tags" aria-label={`Tags for ${note.title || 'Untitled note'}`}>{note.tags.map((tag: string) => <button key={tagKey(tag)} type="button" className="tag-chip" aria-label={`Filter by ${tag}`} onClick={() => toggleTag(tag)}>{tag}</button>)}</div>}
       <div className="note-meta"><span>{new Date(note.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span><span>{note.pinned ? 'Pinned first' : 'On this device'}</span></div>

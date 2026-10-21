@@ -10,14 +10,14 @@ const { configSchema } = await import(pathToFileURL(`${lens}/packages/contracts/
 const baseUrl = process.env.NOTEOS_TEST_URL ?? 'http://127.0.0.1:3000';
 const config = configSchema.parse({
   version: 1,
-  project: 'noteOS MVP-03 Organization',
+  project: 'noteOS MVP-03.1 Organization Hotfix',
   baseUrl,
-  outputDir: 'artifacts/review/noteOS-MVP-03-review/ui-lens',
+  outputDir: 'artifacts/review/noteOS-MVP-03.1-review/ui-lens',
   viewports: { desktop: { width: 1440, height: 1000 }, mobile: { width: 390, height: 844 } },
   targets: [
-    { id: 'home-pinned', name: 'Notes Home with pinned and tagged notes', route: '/', viewports: ['desktop'], actions: [{ type: 'waitFor', selector: '.note-card' }] },
-    { id: 'editor-checklist', name: 'Editor with Unicode checklist', route: '/notes/lens-checklist', viewports: ['desktop', 'mobile'], actions: [{ type: 'waitFor', selector: '.editor-content li[data-checked]' }] },
-    { id: 'tags-filtered', name: 'Notes filtered by shared tag', route: '/', viewports: ['desktop'], actions: [{ type: 'waitFor', selector: '.tag-filter' }, { type: 'click', selector: '.tag-filter' }] },
+    { id: 'home-pinned', name: 'Notes Home with pinned and tagged notes', route: '/', viewports: ['desktop'], actions: [{ type: 'waitFor', selector: '.note-card:first-child' }] },
+    { id: 'editor-checklist', name: 'Editor with Unicode checklist', route: '/notes/lens-checklist', viewports: ['desktop', 'mobile'], actions: [{ type: 'waitFor', selector: '.editor-content li[data-checked]:first-child' }] },
+    { id: 'tags-filtered', name: 'Notes filtered by shared tag', route: '/', viewports: ['desktop'], actions: [{ type: 'waitFor', selector: '.tag-filter:first-of-type' }, { type: 'click', selector: '.tag-filter:first-of-type' }] },
     { id: 'home-filtered-empty', name: 'Useful empty search state', route: '/', viewports: ['desktop'], actions: [{ type: 'fill', selector: '#note-search', value: 'no-match-mvp03' }, { type: 'waitFor', selector: 'text=No notes match these filters' }] },
     { id: 'mobile-navigation', name: 'Mobile navigation at 390px', route: '/', viewports: ['mobile'], actions: [{ type: 'waitFor', selector: '.mobile-nav' }] },
   ],
@@ -33,6 +33,8 @@ chromium.launch = async (options = {}) => {
     context.newPage = async () => {
       const page = await newPage();
       await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
+      await page.getByRole('button', { name: /New note/ }).first().click();
+      await page.locator('#note-title').waitFor({ timeout: 10000 });
       await page.evaluate(async () => {
         const now = Date.now();
         const notes = [
@@ -52,16 +54,29 @@ chromium.launch = async (options = {}) => {
             schemaVersion: 1, createdAt: now - 1000, updatedAt: now - 1000, lifecycle: 'active', revision: 1, pinned: false, tags: ['Tiếng Việt'],
           },
         ];
-        await new Promise((resolve, reject) => {
-          const request = indexedDB.open('noteos-mvp-01', 2);
-          request.onerror = () => reject(request.error);
-          request.onsuccess = () => {
-            const db = request.result, tx = db.transaction('notes', 'readwrite'), store = tx.objectStore('notes');
-            for (const note of notes) store.put(note);
-            tx.oncomplete = () => { db.close(); resolve(); };
-            tx.onerror = () => reject(tx.error);
-          };
-        });
+        let timeout;
+        try {
+          await Promise.race([
+            new Promise((resolve, reject) => {
+              // The UI above lets the application create/upgrade its own database first.
+              const request = indexedDB.open('noteos-mvp-01');
+              request.onerror = () => reject(new Error(`Could not open app-initialized note database: ${request.error?.message ?? 'unknown error'}`));
+              request.onsuccess = () => {
+                const db = request.result;
+                const requiredStores = ['notes', 'recordings', 'recordingChunks'];
+                const missing = requiredStores.filter((name) => !db.objectStoreNames.contains(name));
+                if (missing.length) { db.close(); reject(new Error(`App storage bootstrap is missing required stores: ${missing.join(', ')}`)); return; }
+                let tx;
+                try { tx = db.transaction(['notes'], 'readwrite'); }
+                catch (error) { db.close(); reject(new Error(`Could not start note fixture transaction: ${error.message}`)); return; }
+                for (const note of notes) tx.objectStore('notes').put(note);
+                tx.oncomplete = () => { db.close(); resolve(); };
+                tx.onabort = tx.onerror = () => { const reason = tx.error?.message ?? 'unknown transaction error'; db.close(); reject(new Error(`Note fixture transaction failed: ${reason}`)); };
+              };
+            }),
+            new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('Timed out after 5000 ms initializing UI Lens IndexedDB fixtures.')), 5000); }),
+          ]);
+        } finally { clearTimeout(timeout); }
       });
       return page;
     };
@@ -71,9 +86,9 @@ chromium.launch = async (options = {}) => {
 };
 
 try {
-  const run = newRun('noteos-mvp03');
+  const run = newRun('noteos-mvp031');
   const targets = process.env.NOTEOS_UI_TARGETS?.split(',') ?? config.targets.map((target) => target.id);
-  await capture({ id: 'noteos-mvp03', root, config }, { projectId: 'noteos-mvp03', targets, artifacts: { png: true, pdf: false, diagnostics: true } }, run);
+  await capture({ id: 'noteos-mvp031', root, config }, { projectId: 'noteos-mvp031', targets, artifacts: { png: true, pdf: false, diagnostics: true } }, run);
   process.stdout.write(`${JSON.stringify({ state: run.state, outputPath: run.outputPath, summary: run.manifest.summary }, null, 2)}\n`);
   if (run.manifest.summary.failed) process.exitCode = 1;
 } finally { chromium.launch = launch; }

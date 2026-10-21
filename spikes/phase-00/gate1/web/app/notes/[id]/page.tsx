@@ -7,7 +7,7 @@ import { createNotesRepository, NoteConflictError } from '../../lib/local-notes.
 import { createSaveCoordinator } from '../../lib/save-coordinator.mjs';
 import { createRecoveryJournal, recoveryCandidates, clearRecoveryEntry, recoveryStorage } from '../../lib/recovery-journal.mjs';
 import { formatSavedAt } from '../../lib/mvp-utils.mjs';
-import { normalizeTagLabel, tagKey } from '../../lib/note-organization.mjs';
+import { normalizeTagLabel, safeTagsForNoteCopy, tagKey } from '../../lib/note-organization.mjs';
 import { canonicalToMarkdown, createTiptapEditor, validateCanonicalDocument, toTiptapJSON } from '../../../packages/document-engine/src/index.js';
 import { AudioRecorder } from '../../ui/audio-recorder';
 
@@ -114,7 +114,8 @@ export default function NoteEditorPage() {
       await coordinator.flush();
       // A failed flush keeps the original safe; a separate ID preserves this draft.
       const draft = coordinator.snapshot().draft;
-      const copy = { ...coordinator.snapshot().note, id: crypto.randomUUID(), title: `${draft.title || 'Untitled note'} (copy)`, document: draft.document, schemaVersion: draft.document.schemaVersion, createdAt: Date.now(), updatedAt: Date.now(), lifecycle: 'active', revision: 0, pinned: false, tags: [] };
+      const source = coordinator.snapshot().note;
+      const copy = { ...source, id: crypto.randomUUID(), title: `${draft.title || 'Untitled note'} (copy)`, document: draft.document, schemaVersion: draft.document.schemaVersion, createdAt: Date.now(), updatedAt: Date.now(), lifecycle: 'active', revision: 0, pinned: false, tags: safeTagsForNoteCopy(source) };
       await createNotesRepository().create(copy); coordinator.clearJournal(); router.replace(`/notes/${copy.id}`); return true;
     });
   }
@@ -126,7 +127,8 @@ export default function NoteEditorPage() {
       if (!candidate.valid || converted.status !== 'ready' || !converted.json) { setError('Recovery document is not safe to edit. Its journal has been retained.'); return false; }
       if (asCopy) {
         const now = Date.now();
-        const copy = { id: crypto.randomUUID(), title: `${candidate.title || 'Untitled note'} (recovered)`, document: candidate.document, schemaVersion: candidate.document.schemaVersion, createdAt: now, updatedAt: now, lifecycle: 'active', revision: 0, pinned: false, tags: [] };
+        const source = coordinatorRef.current.snapshot().note;
+        const copy: any = { id: crypto.randomUUID(), title: `${candidate.title || 'Untitled note'} (recovered)`, document: candidate.document, schemaVersion: candidate.document.schemaVersion, createdAt: now, updatedAt: now, lifecycle: 'active', revision: 0, pinned: false, tags: safeTagsForNoteCopy(source) };
         await createNotesRepository().create(copy); coordinatorRef.current.clearJournal(); clearRecoveryEntry(recoveryStorage(), candidate); router.replace(`/notes/${copy.id}`); return true;
       }
       try {
@@ -163,9 +165,9 @@ export default function NoteEditorPage() {
   }
   function exportMarkdown() { if (doc && validation?.status === 'supported') setMarkdown(canonicalToMarkdown(doc)); }
 
-  async function updateOrganization(changes: { pinned?: boolean; tags?: string[] }) {
-    if (!editable || recoveryRef.current) return;
-    await operation(async () => {
+  async function updateOrganization(changes: { pinned?: boolean; tags?: string[] }): Promise<boolean> {
+    if (!editable || recoveryRef.current || !coordinatorRef.current) return false;
+    return operation(async () => {
       const result = await coordinatorRef.current.updateMetadata(changes);
       return result.ok;
     });
@@ -178,7 +180,12 @@ export default function NoteEditorPage() {
       const existing = availableTags.find((tag) => tagKey(tag) === tagKey(label));
       const tags = Array.isArray(note?.tags) ? note.tags : [];
       if (tags.some((tag) => tagKey(tag) === tagKey(label))) { setTagInput(''); setError('That tag is already on this note.'); return; }
-      await updateOrganization({ tags: [...tags, existing ?? label] });
+      const saved = await updateOrganization({ tags: [...tags, existing ?? label] });
+      if (!saved) return;
+      setAvailableTags((current) => {
+        if (current.some((tag) => tagKey(tag) === tagKey(existing ?? label))) return current;
+        return [...current, existing ?? label].sort((left, right) => left.localeCompare(right, undefined, { sensitivity: 'base' }));
+      });
       setTagInput(''); setError('');
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not add this tag.'); }
   }

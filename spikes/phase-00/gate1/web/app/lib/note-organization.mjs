@@ -26,6 +26,12 @@ export function normalizeTagList(values) {
   return tags;
 }
 
+export function safeTagsForNoteCopy(note) {
+  if (!note || note.schemaVersion !== 1 || !Array.isArray(note.tags)) return [];
+  try { return normalizeTagList(note.tags); }
+  catch { return []; }
+}
+
 export function validateOrganizationMetadata(note) {
   if (note.schemaVersion !== 1) return;
   if (note.pinned !== undefined && typeof note.pinned !== 'boolean') throw new TypeError(`Backup note “${note.id}” has invalid pin metadata.`);
