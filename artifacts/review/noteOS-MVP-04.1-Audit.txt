@@ -7,6 +7,7 @@ Approved MVP-04.1 final corrections within the Phase 00 native prototype. No can
 
 SOURCE COMMIT — PUSHED TO origin/main
 c74f8bb00856cb25676bc95586316f5d4ed8a00c fix(mvp04.1): close discard and lifecycle gaps
+6cf591bd30bb61559d55d39f6b36b48fdf278fdf fix(mvp04.1): avoid unverified discard status (17 tests, typecheck, diff check pass)
 
 F-04.1-A — EXPLICIT DISCARD
 - Cancels the debounce, settles/closes any in-flight journal writer, then deletes only the selected note and expected revision.
@@ -47,8 +48,8 @@ Detailed machine compatibility, install/backup findings, citations, tests and re
 The review ZIP uses a detached SHA-256 sidecar to avoid a circular self-hash. See `noteOS-MVP-04.1-review.zip.sha256`.
 
 DELIVERY HASHES (SHA-256)
-Review ZIP: 5017cf6ecbc001ce9aeff42df2691dca594403667daa9eb05edc5c86dc1c99a1  noteOS-MVP-04.1-review.zip
-App.tsx snapshot: 448eeb8b8c060f4ed5f9e1d0b62a7ab44b0ef1e52575d9f8c5e5de96f4ef6f55
+Review ZIP: d22a1392875942189d36b3a2f4138d179b7690ba6714d119e83abfe6954c1e72  noteOS-MVP-04.1-review.zip
+App.tsx snapshot: 7100d988ee5dbcb82bf3ab07775276358d7e7846a9d0f48a0f7c37417476941d
 store.ts snapshot: 70dcd066b6001cc01976eb6b0c06e37e58928866d676f844149fa2bfcbe5ed06
 mobile-safety.mjs snapshot: 58eb2f0383962efc6ecef16e876f1953cf38d953e397051238c2e5b1ff422945
 focused test snapshot: b1aec2d7147b000bd68d76f5a120e6f9522d2cdf6ff2e3d786526bb01f385cf1

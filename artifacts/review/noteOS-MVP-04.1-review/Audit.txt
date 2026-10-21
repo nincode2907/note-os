@@ -7,6 +7,7 @@ Approved MVP-04.1 final corrections within the Phase 00 native prototype. No can
 
 SOURCE COMMIT — PUSHED TO origin/main
 c74f8bb00856cb25676bc95586316f5d4ed8a00c fix(mvp04.1): close discard and lifecycle gaps
+6cf591bd30bb61559d55d39f6b36b48fdf278fdf fix(mvp04.1): avoid unverified discard status (17 tests, typecheck, diff check pass)
 
 F-04.1-A — EXPLICIT DISCARD
 - Cancels the debounce, settles/closes any in-flight journal writer, then deletes only the selected note and expected revision.
