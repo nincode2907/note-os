@@ -3,7 +3,7 @@
 - **Scope:** MVP-01 local-first Web notes only.
 - **Result:** **PASS WITH LIMITS** for the tested Web workflows.
 - **Sync engine:** UNDECIDED. No MVP-02, Phase 01, iPhone build, or production deployment was started.
-- **Git:** branch `main`; implementation commit and push result are recorded after commit in the delivery handoff.
+- **Git:** branch `main`; source commit `83fb377cb96a874038411b883386626e2fb58d50`; push to `origin/main` **PASS**.
 
 ## What changed
 
@@ -93,4 +93,4 @@ npm --prefix /Users/buivannin/Desktop/workspace/personal/ui-lens run capture -- 
 
 ## Handoff
 
-See `REVIEW-ME.md` and `GEMINI-REVIEW-BRIEF.md` in the single review ZIP for the concise decision brief. The implementation commit SHA and push result will be added here after the authorized GitHub delivery.
+See `REVIEW-ME.md` and `GEMINI-REVIEW-BRIEF.md` in the single review ZIP for the concise decision brief. The implementation and acceptance report were pushed to `origin/main` in commit `83fb377cb96a874038411b883386626e2fb58d50`. This final SHA update is committed in the follow-up report metadata commit.
