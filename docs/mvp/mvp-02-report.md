@@ -80,4 +80,6 @@ Browser scripts use isolated contexts and synthetic note/audio data; the MVP-02 
 
 Implementation files are the note editor, local notes/audio repository and lifecycle confirmation, audio recorder UI, audio-storage tests, browser/UI Lens harnesses, this report and the root README. The independent review brief, source patch, test logs, browser diagnostics, UI Lens manifest and screenshots are included in `artifacts/review/noteOS-MVP-02-review.zip` and `artifacts/review/noteOS-MVP-02-Audit.txt`.
 
+Implementation commit `dc9ce16814e17969c1332983e61eb1a3f003b129` is pushed to `origin/main`. UI Lens captured that commit; its manifest reports `dirty: true` because unrelated Phase 00 documentation changes were already present in the shared worktree and were left untouched.
+
 No decision is requested to change Sync Engine, canonical document format, backup version or mobile architecture. Stop after MVP-02 review; do not start MVP-03 automatically.
