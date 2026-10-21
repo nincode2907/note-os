@@ -8,6 +8,7 @@ import { createSaveCoordinator } from '../../lib/save-coordinator.mjs';
 import { createRecoveryJournal, recoveryCandidates, clearRecoveryEntry, recoveryStorage } from '../../lib/recovery-journal.mjs';
 import { formatSavedAt } from '../../lib/mvp-utils.mjs';
 import { canonicalToMarkdown, createTiptapEditor, validateCanonicalDocument, toTiptapJSON } from '../../../packages/document-engine/src/index.js';
+import { AudioRecorder } from '../../ui/audio-recorder';
 
 type Note = { id: string; title: string; document: any; schemaVersion: number; createdAt: number; updatedAt: number; lifecycle: 'active' | 'archived' | 'trashed'; revision: number };
 
@@ -17,7 +18,7 @@ export default function NoteEditorPage() {
   const [state, setState] = useState('Loading…'), [error, setError] = useState(''), [conflict, setConflict] = useState(false), [ready, setReady] = useState(false);
   const [recovery, setRecovery] = useState<any>(null), [markdown, setMarkdown] = useState<any>(null), [busy, setBusy] = useState(false);
   const elementRef = useRef<HTMLDivElement>(null), editorRef = useRef<any>(null), timerRef = useRef<any>(null), coordinatorRef = useRef<any>(null);
-  const operationRef = useRef(false), recoveryRef = useRef<any>(null), aliveRef = useRef(false);
+  const operationRef = useRef(false), recoveryRef = useRef<any>(null), aliveRef = useRef(false), recordingRef = useRef(false);
   const validation = doc ? validateCanonicalDocument(doc) : null;
   const editable = validation?.status === 'supported' && note?.lifecycle === 'active';
   const editableRef = useRef(false); editableRef.current = editable;
@@ -86,6 +87,7 @@ export default function NoteEditorPage() {
     finally { operationRef.current = false; if (aliveRef.current) { setBusy(false); editorRef.current?.setEditable(editableRef.current && !recoveryRef.current); } }
   }
   const flushBeforeNavigation = useCallback(async () => {
+    if (recordingRef.current) { setError('Stop and save the audio recording before leaving this note. Background recording is not supported.'); return false; }
     if (recoveryRef.current) { setError('Choose how to handle the recovery draft before leaving.'); return false; }
     return operation(async () => { const result = await coordinatorRef.current?.flush(); return result?.ok ?? true; });
   // Refs contain the current note operation and draft, independent of render timing.
@@ -98,6 +100,7 @@ export default function NoteEditorPage() {
     setTitle(value); changeDraft({ ...coordinatorRef.current.snapshot().draft, title: value });
   }
   async function saveDraftAsCopy() {
+    if (recordingRef.current) { setError('Stop and save the audio recording before opening another note.'); return; }
     await operation(async () => {
       const coordinator = coordinatorRef.current;
       await coordinator.flush();
@@ -142,6 +145,7 @@ export default function NoteEditorPage() {
     });
   }
   async function changeLifecycle(next: 'active' | 'archived' | 'trashed') {
+    if (recordingRef.current) { setError('Stop and save the audio recording before changing this note. Background recording is not supported.'); return; }
     if (recoveryRef.current) { setError('Handle the recovery draft before changing this note.'); return; }
     await operation(async () => {
       const result = await coordinatorRef.current.transition(next);
@@ -163,6 +167,7 @@ export default function NoteEditorPage() {
       <button className="tool-button" aria-label="Bold" title="Bold" onClick={() => editorRef.current?.chain().focus().toggleBold().run()}><strong>B</strong></button><button className="tool-button" aria-label="Italic" title="Italic" onClick={() => editorRef.current?.chain().focus().toggleItalic().run()}><em>I</em></button><button className="tool-button" aria-label="Strike" title="Strike" onClick={() => editorRef.current?.chain().focus().toggleStrike().run()}><s>S</s></button><button className="tool-button" aria-label="Heading 2" title="Heading" onClick={() => editorRef.current?.chain().focus().toggleHeading({ level: 2 }).run()}>H₂</button><button className="tool-button" aria-label="Bullet list" title="Bullet list" onClick={() => editorRef.current?.chain().focus().toggleBulletList().run()}>• List</button><button className="tool-button" aria-label="Ordered list" title="Numbered list" onClick={() => editorRef.current?.chain().focus().toggleOrderedList().run()}>1. List</button><button className="tool-button" aria-label="Checklist" title="Checklist" onClick={() => editorRef.current?.chain().focus().toggleTaskList().run()}>☑</button><button className="tool-button" aria-label="Quote" title="Quote" onClick={() => editorRef.current?.chain().focus().toggleBlockquote().run()}>“</button><button className="tool-button" aria-label="Code block" title="Code block" onClick={() => editorRef.current?.chain().focus().toggleCodeBlock().run()}>&lt;/&gt;</button>
     </div><div ref={elementRef} className="editor-content" aria-label="Note content" /></>
       : <section>{validation?.status !== 'supported' && <div className="notice">This document uses a schema this editor cannot safely modify. It is open read-only so its original data stays intact.</div>}<pre className="readonly-panel">{JSON.stringify(doc, null, 2)}</pre></section>}
+    {note && <AudioRecorder noteId={note.id} disabled={!editable || busy || Boolean(recovery)} onActivityChange={(active) => { recordingRef.current = active; }} />}
     {markdown && <div className="backup-panel"><h2 className="section-title">Markdown export</h2>{markdown.warnings.length > 0 && <div className="notice">Some formatting is simplified in Markdown: {markdown.warnings.map((warning: any) => warning.message).join(' ')}</div>}<textarea className="searchbox" aria-label="Markdown output" readOnly value={markdown.markdown ?? ''} rows={12} /><button className="btn" onClick={() => { const blob = new Blob([markdown.markdown ?? ''], { type: 'text/markdown' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `${title || 'note'}.md`; a.click(); URL.revokeObjectURL(url); }}>Download .md</button></div>}
     {recovery && <div className="dialog-backdrop"><section className="dialog" role="dialog" aria-modal="true" aria-labelledby="recovery-title"><h2 id="recovery-title">A recovery draft was found</h2><p>{!recovery.valid ? 'This recovery document cannot be applied safely. Its original journal is retained until you explicitly discard it.' : recovery.sameRevision ? 'An uncommitted recovery draft was found for this note.' : 'The saved note has changed since this draft was made. To avoid overwriting either version, recover the draft as a separate note.'}</p>{error && <p role="alert">{error}</p>}<div className="dialog-actions"><button className="btn" disabled={busy} onClick={discardRecovery}>Keep saved version</button><button className="btn btn-primary" disabled={busy || !recovery.valid} onClick={() => void useRecovery(!recovery.sameRevision)}>{recovery.sameRevision ? 'Restore draft' : 'Recover as new note'}</button></div></section></div>}
   </>;

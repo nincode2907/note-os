@@ -50,7 +50,7 @@ async function committed(page, id, title, body) {
   const deadline = Date.now() + 12000;
   while (Date.now() < deadline) {
     const note = await read(page, id);
-    if (note?.title === title && JSON.stringify(note.document).includes(body) && /^Saved /.test(await page.locator('.save-state').innerText())) return;
+    if (note?.title === title && JSON.stringify(note.document).includes(body) && /^Saved /.test(await page.locator('.editor-top .save-state').innerText())) return;
     await new Promise(resolve => setTimeout(resolve, 20));
   }
   throw new Error(`Expected committed title/body not found: ${title} / ${body}`);
@@ -161,7 +161,7 @@ try {
       localStorage.setItem(`noteos:mvp01:recovery:${id}:stale-test`, JSON.stringify({ title: note.title, document: note.document, baseRevision: note.revision }));
       localStorage.setItem(`noteos:mvp01:recovery:${id}:newer-test`, JSON.stringify({ title: 'Retained draft', document: doc, baseRevision: 0 }));
     }, { id, note: trashed, doc: textDocument('Retained draft body') });
-    await page.getByRole('button', { name: 'Delete forever', exact: true }).click(); const dialog = page.getByRole('dialog'); await dialog.getByRole('button', { name: 'Request full backup download' }).click(); await dialog.getByLabel(/I verified that I saved/).check(); await dialog.getByRole('button', { name: 'Delete forever', exact: true }).click(); await page.getByText('Trash is empty').waitFor();
+    await page.getByRole('button', { name: 'Delete forever', exact: true }).click(); const dialog = page.getByRole('dialog'); await dialog.getByRole('button', { name: 'Request notes backup download' }).click(); await dialog.getByLabel('I verified that I saved the notes backup.').check(); await dialog.getByLabel(/I exported any audio/).check(); await dialog.getByRole('button', { name: 'Delete forever', exact: true }).click(); await page.getByText('Trash is empty').waitFor();
     const remaining = await journals(page, id); check(remaining.length === 1 && remaining[0].title === 'Retained draft', 'delete cleaned wrong journal');
     await page.goto(`${root}/backup`); await page.locator('input[type=file]').setInputFiles({ name: 'synthetic-reimport.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify({ format: 'noteos.local-backup', version: 1, exportedAt: new Date().toISOString(), notes: [original] })) }); await page.getByRole('button', { name: 'Validate and import' }).click(); await page.getByRole('status').filter({ hasText: 'Imported 1 notes' }).waitFor();
     await page.goto(`${root}/notes/${id}`); await page.getByRole('dialog').waitFor(); await page.getByRole('button', { name: 'Recover as new note', exact: true }).waitFor(); check(await page.getByRole('button', { name: 'Restore draft', exact: true }).count() === 0, 'old journal could overwrite reimport');

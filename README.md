@@ -4,6 +4,8 @@ noteOS là dự án kiểm chứng kiến trúc cho ứng dụng ghi chú local-
 
 > **Product milestone update (MVP-01.2):** Data-safety findings F-01–F-05 are patched with serialized autosave, live editor recovery, guarded navigation/lifecycle and shared import validation. Targeted browser acceptance passed; durability limits remain explicit. See [MVP-01.2 report](docs/mvp/mvp-01.2-report.md).
 
+> **Product milestone update (MVP-02):** Local Web audio recording and playback are implemented with chunked IndexedDB persistence, explicit partial-recovery states and per-recording export. Existing notes-only backup remains version 1 and does not include audio. See [MVP-02 report](docs/mvp/mvp-02-report.md) for verification and limits.
+
 ## Trạng thái hiện tại
 
 | Hạng mục | Trạng thái | Bằng chứng / giới hạn |

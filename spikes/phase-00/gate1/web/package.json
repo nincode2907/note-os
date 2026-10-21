@@ -8,6 +8,7 @@
     "start": "next start -H 0.0.0.0 -p 3000",
     "typecheck": "tsc --noEmit",
     "test:mvp": "node --test app/lib/*.test.mjs",
+    "test:audio-browser": "node scripts/mvp-02-browser.mjs",
     "test:documents": "npm --prefix packages/document-engine test",
     "benchmark:documents": "npm --prefix packages/document-engine run benchmark"
   },

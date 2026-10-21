@@ -2,8 +2,10 @@ import { assertNoteRecord, validateNoteDocument } from './note-validation.mjs';
 export { NoteDocumentError } from './note-validation.mjs';
 
 const DATABASE_NAME = 'noteos-mvp-01';
-const DATABASE_VERSION = 1;
+const DATABASE_VERSION = 2;
 const STORE_NAME = 'notes';
+const RECORDINGS_STORE = 'recordings';
+const RECORDING_CHUNKS_STORE = 'recordingChunks';
 
 export class NoteNotFoundError extends Error {
   constructor(id) {
@@ -81,9 +83,22 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
         const request = indexedDBFactory.open(databaseName, DATABASE_VERSION);
         request.onupgradeneeded = () => {
           const database = request.result;
-          const store = database.createObjectStore(STORE_NAME, { keyPath: 'id' });
-          store.createIndex('lifecycle', 'lifecycle', { unique: false });
-          store.createIndex('updatedAt', 'updatedAt', { unique: false });
+          if (!database.objectStoreNames.contains(STORE_NAME)) {
+            const store = database.createObjectStore(STORE_NAME, { keyPath: 'id' });
+            store.createIndex('lifecycle', 'lifecycle', { unique: false });
+            store.createIndex('updatedAt', 'updatedAt', { unique: false });
+          }
+          if (!database.objectStoreNames.contains(RECORDINGS_STORE)) {
+            const recordings = database.createObjectStore(RECORDINGS_STORE, { keyPath: 'id' });
+            recordings.createIndex('noteId', 'noteId', { unique: false });
+            recordings.createIndex('status', 'status', { unique: false });
+            recordings.createIndex('updatedAt', 'updatedAt', { unique: false });
+          }
+          if (!database.objectStoreNames.contains(RECORDING_CHUNKS_STORE)) {
+            const chunks = database.createObjectStore(RECORDING_CHUNKS_STORE, { keyPath: 'id' });
+            chunks.createIndex('recordingId', 'recordingId', { unique: false });
+            chunks.createIndex('recordingSequence', ['recordingId', 'sequence'], { unique: true });
+          }
         };
         request.onsuccess = () => {
           request.result.onversionchange = () => request.result.close();
@@ -185,7 +200,7 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
   async function deleteForever(id, expectedRevision) {
     assertExpectedRevision(expectedRevision);
     const database = await openDatabase();
-    const transaction = database.transaction(STORE_NAME, 'readwrite');
+    const transaction = database.transaction([STORE_NAME, RECORDINGS_STORE, RECORDING_CHUNKS_STORE], 'readwrite');
     const done = transactionResult(transaction);
     const store = transaction.objectStore(STORE_NAME);
     try {
@@ -193,6 +208,14 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
       if (!current) throw abort(transaction, new NoteNotFoundError(id));
       if (current.revision !== expectedRevision) throw abort(transaction, new NoteConflictError());
       if (current.lifecycle !== 'trashed') throw abort(transaction, new NoteStateError('Only trashed notes can be permanently deleted.'));
+      const recordings = transaction.objectStore(RECORDINGS_STORE);
+      const chunks = transaction.objectStore(RECORDING_CHUNKS_STORE);
+      const linked = await requestResult(recordings.index('noteId').getAll(id));
+      for (const recording of linked) {
+        const keys = await requestResult(chunks.index('recordingId').getAllKeys(recording.id));
+        for (const key of keys) chunks.delete(key);
+        recordings.delete(recording.id);
+      }
       store.delete(id);
       await done;
       return current;
@@ -234,4 +257,142 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
   }
 
   return { list, get, create, save, setLifecycle, deleteForever, importNotes };
+}
+
+function assertAudioTimestamp(value, label) {
+  if (!Number.isSafeInteger(value) || value < 0) throw new TypeError(`${label} must be a non-negative timestamp.`);
+}
+
+function assertRecordingState(state) {
+  if (!['recording', 'paused', 'complete', 'interrupted', 'failed'].includes(state)) throw new TypeError('Invalid recording state.');
+}
+
+export function createAudioRepository(indexedDBFactory = globalThis.indexedDB, databaseName = DATABASE_NAME) {
+  let databasePromise;
+  function openDatabase() {
+    if (!indexedDBFactory) return Promise.reject(new Error('This browser does not provide IndexedDB.'));
+    if (!databasePromise) {
+      databasePromise = new Promise((resolve, reject) => {
+        const request = indexedDBFactory.open(databaseName, DATABASE_VERSION);
+        request.onsuccess = () => { request.result.onversionchange = () => request.result.close(); resolve(request.result); };
+        request.onerror = () => reject(request.error ?? new Error('Could not open local audio storage.'));
+        request.onblocked = () => reject(new Error('Local audio storage is open in another tab. Close older noteOS tabs and retry.'));
+      }).catch((error) => { databasePromise = undefined; throw error; });
+    }
+    return databasePromise;
+  }
+  async function run(tx, request) {
+    const done = transactionResult(tx);
+    const result = await requestResult(request);
+    await done;
+    return result;
+  }
+  async function list(noteId) {
+    const database = await openDatabase();
+    const tx = database.transaction(RECORDINGS_STORE, 'readonly');
+    const rows = await run(tx, tx.objectStore(RECORDINGS_STORE).index('noteId').getAll(noteId));
+    return rows.sort((a, b) => b.createdAt - a.createdAt);
+  }
+  async function get(recordingId) {
+    const database = await openDatabase();
+    const tx = database.transaction(RECORDINGS_STORE, 'readonly');
+    return (await run(tx, tx.objectStore(RECORDINGS_STORE).get(recordingId))) ?? null;
+  }
+  async function create(noteId, { mimeType, ownerId, createdAt = Date.now() }) {
+    if (typeof noteId !== 'string' || !noteId) throw new TypeError('A note ID is required.');
+    if (typeof mimeType !== 'string' || !mimeType) throw new TypeError('An audio MIME type is required.');
+    if (typeof ownerId !== 'string' || !ownerId) throw new TypeError('A recording owner ID is required.');
+    assertAudioTimestamp(createdAt, 'createdAt');
+    const database = await openDatabase();
+    const tx = database.transaction([STORE_NAME, RECORDINGS_STORE], 'readwrite');
+    const done = transactionResult(tx);
+    try {
+      const note = await requestResult(tx.objectStore(STORE_NAME).get(noteId));
+      if (!note) throw abort(tx, new NoteNotFoundError(noteId));
+      if (note.lifecycle !== 'active') throw abort(tx, new NoteStateError('Restore this note before recording audio.'));
+      const store = tx.objectStore(RECORDINGS_STORE);
+      const current = await requestResult(store.index('noteId').getAll(noteId));
+      if (current.some((entry) => ['recording', 'paused'].includes(entry.status))) throw abort(tx, new NoteStateError('A recording is already active for this note.'));
+      const recording = { id: crypto.randomUUID(), noteId, title: 'Audio recording', mimeType, status: 'recording', ownerId, createdAt, updatedAt: createdAt, durationMs: 0, chunkCount: 0 };
+      store.add(recording);
+      await done;
+      return recording;
+    } catch (error) { try { await done; } catch { /* Consume transaction abort before returning the original error. */ } throw error; }
+  }
+  async function appendChunk(recordingId, sequence, blob, durationMs) {
+    if (!Number.isSafeInteger(sequence) || sequence < 0) throw new TypeError('Chunk sequence must be non-negative.');
+    if (!(blob instanceof Blob) || blob.size === 0) return get(recordingId);
+    if (!Number.isSafeInteger(durationMs) || durationMs < 0) throw new TypeError('Recording duration must be non-negative.');
+    const database = await openDatabase();
+    const tx = database.transaction([RECORDINGS_STORE, RECORDING_CHUNKS_STORE], 'readwrite');
+    const done = transactionResult(tx);
+    const recordings = tx.objectStore(RECORDINGS_STORE), chunks = tx.objectStore(RECORDING_CHUNKS_STORE);
+    try {
+      const recording = await requestResult(recordings.get(recordingId));
+      if (!recording || !['recording', 'paused'].includes(recording.status)) throw abort(tx, new NoteStateError('This recording is no longer writable.'));
+      chunks.add({ id: `${recordingId}:${sequence}`, recordingId, sequence, blob });
+      recordings.put({ ...recording, chunkCount: Math.max(recording.chunkCount, sequence + 1), durationMs: Math.max(recording.durationMs, durationMs), updatedAt: Date.now() });
+      await done;
+      return { ...recording, chunkCount: Math.max(recording.chunkCount, sequence + 1), durationMs: Math.max(recording.durationMs, durationMs), updatedAt: Date.now() };
+    } catch (error) { try { await done; } catch { /* Return the original failed transaction. */ } throw error; }
+  }
+  async function setStatus(recordingId, status, { durationMs } = {}) {
+    assertRecordingState(status);
+    const database = await openDatabase();
+    const tx = database.transaction(RECORDINGS_STORE, 'readwrite');
+    const done = transactionResult(tx), store = tx.objectStore(RECORDINGS_STORE);
+    try {
+      const recording = await requestResult(store.get(recordingId));
+      if (!recording) throw abort(tx, new NoteNotFoundError(recordingId));
+      const allowed = { recording: ['paused', 'complete', 'interrupted', 'failed'], paused: ['recording', 'complete', 'interrupted', 'failed'], complete: [], interrupted: [], failed: [] };
+      if (recording.status !== status && !allowed[recording.status].includes(status)) throw abort(tx, new NoteStateError(`Cannot change recording from ${recording.status} to ${status}.`));
+      const updated = { ...recording, status, updatedAt: Date.now(), ...(durationMs === undefined ? {} : { durationMs }) };
+      if (durationMs !== undefined && (!Number.isSafeInteger(durationMs) || durationMs < 0)) throw abort(tx, new TypeError('Recording duration must be non-negative.'));
+      store.put(updated); await done; return updated;
+    } catch (error) { try { await done; } catch { /* Consume the abort. */ } throw error; }
+  }
+  async function rename(recordingId, title) {
+    if (typeof title !== 'string' || !title.trim() || title.length > 120) throw new TypeError('Recording title must contain 1–120 characters.');
+    const database = await openDatabase(), tx = database.transaction(RECORDINGS_STORE, 'readwrite'), done = transactionResult(tx), store = tx.objectStore(RECORDINGS_STORE);
+    try {
+      const recording = await requestResult(store.get(recordingId));
+      if (!recording) throw abort(tx, new NoteNotFoundError(recordingId));
+      const updated = { ...recording, title: title.trim(), updatedAt: Date.now() }; store.put(updated); await done; return updated;
+    } catch (error) { try { await done; } catch { /* Consume the abort. */ } throw error; }
+  }
+  async function chunks(recordingId) {
+    const database = await openDatabase(), tx = database.transaction(RECORDING_CHUNKS_STORE, 'readonly');
+    const rows = await run(tx, tx.objectStore(RECORDING_CHUNKS_STORE).index('recordingSequence').getAll(IDBKeyRange.bound([recordingId, 0], [recordingId, Number.MAX_SAFE_INTEGER])));
+    return rows.sort((a, b) => a.sequence - b.sequence);
+  }
+  async function remove(recordingId) {
+    const database = await openDatabase(), tx = database.transaction([RECORDINGS_STORE, RECORDING_CHUNKS_STORE], 'readwrite'), done = transactionResult(tx);
+    const recordings = tx.objectStore(RECORDINGS_STORE), chunkStore = tx.objectStore(RECORDING_CHUNKS_STORE);
+    try {
+      const recording = await requestResult(recordings.get(recordingId));
+      if (!recording) throw abort(tx, new NoteNotFoundError(recordingId));
+      const keys = await requestResult(chunkStore.index('recordingId').getAllKeys(recordingId));
+      for (const key of keys) chunkStore.delete(key);
+      recordings.delete(recordingId); await done; return recording;
+    } catch (error) { try { await done; } catch { /* Consume the abort. */ } throw error; }
+  }
+  async function recoverOwned(ownerId) {
+    if (!ownerId) return [];
+    const database = await openDatabase(), tx = database.transaction(RECORDINGS_STORE, 'readwrite'), done = transactionResult(tx), store = tx.objectStore(RECORDINGS_STORE);
+    const all = await requestResult(store.getAll()), recovered = [];
+    for (const recording of all) if (recording.ownerId === ownerId && ['recording', 'paused'].includes(recording.status)) {
+      const next = { ...recording, status: 'interrupted', updatedAt: Date.now() }; store.put(next); recovered.push(next);
+    }
+    await done; return recovered;
+  }
+  async function recoverStale({ recordingBefore = Date.now() - 120_000, pausedBefore = Date.now() - 86_400_000 } = {}) {
+    const database = await openDatabase(), tx = database.transaction(RECORDINGS_STORE, 'readwrite'), done = transactionResult(tx), store = tx.objectStore(RECORDINGS_STORE);
+    const all = await requestResult(store.getAll()), recovered = [];
+    for (const recording of all) {
+      const stale = recording.status === 'recording' ? recording.updatedAt < recordingBefore : recording.status === 'paused' && recording.updatedAt < pausedBefore;
+      if (stale) { const next = { ...recording, status: 'interrupted', updatedAt: Date.now() }; store.put(next); recovered.push(next); }
+    }
+    await done; return recovered;
+  }
+  return { list, get, create, appendChunk, setStatus, rename, chunks, remove, recoverOwned, recoverStale };
 }
