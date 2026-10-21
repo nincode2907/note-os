@@ -7,10 +7,12 @@ import { AudioModule, RecordingPresets, setAudioModeAsync, useAudioPlayer, useAu
 import { File, Paths } from 'expo-file-system';
 import * as DocumentPicker from 'expo-document-picker';
 import * as Sharing from 'expo-sharing';
-import { makeBackup, parseBackup, filterNotes } from '../web/app/lib/mvp-utils.mjs';
+import { makeBackup, parseBackup, filterNotes, sortNotes } from '../web/app/lib/mvp-utils.mjs';
+import { normalizeTagList } from '../web/app/lib/note-organization.mjs';
 import { createEmptyCanonicalDocument } from '../web/packages/document-engine/src/plain-text.js';
 import { documentToNativeModel, nativeModelToDocument } from './document-subset';
-import { createNote, exportNotes, getNote, importNotes, listNotes, listRecordings, Note, permanentlyDeleteNote, Recording, removeRecording, renameRecording, RevisionConflictError, saveNote, saveRecording, setLifecycle } from './store';
+import { createNote, discardRecoveryDraft, exportNotes, getNote, getRecoveryDraft, importNotes, listNotes, listPendingFileCleanups, listRecordings, markFileCleanupDone, Note, permanentlyDeleteNote, RecoveryDraft, Recording, RecoveryConflictError, removeRecording, renameRecording, RevisionConflictError, saveNote, saveRecording, saveRecoveryDraft, setLifecycle, setPinned } from './store';
+import { LatestDraftWriter, recoveryDecision, RecordingSessionGate } from './mobile-safety.mjs';
 
 type RootStack = { Home: undefined; Editor: { id: string } };
 const Stack = createNativeStackNavigator<RootStack>();
@@ -20,10 +22,12 @@ const timeNow = () => Date.now();
 function HomeScreen({ navigation }: any) {
   const [notes, setNotes] = useState<Note[]>([]); const [query, setQuery] = useState('');
   const [lifecycle, setLifecycleFilter] = useState<'active' | 'archived' | 'trashed'>('active'); const [status, setStatus] = useState('');
-  const refresh = useCallback(async () => { setNotes(await listNotes()); }, []);
+  const pendingPins = useRef(new Set<string>());
+  const refresh = useCallback(async () => { setNotes(await listNotes()); const pending = await listPendingFileCleanups(); for (const uri of pending) { try { const file = new File(uri); if (file.exists) file.delete(); await markFileCleanupDone(uri); } catch (error) { setStatus(`File cleanup is pending retry: ${String(error)}`); } } }, []);
+  async function togglePin(item: Note) { if (pendingPins.current.has(item.id)) return; pendingPins.current.add(item.id); try { await setPinned(item.id, !item.pinned, item.revision); await refresh(); } catch (error) { setStatus(String(error)); } finally { pendingPins.current.delete(item.id); } }
   useEffect(() => { void refresh().catch(error => setStatus(String(error))); }, [refresh]);
   useEffect(() => { const unsubscribe = navigation.addListener('focus', () => { void refresh(); }); return unsubscribe; }, [navigation, refresh]);
-  const visible = useMemo(() => filterNotes(notes, query, lifecycle) as Note[], [notes, query, lifecycle]);
+  const visible = useMemo(() => sortNotes(filterNotes(notes, query, lifecycle) as Note[]), [notes, query, lifecycle]);
   async function create() {
     const now = timeNow();
     const note: Note = { id: makeId(), title: 'Untitled note', document: createEmptyCanonicalDocument(), schemaVersion: 1, createdAt: now, updatedAt: now, lifecycle: 'active', revision: 0, pinned: false, tags: [] };
@@ -56,10 +60,9 @@ function HomeScreen({ navigation }: any) {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: () => { void (async () => {
         try {
-          const recordings = await listRecordings(note.id);
-          for (const recording of recordings) { const file = new File(recording.file_uri); if (file.exists) file.delete(); await removeRecording(recording.id); }
-          await permanentlyDeleteNote(note.id); await refresh();
-        } catch (error) { setStatus(`Delete did not finish cleanly: ${String(error)}`); }
+          const uris = await permanentlyDeleteNote(note.id, note.revision); await refresh();
+          for (const uri of uris) { const file = new File(uri); if (file.exists) file.delete(); await markFileCleanupDone(uri); }
+        } catch (error) { setStatus(`Metadata is preserved if the database operation failed; file cleanup will retry where queued: ${String(error)}`); }
       })(); } },
     ]);
   }
@@ -73,9 +76,9 @@ function HomeScreen({ navigation }: any) {
       return <Pressable style={styles.noteCard} onPress={() => navigation.navigate('Editor', { id: item.id })}>
         <View style={styles.noteTitleRow}><Text style={styles.noteTitle} numberOfLines={1}>{item.pinned ? '◆ ' : ''}{item.title || 'Untitled note'}</Text><Text style={styles.noteTime}>{new Date(item.updatedAt).toLocaleDateString()}</Text></View>
         <Text style={styles.preview} numberOfLines={2}>{preview || 'No text yet'}</Text>
-        {!!item.tags.length && <Text style={styles.tags}>{item.tags.map(tag => `#${tag}`).join('   ')}</Text>}
+        {!!item.tags?.length && <Text style={styles.tags}>{item.tags.map((tag: string) => `#${tag}`).join('   ')}</Text>}
         <View style={styles.cardActions}>
-          {lifecycle === 'active' ? <>{item.schemaVersion === 1 && body.editable ? <Text onPress={() => void (async () => { try { await saveNote({ ...item, pinned: !item.pinned }, item.revision); await refresh(); } catch (error) { setStatus(String(error)); } })()} style={styles.action}>{item.pinned ? 'Unpin' : 'Pin'}</Text> : null}<Text onPress={() => void changeLifecycle(item, 'archived')} style={styles.action}>Archive</Text><Text onPress={() => void changeLifecycle(item, 'trashed')} style={styles.action}>Trash</Text></> : lifecycle === 'archived' ? <><Text onPress={() => void changeLifecycle(item, 'active')} style={styles.action}>Restore</Text><Text onPress={() => void changeLifecycle(item, 'trashed')} style={styles.action}>Move to trash</Text></> : <><Text onPress={() => void changeLifecycle(item, 'active')} style={styles.action}>Restore</Text><Text onPress={() => deleteForever(item)} style={styles.dangerAction}>Delete forever</Text></>}
+          {lifecycle === 'active' ? <><Text onPress={() => void togglePin(item)} style={styles.action}>{item.pinned ? 'Unpin' : 'Pin'}</Text><Text onPress={() => void changeLifecycle(item, 'archived')} style={styles.action}>Archive</Text><Text onPress={() => void changeLifecycle(item, 'trashed')} style={styles.action}>Trash</Text></> : lifecycle === 'archived' ? <><Text onPress={() => void changeLifecycle(item, 'active')} style={styles.action}>Restore</Text><Text onPress={() => void changeLifecycle(item, 'trashed')} style={styles.action}>Move to trash</Text></> : <><Text onPress={() => void changeLifecycle(item, 'active')} style={styles.action}>Restore</Text><Text onPress={() => deleteForever(item)} style={styles.dangerAction}>Delete forever</Text></>}
         </View>
       </Pressable>;
     }} />
@@ -83,54 +86,78 @@ function HomeScreen({ navigation }: any) {
   </SafeAreaView>;
 }
 
-function AudioItem({ item, onRename, onDelete }: { item: Recording; onRename: (item: Recording) => void; onDelete: (item: Recording) => void }) {
-  const player = useAudioPlayer(item.file_uri);
-  return <View style={styles.audioRow}><View style={{ flex: 1 }}><Text style={styles.audioTitle}>{item.title}</Text><Text style={styles.subtle}>{item.status === 'complete' ? 'Saved locally' : 'Interrupted · recovery available'}</Text></View><Pressable onPress={() => { const f = new File(item.file_uri); if (!f.exists || f.size <= 0) { Alert.alert('File unavailable', 'This recording’s file is missing or empty.'); return; } player.play(); }} style={styles.smallButton}><Text style={styles.smallButtonText}>Play</Text></Pressable><Pressable onPress={() => onRename(item)}><Text style={styles.action}>Rename</Text></Pressable><Pressable onPress={() => onDelete(item)}><Text style={styles.dangerAction}>Delete</Text></Pressable></View>;
+function AudioItem({ item, onPlay, onRename, onDelete }: { item: Recording; onPlay: (item: Recording) => void; onRename: (item: Recording) => void; onDelete: (item: Recording) => void }) {
+  return <View style={styles.audioRow}><View style={{ flex: 1 }}><Text style={styles.audioTitle}>{item.title}</Text><Text style={styles.subtle}>{item.status === 'complete' ? 'Saved locally' : 'Interrupted · recovery available'}</Text></View><Pressable onPress={() => onPlay(item)} style={styles.smallButton}><Text style={styles.smallButtonText}>Play</Text></Pressable><Pressable onPress={() => onRename(item)}><Text style={styles.action}>Rename</Text></Pressable><Pressable onPress={() => onDelete(item)}><Text style={styles.dangerAction}>Delete</Text></Pressable></View>;
 }
 
+function AudioPlayback({ uri, onClose }: { uri: string; onClose: () => void }) { const player = useAudioPlayer(uri); useEffect(() => { player.play(); return () => { try { player.pause(); } catch {} }; }, [player]); return <Pressable onPress={onClose}><Text style={styles.action}>Playing audio · tap to stop</Text></Pressable>; }
+
 function EditorScreen({ route, navigation }: any) {
-  const [note, setNote] = useState<Note | null>(null); const [title, setTitle] = useState(''); const [paragraphs, setParagraphs] = useState<string[]>([]); const [tasks, setTasks] = useState<{ text: string; checked: boolean }[]>([]); const [tags, setTags] = useState(''); const [pinned, setPinned] = useState(false); const [editable, setEditable] = useState(false); const [readOnlyReason, setReadOnlyReason] = useState(''); const [dirty, setDirty] = useState(false); const [status, setStatus] = useState(''); const [recordings, setRecordings] = useState<Recording[]>([]); const [recordingBusy, setRecordingBusy] = useState(false);
-  const allowLeaveRef = useRef(false);
+  const [note, setNote] = useState<Note | null>(null); const [title, setTitle] = useState(''); const [paragraphs, setParagraphs] = useState<string[]>([]); const [tasks, setTasks] = useState<{ text: string; checked: boolean }[]>([]); const [tags, setTags] = useState(''); const [pinned, setPinned] = useState(false); const [editable, setEditable] = useState(false); const [readOnlyReason, setReadOnlyReason] = useState(''); const [dirty, setDirty] = useState(false); const [status, setStatus] = useState(''); const [recordings, setRecordings] = useState<Recording[]>([]); const [recordingPhase, setRecordingPhase] = useState('idle'); const [recoveryHeld, setRecoveryHeld] = useState(false); const [playingUri, setPlayingUri] = useState('');
+  const allowLeaveRef = useRef(false); const gateRef = useRef(new RecordingSessionGate()); const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null); const draftWriter = useRef<LatestDraftWriter | null>(null); const latestRef = useRef<any>(null); const recoveryBaseRef = useRef<number | null>(null);
+  if (!draftWriter.current) draftWriter.current = new LatestDraftWriter((value: { id: string; revision: number; draft: RecoveryDraft }) => saveRecoveryDraft(value.id, value.revision, value.draft));
+  function snapshotDraft() { if (!note) return null; return { id: note.id, revision: note.revision, draft: { version: 1 as const, baseRevision: note.revision, title, document: nativeModelToDocument(paragraphs, tasks), tagsText: tags, pinned } }; }
+  async function flushDraft() { if (draftTimer.current) { clearTimeout(draftTimer.current); draftTimer.current = null; } const latest = snapshotDraft(); if (latest && dirty) { latestRef.current = latest; draftWriter.current?.enqueue(latest); } await draftWriter.current?.flush(); }
+  function scheduleDraft() { const latest = snapshotDraft(); if (!latest) return; latestRef.current = latest; if (draftTimer.current) clearTimeout(draftTimer.current); draftTimer.current = setTimeout(() => { draftWriter.current?.enqueue(latest); void draftWriter.current?.flush().catch((error: unknown) => setStatus(`Recovery journal could not be updated: ${String(error)}`)); }, 500); }
   const load = useCallback(async () => {
     const value = await getNote(route.params.id); if (!value) throw new Error('This note no longer exists.');
     setNote(value); setTitle(value.title); setTags(value.tags.join('\n')); setPinned(value.pinned);
     const body = documentToNativeModel(value.document); setEditable(value.schemaVersion === 1 && body.editable); setReadOnlyReason(value.schemaVersion !== 1 ? 'This note metadata uses a newer schema and is preserved read-only.' : body.reason ?? '');
     setParagraphs(body.paragraphs); setTasks(body.tasks); setDirty(false); setRecordings(await listRecordings(value.id));
+    const journal = await getRecoveryDraft(value.id);
+    if (journal) {
+      recoveryBaseRef.current = journal.baseRevision;
+      const decision = recoveryDecision(value, journal);
+      if (decision === 'offer-restore') Alert.alert('Recover draft?', 'A local recovery draft is available.', [
+        { text: 'Keep draft', style: 'cancel', onPress: () => { setRecoveryHeld(true); setStatus('Recovery draft preserved. Editing is paused until you restore or discard it.'); } },
+        { text: 'Discard', style: 'destructive', onPress: () => { void discardRecoveryDraft(value.id, journal.baseRevision).then(() => { recoveryBaseRef.current = null; }).catch(error => setStatus(String(error))); } },
+        { text: 'Restore', onPress: () => { const recovered = journal.draft; const recoveredBody = documentToNativeModel(recovered.document); if (!recoveredBody.editable) { setRecoveryHeld(true); setStatus('Draft contains content outside the safe native subset; it remains preserved read-only.'); return; } setTitle(recovered.title); setParagraphs(recoveredBody.paragraphs); setTasks(recoveredBody.tasks); setTags(recovered.tagsText); setPinned(recovered.pinned); setDirty(true); setStatus('Draft restored. Save it to commit.'); } },
+      ]);
+      else { setRecoveryHeld(true); Alert.alert('Older recovery draft', 'The note has changed since this draft was saved. Keep it for review or discard it; it cannot be restored over the newer note.', [{ text: 'Keep draft', style: 'cancel' }, { text: 'Discard', style: 'destructive', onPress: () => { void discardRecoveryDraft(value.id, journal.baseRevision).then(() => { recoveryBaseRef.current = null; setRecoveryHeld(false); }).catch(error => setStatus(String(error))); } }]); }
+    }
   }, [route.params.id]);
   useEffect(() => { void load().catch(error => setStatus(String(error))); }, [load]);
   useEffect(() => navigation.setOptions({ title: note?.title || 'Note', headerBackTitle: 'Notes' }), [navigation, note?.title]);
   const recorder = useAudioRecorder({ ...RecordingPresets.HIGH_QUALITY, directory: 'document' });
   const recorderState = useAudioRecorderState(recorder);
   const setBody = (fn: () => void) => { fn(); setDirty(true); };
+  useEffect(() => { if (dirty && editable && !recoveryHeld) scheduleDraft(); }, [dirty, editable, recoveryHeld, title, paragraphs, tasks, tags, pinned, note]);
+  useEffect(() => { const subscription = AppState.addEventListener('change', state => { if (state !== 'active' && dirty && editable && !recoveryHeld) void flushDraft().catch(error => setStatus(`Background recovery flush is best effort and failed: ${String(error)}`)); }); return () => subscription.remove(); }, [dirty, editable, recoveryHeld, title, paragraphs, tasks, tags, pinned, note]);
   async function save() {
-    if (!note || !editable) return false;
+    if (!note || !editable || recoveryHeld) return false;
     try {
+      await flushDraft();
       const nextDoc = nativeModelToDocument(paragraphs, tasks);
-      const nextTags = tags.split(/\r?\n/u).map(tag => tag.trim()).filter(Boolean);
+      const nextTags = normalizeTagList(tags.split(/\r?\n/u).map(tag => tag.trim()).filter(Boolean));
       const updated = await saveNote({ ...note, title, document: nextDoc, tags: nextTags, pinned }, note.revision);
-      setNote(updated); setDirty(false); setStatus('Saved on this device.'); return true;
+      if (draftTimer.current) clearTimeout(draftTimer.current); latestRef.current = null; draftWriter.current?.clearPending(); setNote(updated); setDirty(false); setStatus('Saved on this device.'); return true;
     } catch (error) { setStatus(error instanceof RevisionConflictError ? `${error.message} Your unsaved draft is still here.` : error instanceof Error ? error.message : 'Could not save.'); return false; }
   }
   function back() {
+    if (!gateRef.current.canNavigate()) { setStatus('Stop and save the recording before leaving this note.'); return; }
     if (!dirty) { allowLeaveRef.current = true; navigation.goBack(); return; }
     Alert.alert('Unsaved changes', 'Save this draft before leaving?', [
-      { text: 'Keep editing', style: 'cancel' }, { text: 'Discard', style: 'destructive', onPress: () => { allowLeaveRef.current = true; navigation.goBack(); } }, { text: 'Save', onPress: () => { void (async () => { if (await save()) { allowLeaveRef.current = true; navigation.goBack(); } })(); } },
+      { text: 'Keep editing', style: 'cancel' }, { text: 'Discard', style: 'destructive', onPress: () => { void (async () => { try { await flushDraft(); if (note && recoveryBaseRef.current !== null) await discardRecoveryDraft(note.id, recoveryBaseRef.current); allowLeaveRef.current = true; navigation.goBack(); } catch (error) { setStatus(`Draft was kept because discard did not commit: ${String(error)}`); } })(); } }, { text: 'Save', onPress: () => { void (async () => { if (await save()) { allowLeaveRef.current = true; navigation.goBack(); } })(); } },
     ]);
   }
-  useEffect(() => { const unsubscribe = navigation.addListener('beforeRemove', (event: any) => { if (allowLeaveRef.current) { allowLeaveRef.current = false; return; } if (!dirty) return; event.preventDefault(); back(); }); return unsubscribe; }, [dirty, navigation, paragraphs, tasks, title, tags, note, editable]);
+  useEffect(() => { const unsubscribe = navigation.addListener('beforeRemove', (event: any) => { if (allowLeaveRef.current) { allowLeaveRef.current = false; return; } if (!gateRef.current.canNavigate()) { event.preventDefault(); setStatus('Stop and save the recording before leaving this note.'); return; } if (!dirty) return; event.preventDefault(); back(); }); return unsubscribe; }, [dirty, navigation, paragraphs, tasks, title, tags, note, editable]);
   async function startRecording() {
+    const gate = gateRef.current; if (!gate.beginStart()) return; setRecordingPhase(gate.phase);
     try {
       const permission = await AudioModule.requestRecordingPermissionsAsync();
-      if (!permission.granted) { setStatus('Microphone access was denied. Enable it in iOS Settings to record.'); return; }
+      if (!permission.granted) { setStatus('Microphone access was denied. Enable it in iOS Settings to record.'); gate.finish(); setRecordingPhase(gate.phase); return; }
+      gate.move('requesting', 'starting'); setRecordingPhase(gate.phase);
       await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true, allowsBackgroundRecording: false });
-      await recorder.prepareToRecordAsync(); recorder.record(); setRecordingBusy(true); setStatus('Recording locally…');
-    } catch (error) { setStatus(`Recording could not start: ${String(error)}`); }
+      await recorder.prepareToRecordAsync();
+      if (gate.backgroundRequested) { await recorder.stop(); gate.finish(); setRecordingPhase(gate.phase); setStatus('Recording start was cancelled when the app left the foreground.'); return; }
+      recorder.record(); gate.move('starting', 'recording'); setRecordingPhase(gate.phase); setStatus('Recording locally…');
+    } catch (error) { gate.finish(); setRecordingPhase(gate.phase); setStatus(`Recording could not start: ${String(error)}`); }
   }
   async function finishRecording(interrupted = false) {
-    if (!recordingBusy || !note) return;
-    setRecordingBusy(false);
+    const gate = gateRef.current; if (!gate.beginStop() || !note) return; setRecordingPhase(gate.phase);
     try {
       await recorder.stop();
+      gate.move('stopping', 'finalizing'); setRecordingPhase(gate.phase);
       const uri = recorder.uri;
       if (!uri) throw new Error('Recorder did not provide a finalized audio file.');
       const file = new File(uri);
@@ -140,15 +167,17 @@ function EditorScreen({ route, navigation }: any) {
       setRecordings(await listRecordings(note.id));
       setStatus(interrupted ? 'Recording stopped when the app left the foreground and was kept as interrupted for recovery.' : 'Recording finalized, verified and saved locally.');
     } catch (error) { setStatus(`Audio save state is unknown. Any recorder file was left in place for recovery: ${String(error)}`); }
+    finally { gate.finish(); setRecordingPhase(gate.phase); }
   }
   useEffect(() => {
-    const sub = AppState.addEventListener('change', state => { if (state !== 'active' && recordingBusy) void finishRecording(true); });
+    const sub = AppState.addEventListener('change', state => { if (state === 'active') return; const gate = gateRef.current; if (gate.requestBackgroundStop()) void finishRecording(true); });
     return () => sub.remove();
-  }, [recordingBusy, note]);
+  }, [note]);
+  async function finishFileCleanup(uri: string) { const file = new File(uri); if (file.exists) file.delete(); await markFileCleanupDone(uri); }
   function deleteRecording(item: Recording) {
-    Alert.alert('Delete recording?', `“${item.title}” will be removed from this device.`, [{ text: 'Cancel', style: 'cancel' }, { text: 'Delete', style: 'destructive', onPress: () => { void (async () => { try { const file = new File(item.file_uri); if (file.exists) file.delete(); await removeRecording(item.id); setRecordings(await listRecordings(item.note_id)); } catch (error) { setStatus(`Recording deletion needs recovery: ${String(error)}`); } })(); } }]);
+    Alert.alert('Delete recording?', `“${item.title}” will be removed from this device.`, [{ text: 'Cancel', style: 'cancel' }, { text: 'Delete', style: 'destructive', onPress: () => { void (async () => { try { const uri = await removeRecording(item.id); setRecordings(await listRecordings(item.note_id)); await finishFileCleanup(uri); } catch (error) { setStatus(`Recording metadata may be removed; queued file cleanup will retry: ${String(error)}`); } })(); } }]);
   }
-  function rename(item: Recording) { Alert.prompt('Rename recording', 'Enter a new title.', value => { if (value?.trim()) void renameRecording(item.id, value.trim()).then(() => listRecordings(item.note_id)).then(setRecordings); }, 'plain-text', item.title); }
+  function rename(item: Recording) { Alert.prompt('Rename recording', 'Enter a new title.', value => { if (value?.trim()) void renameRecording(item.id, value.trim()).then(() => listRecordings(item.note_id)).then(setRecordings).catch(error => setStatus(`Rename failed: ${String(error)}`)); }, 'plain-text', item.title); }
   async function shareAudio(item: Recording) {
     const file = new File(item.file_uri);
     if (!file.exists || file.size <= 0) { setStatus('This audio file is missing or empty.'); return; }
@@ -159,8 +188,8 @@ function EditorScreen({ route, navigation }: any) {
   return <SafeAreaView style={styles.screen} edges={['bottom', 'left', 'right']}><KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
     <ScrollView contentContainerStyle={styles.editorContent} keyboardShouldPersistTaps="handled">
       {readOnlyReason ? <View style={styles.readOnly}><Text style={styles.readOnlyTitle}>Read-only note</Text><Text style={styles.readOnlyText}>{readOnlyReason}</Text></View> : null}
-      <TextInput style={styles.titleInput} editable={editable} value={title} onChangeText={value => { setTitle(value); setDirty(true); }} placeholder="Title" multiline />
-      {editable ? <>
+      <TextInput style={styles.titleInput} editable={editable && !recoveryHeld} value={title} onChangeText={value => { setTitle(value); setDirty(true); }} placeholder="Title" multiline />
+      {editable && !recoveryHeld ? <>
         <Text style={styles.sectionLabel}>BODY</Text>
         <TextInput style={styles.bodyInput} value={paragraphs.join('\n')} onChangeText={value => setBody(() => setParagraphs(value.split('\n')))} placeholder="Write a note…" multiline textAlignVertical="top" />
         <View style={styles.segmentRow}><Text style={styles.sectionLabel}>CHECKLIST</Text><Pressable onPress={() => setBody(() => { if (!tasks.length) setTasks([{ text: '', checked: false }]); })}><Text style={styles.action}>＋ Add item</Text></Pressable></View>
@@ -169,16 +198,17 @@ function EditorScreen({ route, navigation }: any) {
         <TextInput style={[styles.field, { minHeight: 76 }]} value={tags} onChangeText={value => { setTags(value); setDirty(true); }} placeholder="One tag per line" autoCapitalize="none" multiline textAlignVertical="top" />
         <Pressable style={styles.pinRow} onPress={() => { setPinned(!pinned); setDirty(true); }}><Text style={styles.action}>{pinned ? '◆ Pinned' : '◇ Pin note'}</Text></Pressable>
       </> : <ReadOnlyDocument document={note.document} />}
-      {editable ? <Pressable style={styles.primaryWide} onPress={() => void save()}><Text style={styles.primaryText}>{dirty ? 'Save changes' : 'Saved'}</Text></Pressable> : null}
-      {note.lifecycle === 'active' && editable ? <View style={styles.audioPanel}>
+      {editable && !recoveryHeld ? <Pressable style={styles.primaryWide} onPress={() => void save()}><Text style={styles.primaryText}>{dirty ? 'Save changes' : 'Saved'}</Text></Pressable> : null}
+      {note.lifecycle === 'active' && editable && !recoveryHeld ? <View style={styles.audioPanel}>
         <View style={styles.segmentRow}><Text style={styles.sectionLabel}>LOCAL AUDIO</Text><Text style={styles.subtle}>Not included in notes backup</Text></View>
         <Text style={styles.subtle}>On-device recordings only · recording stops when the app leaves the foreground.</Text>
-        {!recordingBusy ? <Pressable style={styles.recordButton} onPress={() => void startRecording()}><Text style={styles.recordButtonText}>●  Record</Text></Pressable> : <Pressable style={styles.stopButton} onPress={() => void finishRecording(false)}><Text style={styles.stopText}>■  Stop & save · {Math.round(recorderState.durationMillis / 1000)}s</Text></Pressable>}
-        {recordings.map(item => <View key={item.id} style={styles.audioWithShare}><AudioItem item={item} onRename={rename} onDelete={deleteRecording} /><Pressable onPress={() => void shareAudio(item)}><Text style={styles.action}>Export</Text></Pressable></View>)}
+        {recordingPhase === 'idle' ? <Pressable style={styles.recordButton} onPress={() => void startRecording()}><Text style={styles.recordButtonText}>●  Record</Text></Pressable> : recordingPhase === 'recording' ? <Pressable style={styles.stopButton} onPress={() => void finishRecording(false)}><Text style={styles.stopText}>■  Stop & save · {Math.round(recorderState.durationMillis / 1000)}s</Text></Pressable> : <Text style={styles.subtle}>Recording {recordingPhase}…</Text>}
+        {recordings.map(item => <View key={item.id} style={styles.audioWithShare}><AudioItem item={item} onPlay={recording => { const f = new File(recording.file_uri); if (!f.exists || f.size <= 0) { Alert.alert('File unavailable', 'This recording’s file is missing or empty.'); return; } setPlayingUri(recording.file_uri); }} onRename={rename} onDelete={deleteRecording} /><Pressable onPress={() => void shareAudio(item)}><Text style={styles.action}>Export</Text></Pressable></View>)}
+        {playingUri ? <AudioPlayback uri={playingUri} onClose={() => setPlayingUri('')} /> : null}
       </View> : null}
       {status ? <Text accessibilityRole="alert" style={styles.status}>{status}</Text> : null}
       <Text style={styles.revision}>Revision {note.revision} · {new Date(note.updatedAt).toLocaleString()}</Text>
-    </ScrollView>
+  </ScrollView>
   </KeyboardAvoidingView></SafeAreaView>;
 }
 
