@@ -2,7 +2,9 @@ noteOS Web local runtime verification
 Captured: 2026-10-21
 
 Runtime
-- URL: http://127.0.0.1:3000/ — HTTP 200 (measured with curl; 0.026 s at capture).
+- Canonical URL: http://noteos.localhost/ — HTTP 200; direct http://127.0.0.1:15700/ — HTTP 200.
+- Dev Hub registry now matches container noteos-web-1 and internal port 3000; live dashboard reports OBSERVED/running on host port 15700.
+- Host port 3000 removed at user request; the container's internal Next.js port remains 3000.
 - Docker Compose project: noteos; service/container: web / noteos-web-1.
 - Compose health: healthy; running noteOS containers: web only; container mounts: 0.
 - No database/API/PowerSync/Mongo/Redis services were started.
@@ -16,6 +18,7 @@ Build and tests
 - Docker build's `npm install` reported 2 moderate advisories. No audit fix/dependency change was applied.
 
 Chrome browser acceptance
+- Original full acceptance used the earlier http://127.0.0.1:3000 origin. Canonical hostname Home was separately checked in Chrome after the port correction; stored browser data is origin-specific and was not migrated.
 - Home and note editor loaded; no fatal UI errors; console error list empty in both tested tabs.
 - QA note create/edit, checklist check/uncheck, tag, pin and refresh persistence — PASS.
 - Same-note two-tab stale edit produced conflict UI and preserved the draft; “Save this draft as a new note” created a separate copy — PASS.
