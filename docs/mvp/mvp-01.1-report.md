@@ -1,5 +1,7 @@
 # noteOS MVP-01.1 — Quality & Runtime Acceptance
 
+> Historical workflow acceptance. Gemini Round 04 identified F-01–F-05 afterward; MVP-01.1 was not data-safety acceptance. See [MVP-01.2 patch and regression evidence](mvp-01.2-report.md).
+
 - **Scope:** MVP-01 local-first Web notes only.
 - **Result:** **PASS WITH LIMITS** for the tested Web workflows.
 - **Sync engine:** UNDECIDED. No MVP-02, Phase 01, iPhone build, or production deployment was started.

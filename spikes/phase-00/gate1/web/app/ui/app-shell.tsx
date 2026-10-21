@@ -1,6 +1,6 @@
 'use client';
 
-import Link from 'next/link';
+import { GuardedLink as Link, NavigationGuardProvider } from './navigation-guard';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
 
@@ -26,7 +26,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }).catch(() => {});
     return () => { active = false; };
   }, []);
-  return <div className="app-frame">
+  return <NavigationGuardProvider><div className="app-frame">
     <aside className="rail">
       <Link href="/" className="brand"><span className="brand-mark">n</span>noteOS</Link>
       <nav className="nav-group" aria-label="Main navigation"><NavLinks pathname={pathname} /></nav>
@@ -39,5 +39,5 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <header className="mobile-head"><Link href="/" className="brand"><span className="brand-mark">n</span>noteOS</Link><nav className="mobile-nav" aria-label="Main navigation"><NavLinks pathname={pathname} /></nav></header>
       <main className="main-content">{children}</main>
     </div>
-  </div>;
+  </div></NavigationGuardProvider>;
 }

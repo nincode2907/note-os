@@ -1,4 +1,5 @@
-import { validateCanonicalDocument } from '../../packages/document-engine/src/index.js';
+import { assertNoteRecord, validateNoteDocument } from './note-validation.mjs';
+export { NoteDocumentError } from './note-validation.mjs';
 
 const DATABASE_NAME = 'noteos-mvp-01';
 const DATABASE_VERSION = 1;
@@ -30,14 +31,6 @@ export class NoteStateError extends Error {
   constructor(message) {
     super(message);
     this.name = 'NoteStateError';
-  }
-}
-
-export class NoteDocumentError extends Error {
-  constructor(message, issues = []) {
-    super(message);
-    this.name = 'NoteDocumentError';
-    this.issues = issues;
   }
 }
 
@@ -76,25 +69,6 @@ export function makeEmptyNote(now = Date.now(), id = crypto.randomUUID()) {
 
 function assertExpectedRevision(revision) {
   if (!Number.isInteger(revision) || revision < 0) throw new TypeError('An expected note revision is required.');
-}
-
-function validateNoteDocument(document, allowUnsupported) {
-  const result = validateCanonicalDocument(document);
-  if (result.status === 'invalid' || (!allowUnsupported && result.status !== 'supported')) {
-    const message = result.issues?.[0]?.message ?? 'The note document cannot be safely written.';
-    throw new NoteDocumentError(message, result.issues ?? []);
-  }
-  return result;
-}
-
-function assertNoteRecord(note, { allowUnsupported = false } = {}) {
-  if (!note || typeof note.id !== 'string' || !note.id.trim()) throw new TypeError('A note requires a stable ID.');
-  if (typeof note.title !== 'string') throw new TypeError('A note title must be a string.');
-  if (!Number.isInteger(note.schemaVersion) || note.schemaVersion < 1) throw new TypeError('A note requires a supported record schema version.');
-  if (!Number.isFinite(note.createdAt) || !Number.isFinite(note.updatedAt)) throw new TypeError('A note requires valid creation and update timestamps.');
-  if (!['active', 'archived', 'trashed'].includes(note.lifecycle)) throw new TypeError('A note requires a valid lifecycle.');
-  if (!Number.isInteger(note.revision) || note.revision < 0) throw new TypeError('A note requires a valid revision.');
-  validateNoteDocument(note.document, allowUnsupported);
 }
 
 export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, databaseName = DATABASE_NAME) {
@@ -221,6 +195,7 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
       if (current.lifecycle !== 'trashed') throw abort(transaction, new NoteStateError('Only trashed notes can be permanently deleted.'));
       store.delete(id);
       await done;
+      return current;
     } catch (error) {
       try { await done; } catch { /* Consume the abort before returning the original error. */ }
       throw error;

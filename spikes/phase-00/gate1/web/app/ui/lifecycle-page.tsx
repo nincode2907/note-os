@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { recoveryEntries, finishDeletedNote, recoveryStorage } from '../lib/recovery-journal.mjs';
 import { useEffect, useState } from 'react';
 import { createNotesRepository, NoteConflictError, NoteNotFoundError } from '../lib/local-notes.js';
 
@@ -21,7 +22,7 @@ export function LifecyclePage({ lifecycle }: { lifecycle: 'archived' | 'trashed'
   }
   async function deleteForever() {
     if (!pending || !backupRequested || !backupConfirmed) return;
-    try { await repo.deleteForever(pending.id, pending.revision); setPending(null); setBackupRequested(false); setBackupConfirmed(false); await refresh(); }
+    try { const entries = recoveryEntries(recoveryStorage(), pending.id); const deleted = await repo.deleteForever(pending.id, pending.revision); finishDeletedNote(recoveryStorage(), deleted, entries); setPending(null); setBackupRequested(false); setBackupConfirmed(false); await refresh(); }
     catch (e) {
       if (e instanceof NoteConflictError) setError('This note changed in another tab. It was not deleted. Review the refreshed note and start the confirmation again.');
       else if (e instanceof NoteNotFoundError) setError('This note was already removed in another tab. The list has been refreshed.');

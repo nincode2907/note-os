@@ -1,3 +1,5 @@
+import { assertNoteRecord } from './note-validation.mjs';
+
 export const BACKUP_FORMAT = 'noteos.local-backup';
 export const BACKUP_VERSION = 1;
 
@@ -42,12 +44,7 @@ export function parseBackup(input) {
   const ids = new Set();
   for (const note of bundle.notes) {
     if (!note || typeof note.id !== 'string' || !note.id.trim() || ids.has(note.id)) throw new TypeError('Backup contains a missing or duplicate note ID.');
-    if (typeof note.title !== 'string' || !note.document || typeof note.document !== 'object' || note.document.type !== 'doc' || !Array.isArray(note.document.content) || !Number.isFinite(note.createdAt) || !Number.isFinite(note.updatedAt) || !['active', 'archived', 'trashed'].includes(note.lifecycle) || !Number.isInteger(note.revision) || note.revision < 0) {
-      throw new TypeError(`Backup note “${note.id}” has invalid metadata.`);
-    }
-    if (!Number.isInteger(note.schemaVersion) || note.schemaVersion < 1 || !Number.isInteger(note.document.schemaVersion) || note.document.schemaVersion < 1) {
-      throw new TypeError(`Backup note “${note.id}” has invalid schema metadata.`);
-    }
+    assertNoteRecord(note, { allowUnsupported: true });
     ids.add(note.id);
   }
   return bundle;
