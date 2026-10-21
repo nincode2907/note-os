@@ -62,4 +62,4 @@ From `spikes/phase-00/gate1/mobile/`, run `npm install`, `npm run expo-check`, `
 
 ## Git delivery
 
-Commit and push identifiers are recorded in the audit handoff after repository delivery. Existing unrelated Phase 00 working-tree changes and previous review artifacts are preserved and excluded from the MVP-04 commit.
+Implementation commit: `adf9bb946eb54f27f1653d1f0ac63572989156c5` (`feat(mvp04): add native iPhone prototype spike`). The review bundle is prepared as a separate handoff artifact. Existing unrelated Phase 00 working-tree changes and previous review artifacts are preserved and excluded from the implementation commit.

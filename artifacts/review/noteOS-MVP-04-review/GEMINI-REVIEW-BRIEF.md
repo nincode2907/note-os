@@ -1,0 +1,14 @@
+# Gemini review brief — noteOS MVP-04 iPhone prototype
+
+Review the isolated prototype in `spikes/phase-00/gate1/mobile/` against the approved MVP-04 brief and Phase 00 repository constraints. Please focus on these risks:
+
+1. **SQLite integrity:** review `store.ts` schema initialization, `user_version`, transaction boundaries, revision compare-and-swap, import collision behavior, note deletion and what happens if the app terminates during a write. No native SQLite runtime evidence exists yet.
+2. **Canonical preservation:** the app imports Web `validateCanonicalDocument`, `assertNoteRecord` and `parseBackup`; audit read-only decisions in `document-subset.ts`, lifecycle updates of future-schema notes and whether native edits preserve exact canonical semantics for the supported subset. The editor supports only plain paragraphs and a flat task list.
+3. **Editor safety:** review draft retention and navigation confirmation, stale-revision behavior, title/tag/pin edits, checklist toggling and empty paragraph handling. Richer structures must remain read-only.
+4. **Audio lifecycle:** inspect permission request timing, document-directory recording, stop/finalize/file verification before `complete`, interrupted recording handling, playback after restart, export/rename/delete ordering and orphan-file recovery. Expo audio behavior is unverified on device.
+5. **Interruption and privacy:** verify app background handling, local-only storage, no network/cloud/STT, no background recording and no audio in notes backup. Filesystem and SQLite writes cannot be one atomic operation.
+6. **Backup compatibility:** confirm `noteos.local-backup` v1 round-trip shape matches the Web parser, duplicate IDs fail without overwriting, future/invalid notes fail closed, and tags/pin/checklist state survive. Synthetic parser tests pass; native Files workflow does not yet.
+7. **Evidence truthfulness:** all native UI/runtime gates are BLOCKED because the host has command line tools only, `simctl`/`devicectl` are missing and no physical iPhone is attached. The 3.1 MB Hermes export is JavaScript bundling evidence only. No screenshots, native install, SQLite restart, microphone or p50/p95 result is claimed.
+8. **Dependency advisories:** `npm audit --omit=dev --audit-level=high` reports 23 advisories (8 moderate, 15 high) in the Expo/Metro/config dependency graph: `braces@3.0.3`, `node-forge@1.4.0`, `uuid@7.0.3`. The installed `braces` and `node-forge` GitHub advisories show no patched version; npm suggests a breaking Expo 44.0.6 downgrade, which was not applied. Assess reachability in the local development/build toolchain and the next safe upstream remediation.
+
+Please classify each finding with severity and state whether this Phase 00 prototype is safe to advance to an Xcode/device validation session. Do not treat the BLOCKED gates as PASS.

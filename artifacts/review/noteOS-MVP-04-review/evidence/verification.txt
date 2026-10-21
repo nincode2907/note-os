@@ -1,0 +1,36 @@
+noteOS MVP-04 verification record
+Date: 2026-10-21 (Asia/Ho_Chi_Minh)
+
+Environment
+- macOS 15.7.7 (24G720)
+- Node.js v24.21.0; npm 11.19.0
+- Expo SDK 58.0.16; React Native 0.88.0; React 19.3.0
+- expo-dev-client 58.0.14
+- expo-sqlite 58.0.13; expo-audio 58.0.9; expo-file-system 58.0.10
+- expo-document-picker 58.0.4; expo-sharing 58.0.19
+
+PASS
+- npm run expo-check: Dependencies are up to date for SDK 58.0.16.
+- npm run typecheck: tsc --noEmit exited 0.
+- npm test: 4 tests passed, 0 failed. Synthetic fixtures only.
+- npm run export:ios: Metro bundled 977 modules; emitted 3.1 MB Hermes JavaScript bundle. This is not a native build or app launch.
+- git diff --cached --check: no whitespace errors in implementation commit.
+
+FAIL / FINDING
+- npm audit --omit=dev --audit-level=high exited 1: 23 advisories, 8 moderate and 15 high, in the Expo/Metro/config tree. Relevant installed paths include braces@3.0.3, node-forge@1.4.0 and uuid@7.0.3. Current GitHub advisories show no patched versions for braces and node-forge. npm's forced resolution suggested downgrading Expo to 44.0.6; that was not applied.
+
+BLOCKED — native runtime
+- xcode-select -p: /Library/Developer/CommandLineTools.
+- xcodebuild -version: full Xcode is required; active path is Command Line Tools.
+- xcrun simctl list devices available: utility unavailable.
+- xcrun devicectl list devices: utility unavailable.
+- No attached iPhone was detected in preflight.
+- No native install, simulator launch, actual SQLite restart persistence, microphone permission/recording, audio playback/export, physical keyboard, offline hardware run, screenshots or device diagnostics are claimed.
+
+Test data: canonical v1 synthetic Vietnamese/Japanese note with tags, pin state, and checked/unchecked checklist items. No personal note content or microphone files were used.
+
+Gate A: BLOCKED pending native SQLite/runtime evidence.
+Gate B: BLOCKED pending native microphone/audio/file lifecycle evidence.
+Gate C: BLOCKED pending Xcode and physical iPhone.
+
+Timing/resource use: p50/p95, memory and disk usage were not measured because no native runtime was available. Bundle byte size is an export artifact, not app resource usage.
