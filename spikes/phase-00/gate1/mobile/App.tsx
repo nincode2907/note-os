@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, AppState, Button, FlatList, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, usePreventRemove } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { AudioModule, RecordingPresets, setAudioModeAsync, useAudioPlayer, useAudioRecorder, useAudioRecorderState } from 'expo-audio';
@@ -94,7 +94,7 @@ function AudioPlayback({ uri, onClose }: { uri: string; onClose: () => void }) {
 
 function EditorScreen({ route, navigation }: any) {
   const [note, setNote] = useState<Note | null>(null); const [title, setTitle] = useState(''); const [paragraphs, setParagraphs] = useState<string[]>([]); const [tasks, setTasks] = useState<{ text: string; checked: boolean }[]>([]); const [tags, setTags] = useState(''); const [pinned, setPinned] = useState(false); const [editable, setEditable] = useState(false); const [readOnlyReason, setReadOnlyReason] = useState(''); const [dirty, setDirty] = useState(false); const [status, setStatus] = useState(''); const [recordings, setRecordings] = useState<Recording[]>([]); const [recordingPhase, setRecordingPhase] = useState('idle'); const [recoveryHeld, setRecoveryHeld] = useState(false); const [playingUri, setPlayingUri] = useState('');
-  const allowLeaveRef = useRef(false); const gateRef = useRef(new RecordingSessionGate()); const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null); const draftWriter = useRef<LatestDraftWriter | null>(null); const latestRef = useRef<any>(null); const recoveryBaseRef = useRef<number | null>(null);
+  const gateRef = useRef(new RecordingSessionGate()); const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null); const draftWriter = useRef<LatestDraftWriter | null>(null); const latestRef = useRef<any>(null); const recoveryBaseRef = useRef<number | null>(null);
   if (!draftWriter.current) draftWriter.current = new LatestDraftWriter((value: { id: string; revision: number; draft: RecoveryDraft }) => saveRecoveryDraft(value.id, value.revision, value.draft));
   function snapshotDraft() { if (!note) return null; return { id: note.id, revision: note.revision, draft: { version: 1 as const, baseRevision: note.revision, title, document: nativeModelToDocument(paragraphs, tasks), tagsText: tags, pinned } }; }
   async function flushDraft() { if (draftTimer.current) { clearTimeout(draftTimer.current); draftTimer.current = null; } const latest = snapshotDraft(); if (latest && dirty) { latestRef.current = latest; draftWriter.current?.enqueue(latest); } await draftWriter.current?.flush(); }
@@ -133,14 +133,14 @@ function EditorScreen({ route, navigation }: any) {
       if (draftTimer.current) clearTimeout(draftTimer.current); latestRef.current = null; draftWriter.current?.clearPending(); setNote(updated); setDirty(false); setStatus('Saved on this device.'); return true;
     } catch (error) { setStatus(error instanceof RevisionConflictError ? `${error.message} Your unsaved draft is still here.` : error instanceof Error ? error.message : 'Could not save.'); return false; }
   }
-  function back() {
+  function back(action: any) {
     if (!gateRef.current.canNavigate()) { setStatus('Stop and save the recording before leaving this note.'); return; }
-    if (!dirty) { allowLeaveRef.current = true; navigation.goBack(); return; }
+    if (!dirty) { navigation.dispatch(action); return; }
     Alert.alert('Unsaved changes', 'Save this draft before leaving?', [
-      { text: 'Keep editing', style: 'cancel' }, { text: 'Discard', style: 'destructive', onPress: () => { void (async () => { try { await flushDraft(); if (note && recoveryBaseRef.current !== null) await discardRecoveryDraft(note.id, recoveryBaseRef.current); allowLeaveRef.current = true; navigation.goBack(); } catch (error) { setStatus(`Draft was kept because discard did not commit: ${String(error)}`); } })(); } }, { text: 'Save', onPress: () => { void (async () => { if (await save()) { allowLeaveRef.current = true; navigation.goBack(); } })(); } },
+      { text: 'Keep editing', style: 'cancel' }, { text: 'Discard', style: 'destructive', onPress: () => { void (async () => { try { await flushDraft(); if (note && recoveryBaseRef.current !== null) await discardRecoveryDraft(note.id, recoveryBaseRef.current); navigation.dispatch(action); } catch (error) { setStatus(`Draft was kept because discard did not commit: ${String(error)}`); } })(); } }, { text: 'Save', onPress: () => { void (async () => { if (await save()) navigation.dispatch(action); })(); } },
     ]);
   }
-  useEffect(() => { const unsubscribe = navigation.addListener('beforeRemove', (event: any) => { if (allowLeaveRef.current) { allowLeaveRef.current = false; return; } if (!gateRef.current.canNavigate()) { event.preventDefault(); setStatus('Stop and save the recording before leaving this note.'); return; } if (!dirty) return; event.preventDefault(); back(); }); return unsubscribe; }, [dirty, navigation, paragraphs, tasks, title, tags, note, editable]);
+  usePreventRemove(!gateRef.current.canNavigate() || dirty, ({ data }) => { if (!gateRef.current.canNavigate()) { setStatus('Stop and save the recording before leaving this note.'); return; } back(data.action); });
   async function startRecording() {
     const gate = gateRef.current; if (!gate.beginStart()) return; setRecordingPhase(gate.phase);
     try {
