@@ -1,0 +1,74 @@
+{
+  "format": "noteos.local-backup",
+  "version": 1,
+  "exportedAt": "2026-10-21T07:05:40.694Z",
+  "notes": [
+    {
+      "id": "500a6d9e-ad09-4f14-8d61-45a996e425b3",
+      "title": "Checklist — ghi chú 東京 🌿",
+      "document": {
+        "schemaVersion": 1,
+        "type": "doc",
+        "content": [
+          {
+            "type": "taskList",
+            "content": [
+              {
+                "type": "taskItem",
+                "attrs": {
+                  "checked": true
+                },
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "Mua cà phê ☕"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "taskItem",
+                "attrs": {
+                  "checked": false
+                },
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "marks": [
+                          {
+                            "type": "bold"
+                          }
+                        ],
+                        "text": "東京を記録する 🗒️"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "paragraph"
+          }
+        ]
+      },
+      "schemaVersion": 1,
+      "createdAt": 1792566334610,
+      "updatedAt": 1792566338340,
+      "lifecycle": "active",
+      "revision": 8,
+      "pinned": true,
+      "tags": [
+        "東京",
+        "Tiếng Việt"
+      ]
+    }
+  ]
+}

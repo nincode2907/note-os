@@ -1,0 +1,2568 @@
+noteOS MVP-03 — textual audit bundle
+UTF-8. Source commit: 38251bc2f45c7d6c7cdd1f60d3cb9a8b975252e1
+
+========================================================================================
+FILE: REVIEW-ME.md
+========================================================================================
+# Review noteOS MVP-03
+
+Start with `MVP-03-report.md`, then review `verification/` and the screenshots under `evidence/`. The browser fixtures contain synthetic notes only.
+
+## Quick status
+
+- Product acceptance: **PASS** for the tested local Web scope.
+- MVP tests, document tests, MVP-03 browser scenarios, MVP-01.2 regressions, audio/Web Lock regressions, typecheck, production build, and `git diff --check`: **PASS**.
+- Existing UI Lens runner: **PASS** (2/2 desktop/mobile captures). MVP-03-specific seeded UI Lens capture: **BLOCKED** because that capture run stalled before output; Playwright screenshots are included as fallback.
+- Real iPhone: **NOT RUN**. No iPhone result is claimed.
+
+## Contents
+
+- `MVP-03-report.md`: implementation, data-safety choices, results, limits, acceptance recommendation.
+- `source/`: complete current contents of every MVP-03 source/test/runner file changed or added.
+- `source/MVP-03.diff`: tracked-source diff against the implementation base.
+- `verification/`: machine-readable scenario results, diagnostics, and command summary.
+- `evidence/`: requested Playwright screenshots and browser diagnostics.
+- `SHA256SUMS.txt`: hashes for files in this package (excluding the manifest itself).
+
+The shared UI Lens project was not modified. No external network requests or personal data were used by the MVP-03 browser scenarios.
+
+========================================================================================
+FILE: MVP-03-report.md
+========================================================================================
+# noteOS MVP-03 — Checklist & Note Organization
+
+**Status:** Implementation and local verification complete; ready for Lead Architect acceptance.  
+**Scope:** Existing local-first Web spike. MVP-04 and native/iPhone work were not started.
+
+## Delivered
+
+- Added checklist insertion from the editor toolbar, check/uncheck persistence, keyboard Enter/Backspace handling, and mixed formatting in a single canonical document. The empty-note path inserts a first task item; the user can type into it after placing the editor cursor. No task database or canonical document schema change was introduced.
+- Added pin/unpin and flat tags to existing note records. Home puts pinned notes first, sorts pinned ties by `updatedAt`, and applies the selected sort to the remaining notes. Search includes tags; multiple selected tags use “match all” semantics. Search, sort, and tag filters persist locally.
+- Added editor tag suggestions from existing notes, duplicate prevention, accessible labels, filtered empty states, and mobile navigation that scrolls inside the nav instead of widening the page.
+- Kept unsupported record schemas read-only, even when their embedded document is v1. Existing unsupported document schemas remain read-only as before.
+
+## Storage and compatibility
+
+- Organization metadata is optional additive record data: `pinned: boolean` and `tags: string[]`. New notes initialize `false` and `[]`; legacy notes and v1 backups without those fields remain valid. The IndexedDB database version stays at 2, so no migration or data rewrite is required.
+- Tag labels are trimmed, non-empty, at most 32 Unicode code points, and reject ASCII control characters. A note can have at most 20 tags. Duplicate identity is NFC-normalized and case-insensitive; the first display spelling is preserved. Vietnamese and Japanese labels remain unchanged for display.
+- Organization writes use the existing IndexedDB transaction and expected revision. Editor pin/tag actions first flush through the save coordinator and recovery journal. Failed flushes and stale revisions leave the draft recoverable and do not commit metadata.
+- Archive, trash, and restore preserve organization fields. Permanent deletion retains its existing explicit confirmation and revision checks; audio stays attached through lifecycle changes and is removed only by the existing confirmed cascade.
+- Backup format remains version 1. Exports include optional organization fields; imports accept older records without them and validate new metadata before writing. No import overwrites a matching note ID.
+
+## Verification
+
+Environment: macOS 15.7.7 (Darwin 24.6.0, arm64), Node 24.21.0, Next.js 16.4.2, React 19.3.1, Playwright 1.64.1, Chromium 156.0.8078.4. Browser tests used isolated contexts and synthetic note data only. No real notes, recordings, external AI, cloud service, or iPhone were used.
+
+| Check | Result | Evidence |
+|---|---|---|
+| MVP unit suite | **PASS** — 40 tests, 0 failures | `verification/mvp-unit.json` |
+| Document engine suite | **PASS** — 31 tests, 0 failures | `verification/document-engine.json` |
+| MVP-03 browser scenarios | **PASS** — checklist/tags/pin/search/sort/backup, two-tab conflict, mobile width; no console/page errors or external requests | `evidence/diagnostics.json` |
+| MVP-01.2 browser regression | **PASS** — 13 scenarios | `verification/mvp-01.2-browser.json` |
+| MVP-02 audio/Web Lock browser regression | **PASS** — 10 scenarios on isolated rerun; no console/page errors or external requests | `verification/mvp-02-audio-browser.json` |
+| Typecheck | **PASS** — `tsc --noEmit` | `verification/verification-summary.md` |
+| Production build | **PASS** — Next.js optimized build completed | `verification/verification-summary.md` |
+| `git diff --check` | **PASS** | `verification/verification-summary.md` |
+| UI Lens runner | **PASS** — existing runner rendered its audio-idle target at desktop and mobile (2/2); shared UI Lens files were not modified | `verification/ui-lens-existing-runner.json` |
+| MVP-03-specific UI Lens capture | **BLOCKED** — synthetic-fixture capture did not produce output before the runner was stopped; Playwright screenshots below are the review fallback | `verification/verification-summary.md` |
+
+The first audio regression attempt ran alongside another browser suite; one live-owner scenario timed out while the other nine passed. The isolated rerun passed all ten scenarios. The MVP-01.2 run recorded two aborted Next.js route-prefetch requests during expected navigation; it had no console errors, page errors, or external requests, and all 13 assertions passed.
+
+The build prints a Next.js workspace-root inference warning because both the gate1 parent and Web package contain lockfiles. It does not fail compilation or page generation. This MVP did not include a performance benchmark, so p50/p95 latency and resource measurements were not collected.
+
+## Screenshots
+
+- `evidence/editor-checklist-tags.png` — checked and unchecked Vietnamese/Japanese/emoji checklist items with pin and tags.
+- `evidence/home-pinned-tags-filtered.png` — pinned Home card and active tag filter.
+- `evidence/home-filtered-empty.png` — useful no-match state.
+- `evidence/mobile-home-navigation.png` — 390 × 844 viewport; document width equals viewport width.
+- `evidence/stale-tab-conflict.png` — local draft retained after a stale metadata write is rejected.
+
+Playwright Chromium generated these screenshots at desktop 1280 × 900 and mobile 390 × 844. UI Lens itself was restored by running its existing TypeScript runner with its installed `tsx` loader; the shared UI Lens project was left untouched.
+
+## Limitations and acceptance recommendation
+
+- This is local Web behavior only. No claim is made about real-iPhone behavior, synchronization, collaboration, or production deployment.
+- Home preferences are per-browser local storage and are not included in note backups; pin and tags are note metadata and are included.
+- The MVP-03-specific UI Lens fixture runner stalled before it emitted screenshots. Playwright produced and verified all requested review screens. UI Lens remains usable for its existing capture workflow.
+
+**Recommendation:** Accept MVP-03 for the tested single-device Web scope, subject to the Lead Architect’s review of the attached evidence and the MVP-03-specific UI Lens limitation.
+
+## Git delivery
+
+**Source implementation commit:** `38251bc2f45c7d6c7cdd1f60d3cb9a8b975252e1` on `main`. Push verification is recorded in the final delivery message; unrelated Phase 00 edits and older review artifacts remain outside this commit.
+
+========================================================================================
+FILE: verification/verification-summary.md
+========================================================================================
+# Verification summary
+
+Date: 2026-10-21. All browser scenarios used synthetic notes and isolated browser contexts.
+
+## PASS
+
+- `rtk npm --prefix spikes/phase-00/gate1/web run test:mvp` — 40 tests passed, 0 failed.
+- `rtk npm --prefix spikes/phase-00/gate1/web run test:documents` — 31 tests passed, 0 failed.
+- `rtk npm --prefix spikes/phase-00/gate1/web run test:mvp03-browser` — 3 scenarios passed: checklist/tags/pin/search/sort/backup, stale-tab organization conflict, 390px mobile navigation. Chromium 156.0.8078.4; 0 console errors, 0 page errors, 0 external requests.
+- `rtk node spikes/phase-00/gate1/web/scripts/mvp-01.2-browser.mjs` — 13 scenarios passed. Two route-prefetch requests were aborted during expected navigation; no console/page errors or external requests.
+- `rtk npm --prefix spikes/phase-00/gate1/web run test:audio-browser` — isolated rerun: 10/10 scenarios passed, including recording playback/export, Web Lock ownership, lifecycle retention, and explicit delete cascade. Chromium 156.0.8078.4; no console/page errors or external requests.
+- `rtk npm --prefix spikes/phase-00/gate1/web run typecheck` — passed.
+- `rtk npm --prefix spikes/phase-00/gate1/web run build` — passed. Next.js emitted its workspace-root inference warning because both gate1 and Web have lockfiles; build and static page generation completed.
+- `rtk git diff --check` — passed.
+- Existing UI Lens MVP-02 runner, invoked with the installed `tsx` loader and `NOTEOS_UI_TARGETS=audio-idle` — completed, desktop + mobile 2/2 passed. Manifest and diagnostics are included.
+
+## BLOCKED / fallback
+
+- MVP-03-specific UI Lens capture used a local synthetic IndexedDB fixture but stalled before writing any capture artifacts. The run was stopped after no progress; no UI Lens source was changed. Direct Playwright Chromium screenshots are included for all required MVP-03 screens.
+- Real iPhone testing was not run; no real-device result is claimed.
+
+## Environment
+
+- macOS 15.7.7, Darwin 24.6.0, arm64.
+- Node 24.21.0; Next.js 16.4.2; React 19.3.1; Playwright 1.64.1; Chromium 156.0.8078.4.
+- No performance benchmark was part of MVP-03. p50/p95 and resource use were not measured.
+
+========================================================================================
+FILE: verification/mvp-unit.json
+========================================================================================
+{
+  "command": "rtk npm --prefix spikes/phase-00/gate1/web run test:mvp",
+  "status": "PASS",
+  "tests": 40,
+  "passed": 40,
+  "failed": 0,
+  "includes": ["organization metadata revision guard", "future record schema read-only", "lifecycle metadata preservation", "backup v1 compatibility", "tag validation and filtering", "coordinator serialization and recovery"]
+}
+
+========================================================================================
+FILE: verification/document-engine.json
+========================================================================================
+{
+  "command": "rtk npm --prefix spikes/phase-00/gate1/web run test:documents",
+  "status": "PASS",
+  "tests": 31,
+  "passed": 31,
+  "failed": 0,
+  "coverage": ["canonical v1 checklist schema", "task checked-state attributes", "Vietnamese, Japanese, emoji preservation", "future schema read-only behavior"]
+}
+
+========================================================================================
+FILE: verification/mvp-01.2-browser.json
+========================================================================================
+{
+  "browser": "156.0.8078.4",
+  "results": [
+    {
+      "name": "F-01 recovery updates live body/title, continued editing survives reload",
+      "status": "PASS"
+    },
+    {
+      "name": "F-01 failed recovery save retains journal; explicit Keep saved version resets live editor safely",
+      "status": "PASS"
+    },
+    {
+      "name": "F-01 concurrent recovery revision stays safe and offers a separate recovered note",
+      "status": "PASS"
+    },
+    {
+      "name": "F-02 stale two-tab revision blocks Archive",
+      "status": "PASS"
+    },
+    {
+      "name": "F-02 stale two-tab revision blocks Move to trash",
+      "status": "PASS"
+    },
+    {
+      "name": "F-02 save failure blocks Archive and preserves body/title/journal",
+      "status": "PASS"
+    },
+    {
+      "name": "F-02 immediate Archive flushes latest text; untouched lifecycle adds only one revision; restore/trash happy paths",
+      "status": "PASS"
+    },
+    {
+      "name": "F-03 delayed real IndexedDB transaction + A/B/C edits + Archive serialize to latest",
+      "status": "PASS"
+    },
+    {
+      "name": "F-04 immediate back navigation flushes under 650ms",
+      "status": "PASS"
+    },
+    {
+      "name": "F-04 immediate sidebar navigation flushes under 650ms",
+      "status": "PASS"
+    },
+    {
+      "name": "F-04 failed flush blocks sidebar navigation and retains latest draft",
+      "status": "PASS"
+    },
+    {
+      "name": "F-05 delete/reimport same ID removes stale journal and retains newer journal as copy only",
+      "status": "PASS"
+    },
+    {
+      "name": "MVP-01.1 smoke: search Unicode, backup download/collision, future readonly, missing ID does not resurrect",
+      "status": "PASS"
+    }
+  ],
+  "diagnostics": {
+    "consoleErrors": [],
+    "pageErrors": [],
+    "failedRequests": [
+      {
+        "url": "http://127.0.0.1:3000/archive?_rsc=HkQM4FakTjqo97So",
+        "error": "net::ERR_ABORTED"
+      },
+      {
+        "url": "http://127.0.0.1:3000/trash?_rsc=DblsX14lCUeSmvnv",
+        "error": "net::ERR_ABORTED"
+      }
+    ],
+    "externalRequests": []
+  }
+}
+
+========================================================================================
+FILE: verification/mvp-02-audio-browser.json
+========================================================================================
+{
+  "browser": "156.0.8078.4",
+  "launch": "Chromium fake audio device; no physical microphone input",
+  "results": [
+    {
+      "name": "unsupported-browser-api",
+      "status": "PASS"
+    },
+    {
+      "name": "permission-denied",
+      "status": "PASS"
+    },
+    {
+      "name": "record-pause-resume-reload-play-export",
+      "status": "PASS"
+    },
+    {
+      "name": "multiple-recordings-and-explicit-delete",
+      "status": "PASS"
+    },
+    {
+      "name": "storage-failure-keeps-interrupted-chunks",
+      "status": "PASS"
+    },
+    {
+      "name": "reload-recovers-partial-session",
+      "status": "PASS"
+    },
+    {
+      "name": "copied-session-id-and-live-owner-protection",
+      "status": "PASS"
+    },
+    {
+      "name": "unsupported-locks-preserve-unfinished-session",
+      "status": "PASS"
+    },
+    {
+      "name": "active-recording-blocks-navigation-and-lifecycle",
+      "status": "PASS"
+    },
+    {
+      "name": "archive-trash-preserve-recordings-and-delete-cascade",
+      "status": "PASS"
+    }
+  ],
+  "diagnostics": {
+    "consoleErrors": [],
+    "pageErrors": [],
+    "externalRequests": []
+  }
+}
+
+========================================================================================
+FILE: verification/ui-lens-existing-runner.json
+========================================================================================
+{
+  "schema_version": 1,
+  "tool": "UI Lens",
+  "tool_version": "0.1.0",
+  "project": "noteOS MVP-02 Local Audio",
+  "captured_at": "2026-10-21T06:28:56.945Z",
+  "base_url": "http://127.0.0.1:3000",
+  "git": {
+    "branch": "main",
+    "commit": "29536a3c175dc675f08cf5b7caf84a51c0d6a6b6",
+    "dirty": true
+  },
+  "targets": [
+    {
+      "target_id": "audio-idle",
+      "target_name": "noteOS MVP-02 audio-idle",
+      "route": "/notes/capture-audio-idle",
+      "url": "http://127.0.0.1:3000/notes/capture-audio-idle",
+      "viewport": {
+        "id": "desktop",
+        "width": 1440,
+        "height": 1000,
+        "deviceScaleFactor": 1
+      },
+      "screenshot": "audio-idle/desktop.png",
+      "pdf": null,
+      "capture_mode": "fullPage",
+      "duration_ms": 786,
+      "captured_at": "2026-10-21T06:28:57.125Z",
+      "console_error_count": 0,
+      "console_warning_count": 0,
+      "page_error_count": 0,
+      "failed_request_count": 0,
+      "http_error_count": 0,
+      "success": true
+    },
+    {
+      "target_id": "audio-idle",
+      "target_name": "noteOS MVP-02 audio-idle",
+      "route": "/notes/capture-audio-idle",
+      "url": "http://127.0.0.1:3000/notes/capture-audio-idle",
+      "viewport": {
+        "id": "mobile",
+        "width": 390,
+        "height": 844,
+        "deviceScaleFactor": 1
+      },
+      "screenshot": "audio-idle/mobile.png",
+      "pdf": null,
+      "capture_mode": "fullPage",
+      "duration_ms": 705,
+      "captured_at": "2026-10-21T06:28:57.911Z",
+      "console_error_count": 0,
+      "console_warning_count": 0,
+      "page_error_count": 0,
+      "failed_request_count": 0,
+      "http_error_count": 0,
+      "success": true
+    }
+  ],
+  "summary": {
+    "passed": 2,
+    "failed": 0
+  }
+}
+
+========================================================================================
+FILE: verification/ui-lens-existing-diagnostics.json
+========================================================================================
+{
+  "schema_version": 1,
+  "enabled": true,
+  "entries": [
+    {
+      "project": "noteOS MVP-02 Local Audio",
+      "target": "audio-idle",
+      "viewport": "desktop",
+      "timestamp": "2026-10-21T06:28:57.125Z",
+      "data": {
+        "consoleErrors": [],
+        "consoleWarnings": [],
+        "pageErrors": [],
+        "failedRequests": [],
+        "httpErrors": []
+      }
+    },
+    {
+      "project": "noteOS MVP-02 Local Audio",
+      "target": "audio-idle",
+      "viewport": "mobile",
+      "timestamp": "2026-10-21T06:28:57.911Z",
+      "data": {
+        "consoleErrors": [],
+        "consoleWarnings": [],
+        "pageErrors": [],
+        "failedRequests": [],
+        "httpErrors": []
+      }
+    }
+  ]
+}
+
+========================================================================================
+FILE: verification/ui-lens-mvp03-attempt.json
+========================================================================================
+{
+  "status": "BLOCKED",
+  "runner": "UI Lens capture API from the shared local UI Lens repository, imported through its existing tsx loader",
+  "targets": ["home-pinned", "editor-checklist", "mobile-navigation"],
+  "result": "The seeded capture run did not produce per-target output or a manifest before it was stopped after no visible progress.",
+  "sharedProjectModified": false,
+  "fallback": "Playwright 1.64.1 screenshots in evidence/",
+  "note": "The existing UI Lens runner itself completed its audio-idle desktop/mobile capture successfully; the block is specific to this MVP-03 fixture run."
+}
+
+========================================================================================
+FILE: evidence/diagnostics.json
+========================================================================================
+{
+  "results": [
+    {
+      "name": "checklist-tags-pin-search-backup",
+      "status": "PASS"
+    },
+    {
+      "name": "stale-tab-organization-conflict",
+      "status": "PASS"
+    },
+    {
+      "name": "mobile-navigation-width",
+      "status": "PASS"
+    }
+  ],
+  "diagnostics": {
+    "browser": "156.0.8078.4",
+    "consoleErrors": [],
+    "pageErrors": [],
+    "externalRequests": []
+  }
+}
+
+========================================================================================
+FILE: source/MVP-03.diff
+========================================================================================
+spikes/phase-00/gate1/web/app/globals.css          |  4 +
+ spikes/phase-00/gate1/web/app/lib/local-notes.js   | 35 +++++++-
+ .../gate1/web/app/lib/local-notes.test.mjs         | 36 ++++++++
+ spikes/phase-00/gate1/web/app/lib/mvp-utils.mjs    | 29 ++++++-
+ .../phase-00/gate1/web/app/lib/mvp-utils.test.mjs  | 40 ++++++++-
+ .../phase-00/gate1/web/app/lib/note-validation.mjs |  2 +
+ .../gate1/web/app/lib/save-coordinator.mjs         | 15 +++-
+ .../gate1/web/app/lib/save-coordinator.test.mjs    | 30 +++++++
+ spikes/phase-00/gate1/web/app/notes/[id]/page.tsx  | 62 ++++++++++++--
+ spikes/phase-00/gate1/web/app/page.tsx             | 95 +++++++++++++++++++---
+ spikes/phase-00/gate1/web/package.json             |  1 +
+ 11 files changed, 329 insertions(+), 20 deletions(-)
+
+--- Changes ---
+
+spikes/phase-00/gate1/web/app/globals.css
+  @@ -5,3 +5,7 @@
+  +
+  +.notes-controls{display:flex;align-items:center;gap:18px;margin-bottom:14px}.notes-controls .search-row{flex:1;min-width:0;margin-bottom:0}.notes-controls .searchbox{flex:1;min-width:0}.sort-control{display:flex;align-items:center;gap:9px;color:var(--muted);font-size:12px}.sort-control select{max-width:190px;padding:10px 30px 10px 11px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink)}.tag-filter-row{display:flex;align-items:center;flex-wrap:wrap;gap:7px;margin:0 0 22px}.tag-chip{display:inline-flex;align-items:center;gap:5px;max-width:100%;padding:5px 9px;border:1px solid #e4ddd1;border-radius:999px;background:#f5f1e9;color:#596371;font-size:11px;line-height:1.35;overflow-wrap:anywhere}.tag-filter{cursor:pointer}.tag-filter:hover,.tag-filter.is-selected{border-color:#c89371;background:#f2e4d7;color:#563d2e}.text-button{padding:5px 7px;border:0;background:transparent;color:#68717b;font-size:12px;text-decoration:underline;text-underline-offset:3px}.note-card-top{display:flex;align-items:center;justify-content:space-between;min-height:28px;margin-bottom:8px}.note-pin-state{color:#a36b45;font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}.pin-button{padding:6px 9px;border:1px solid #e4ddd1;border-radius:7px;background:transparent;color:#68717b;font-size:12px;font-weight:600;cursor:pointer}.pin-button:hover:not(:disabled),.pin-button[aria-pressed=true]{border-color:#d7b195;background:#f7eee5;color:#68482f}.pin-button:disabled{cursor:not-allowed;opacity:.55}.note-card-link{display:block;flex:1;color:inherit}.note-card-link:hover{color:inherit}.note-card-link h2{margin-bottom:8px}.note-card-tags{display:flex;flex-wrap:wrap;gap:5px;margin-top:12px}.note-card-tags .tag-chip{border:0;padding:4px 7px;cursor:pointer}.note-card-tags .tag-chip:hover{background:#eee2d6}.note-open-label{display:inline-block;margin-top:10px;color:#8a7565;font-size:11px}.note-organization{display:grid;gap:13px;padding:12px 0 16px;border-bottom:1px solid var(--line)}.organization-pin-row,.organization-tags{display:flex;align-items:center;flex-wrap:wrap;gap:8px}.organization-pin-row{justify-content:space-between}.organization-tags .toolbar-label{margin-right:2px}.editor-tag{padding-right:4px}.editor-tag button{width:22px;height:22px;border:0;border-radius:50%;background:transparent;color:#68717b;font-size:17px;line-height:1;cursor:pointer}.editor-tag button:hover:not(:disabled){background:#e7ded2}.editor-tag button:disabled{opacity:.5}.tag-empty{color:#8b9196;font-size:12px}.tag-entry{display:flex;gap:8px;max-width:520px}.tag-entry .searchbox{flex:1;min-width:0}.tag-entry .btn{white-space:nowrap}
+  +@media(max-width:650px){.mobile-head{flex-direction:column;align-items:stretch;gap:8px}.mobile-head .brand{align-self:flex-start}.mobile-nav{width:100%;overflow-x:auto;overscroll-behavior-inline:contain;scrollbar-width:none}.mobile-nav::-webkit-scrollbar{display:none}.mobile-nav .nav-link{flex:0 0 auto;white-space:nowrap}.notes-controls{align-items:stretch;flex-direction:column;gap:10px}.notes-controls .search-row{width:100%}.notes-controls .search-row .toolbar-label{white-space:nowrap}.sort-control{justify-content:space-between}.sort-control select{flex:1;max-width:none}.tag-filter-row{gap:6px;margin-bottom:17px}.note-card{min-width:0}.note-card-top{margin-bottom:5px}.note-organization{padding:10px 0 14px}.tag-entry{width:100%}.tag-entry .searchbox{width:100%}}
+  +.editor-content ul[data-type="taskList"]{list-style:none;padding-left:0}
+  +4 -0
+
+spikes/phase-00/gate1/web/app/lib/local-notes.js
+  @@ -1,4 +1,5 @@
+  +import { normalizeTagList } from './note-organization.mjs';
+   export { NoteDocumentError } from './note-validation.mjs';
+   
+   const DATABASE_NAME = 'noteos-mvp-01';
+  @@ -66,6 +67,8 @@ export function makeEmptyNote(now = Date.now(), id = crypto.randomUUID()) {
+  +    pinned: false,
+  +    tags: [],
+     };
+   }
+   
+  @@ -155,6 +158,7 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
+  +      if (current.schemaVersion !== 1) throw abort(transaction, new NoteStateError('This note record uses a newer schema and is read-only in this version.'));
+         if (current.lifecycle === 'trashed') throw abort(transaction, new NoteStateError('Restore a trashed note before editing it.'));
+         const updated = {
+           ...current,
+  @@ -172,6 +176,35 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
+  +  async function updateOrganization(id, changes, expectedRevision) {
+  +    assertExpectedRevision(expectedRevision);
+  +    if (!changes || typeof changes !== 'object' || Array.isArray(changes)) throw new TypeError('Organization changes must be an object.');
+  +    const hasPinned = Object.hasOwn(changes, 'pinned'), hasTags = Object.hasOwn(changes, 'tags');
+  +    if (!hasPinned && !hasTags) throw new TypeError('Choose a pin or tag change.');
+  +    if (hasPinned && typeof changes.pinned !== 'boolean') throw new TypeError('Pin state must be true or false.');
+  +    const tags = hasTags ? normalizeTagList(changes.tags) : undefined;
+  +    const database = await openDatabase();
+  +    const transaction = database.transaction(STORE_NAME, 'readwrite');
+  +    const done = transactionResult(transaction), store = transaction.objectStore(STORE_NAME);
+  +    try {
+  +      const current = await requestResult(store.get(id));
+  +      if (!current) throw abort(transaction, new NoteNotFoundError(id));
+  +      if (current.revision !== expectedRevision) throw abort(transaction, new NoteConflictError());
+  +      if (current.schemaVersion !== 1) throw abort(transaction, new NoteStateError('This note record uses a newer schema and is read-only in this version.'));
+  +      if (current.lifecycle !== 'active') throw abort(transaction, new NoteStateError('Restore this note before changing its organization.'));
+  +      const updated = {
+  +        ...current,
+  +        ...(hasPinned ? { pinned: changes.pinned } : {}),
+  +        ...(hasTags ? { tags } : {}),
+  +        revision: current.revision + 1,
+  +      };
+  +      assertNoteRecord(updated);
+  +      store.put(updated);
+  +      await done;
+  +      return updated;
+  +    } catch (error) { try { await done; } catch { /* Consume the transaction abort. */ } throw error; }
+  +  }
+  +
+     async function setLifecycle(id, lifecycle, expectedRevision) {
+       if (!['active', 'archived', 'trashed'].includes(lifecycle)) throw new TypeError('Invalid note lifecycle.');
+       assertExpectedRevision(expectedRevision);
+  @@ -259,7 +292,7 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
+  -  return { list, get, create, save, setLifecycle, deleteForever, importNotes };
+  +  return { list, get, create, save, updateOrganization, setLifecycle, deleteForever, importNotes };
+   }
+   
+   function assertAudioTimestamp(value, label) {
+  +34 -1
+
+spikes/phase-00/gate1/web/app/lib/local-notes.test.mjs
+  @@ -94,3 +94,39 @@ test('permanent deletion rejects stale revisions after a restore transition', as
+  +
+  +test('organization updates are revision guarded, keep content timestamps, and reject duplicate or invalid tags', async () => {
+  +  const { name, repo: first } = repository();
+  +  const second = createNotesRepository(globalThis.indexedDB, name);
+  +  const note = await first.create(makeNote('organization'));
+  +  const updated = await first.updateOrganization(note.id, { pinned: true, tags: ['Work', 'Công việc', '日本語'] }, note.revision);
+  +  assert.equal(updated.pinned, true); assert.deepEqual(updated.tags, ['Work', 'Công việc', '日本語']);
+  +  assert.equal(updated.updatedAt, note.updatedAt); assert.equal(updated.revision, note.revision + 1);
+  +  await assert.rejects(first.updateOrganization(note.id, { tags: ['same', ' same '] }, updated.revision), /duplicate tags/i);
+  +  await assert.rejects(first.updateOrganization(note.id, { tags: ['  '] }, updated.revision), /tag name/i);
+  +  await assert.rejects(first.updateOrganization(note.id, { tags: ['x'.repeat(33)] }, updated.revision), /up to 32/i);
+  +  await assert.rejects(second.save(note.id, { title: 'stale overwrite', document: note.document }, note.revision), NoteConflictError);
+  +  assert.equal((await second.get(note.id)).title, note.title);
+  +  assert.equal((await second.get(note.id)).pinned, true);
+  +});
+  +
+  +test('archive, trash, and restore retain pinned and tag metadata', async () => {
+  +  const { repo } = repository();
+  +  const note = await repo.create({ ...makeNote('organization-lifecycle'), pinned: true, tags: ['Personal', '日本語'] });
+  +  const archived = await repo.setLifecycle(note.id, 'archived', note.revision);
+  +  assert.equal(archived.pinned, true); assert.deepEqual(archived.tags, ['Personal', '日本語']);
+  +  const restored = await repo.setLifecycle(note.id, 'active', archived.revision);
+  +  const trashed = await repo.setLifecycle(note.id, 'trashed', restored.revision);
+  +  assert.equal(trashed.pinned, true); assert.deepEqual(trashed.tags, ['Personal', '日本語']);
+  +  const active = await repo.setLifecycle(note.id, 'active', trashed.revision);
+  +  assert.equal(active.pinned, true); assert.deepEqual(active.tags, ['Personal', '日本語']);
+  +});
+  +
+  +test('future note record schemas remain preserved but cannot be edited or organized as schema v1', async () => {
+  +  const { repo } = repository();
+  +  const future = { ...makeEmptyNote(100, 'future-record'), schemaVersion: 2, futureMetadata: { keep: true } };
+  +  await repo.create(future);
+  +  await assert.rejects(repo.save(future.id, { title: 'unsafe', document: future.document }, future.revision), /newer schema/i);
+  +  await assert.rejects(repo.updateOrganization(future.id, { pinned: true }, future.revision), /newer schema/i);
+  +  assert.deepEqual(await repo.get(future.id), future);
+  +});
+  +36 -0
+
+spikes/phase-00/gate1/web/app/lib/mvp-utils.mjs
+  @@ -1,4 +1,5 @@
+  +import { normalizeTagList, tagKey } from './note-organization.mjs';
+   
+   export const BACKUP_FORMAT = 'noteos.local-backup';
+   export const BACKUP_VERSION = 1;
+  @@ -20,11 +21,35 @@ function collectNodeText(node, output) {
+  -  const pieces = [note?.title];
+  +  const pieces = [note?.title, ...(Array.isArray(note?.tags) ? note.tags : [])];
+     collectNodeText(note?.document, pieces);
+     return searchableText(pieces.join(' '));
+   }
+   
+  +export function filterNotesByTags(notes, selectedTags = []) {
+  +  const required = selectedTags.map(tagKey);
+  +  if (!required.length) return [...notes];
+  +  return notes.filter((note) => {
+  +    const tags = new Set((Array.isArray(note.tags) ? note.tags : []).map(tagKey));
+  +    return required.every((tag) => tags.has(tag));
+  +  });
+  +}
+  +
+  +export function sortNotes(notes, mode = 'updated') {
+  +  const compareDate = (left, right) => Number(right.updatedAt) - Number(left.updatedAt) || String(left.id).localeCompare(String(right.id));
+  +  const compareOther = (left, right) => {
+  +    if (mode === 'created') return Number(right.createdAt) - Number(left.createdAt) || compareDate(left, right);
+  +    if (mode === 'title') return String(left.title ?? '').localeCompare(String(right.title ?? ''), undefined, { sensitivity: 'base', numeric: true }) || compareDate(left, right);
+  +    return compareDate(left, right);
+  +  };
+  +  return [...notes].sort((left, right) => {
+  +    const pinOrder = Number(Boolean(right.pinned)) - Number(Boolean(left.pinned));
+  +    if (pinOrder) return pinOrder;
+  +    if (left.pinned && right.pinned) return compareDate(left, right);
+  +    return compareOther(left, right);
+  +  });
+  +}
+  +
+   export function filterNotes(notes, query, lifecycle) {
+     const normalized = searchableText(query);
+     return notes.filter((note) => note.lifecycle === lifecycle && (!normalized || noteSearchText(note).includes(normalized)));
+  @@ -50,6 +75,8 @@ export function parseBackup(input) {
+  +export { normalizeTagList };
+  +
+   export function titleFromDocument(document) {
+     const text = [];
+     collectNodeText(document, text);
+  +28 -1
+
+spikes/phase-00/gate1/web/app/lib/mvp-utils.test.mjs
+  @@ -1,6 +1,6 @@
+  -import { filterNotes, makeBackup, noteSearchText, parseBackup, searchableText } from './mvp-utils.mjs';
+  +import { filterNotes, filterNotesByTags, makeBackup, noteSearchText, parseBackup, searchableText, sortNotes } from './mvp-utils.mjs';
+   
+   const note = (id, title, body, lifecycle = 'active') => ({
+     id, title, document: { schemaVersion: 1, type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: body }] }] },
+  @@ -24,6 +24,29 @@ test('lifecycle filtering does not include archived or trashed notes in active s
+  +test('tag filtering uses case-insensitive canonical Unicode identity and requires every selected tag', () => {
+  +  const notes = [
+  +    { ...note('both', 'One', 'x'), tags: ['Work', '日本語'] },
+  +    { ...note('work', 'Two', 'x'), tags: ['work'] },
+  +    { ...note('kana', 'Three', 'x'), tags: ['にほんご'] },
+  +  ];
+  +  assert.deepEqual(filterNotesByTags(notes, ['WORK']).map(({ id }) => id), ['both', 'work']);
+  +  assert.deepEqual(filterNotesByTags(notes, ['work', '日本語']).map(({ id }) => id), ['both']);
+  +  assert.deepEqual(filterNotesByTags(notes, ['日本語']).map(({ id }) => id), ['both']);
+  +  assert.equal(noteSearchText({ ...notes[0], tags: ['Công việc', '日本語'] }).includes('cong viec'), true);
+  +});
+  +
+  +test('pinned notes stay first; pinned ties use updatedAt and remaining notes honor selected sort', () => {
+  +  const notes = [
+  +    { ...note('older-pin', 'A pin', 'x'), pinned: true, updatedAt: 3 },
+  +    { ...note('newer-pin', 'Z pin', 'x'), pinned: true, updatedAt: 9 },
+  +    { ...note('recent', 'Zulu', 'x'), updatedAt: 20 },
+  +    { ...note('alpha', 'Alpha', 'x'), updatedAt: 10 },
+  +  ];
+  +  assert.deepEqual(sortNotes(notes).map(({ id }) => id), ['newer-pin', 'older-pin', 'recent', 'alpha']);
+  +  assert.deepEqual(sortNotes(notes, 'title').map(({ id }) => id), ['newer-pin', 'older-pin', 'alpha', 'recent']);
+  +});
+  +
+   test('backup parser accepts version 1 data and preserves document values', () => {
+     const source = note('one', 'A note', 'hello');
+     const parsed = parseBackup(JSON.stringify(makeBackup([source], '2026-10-21T00:00:00.000Z')));
+  @@ -31,6 +54,21 @@ test('backup parser accepts version 1 data and preserves document values', () =>
+  +test('backup v1 preserves organization metadata and remains compatible with older v1 notes', () => {
+  +  const source = { ...note('tagged', '日本語', '本文'), pinned: true, tags: ['仕事', 'Công việc'] };
+  +  const parsed = parseBackup(makeBackup([source]));
+  +  assert.equal(parsed.notes[0].pinned, true); assert.deepEqual(parsed.notes[0].tags, source.tags);
+  +  const older = note('older', 'Old export', 'body'); delete older.pinned; delete older.tags;
+  +  assert.deepEqual(parseBackup(makeBackup([older])).notes[0], older);
+  +});
+  +
+  +test('backup v1 rejects invalid organization metadata without rewriting source notes', () => {
+  +  const invalid = { ...note('invalid-tags', 'Bad', 'x'), pinned: true, tags: ['duplicate', ' Duplicate '] };
+  +  const before = structuredClone(invalid);
+  +  assert.throws(() => parseBackup(makeBackup([invalid])), /duplicate tags/i);
+  +  assert.deepEqual(invalid, before);
+  +});
+  +
+   test('backup parser rejects duplicate IDs before repository mutation', () => {
+     assert.throws(() => parseBackup(makeBackup([note('same', 'one', 'x'), note('same', 'two', 'y')])), /duplicate note ID/i);
+   });
+  +39 -1
+
+spikes/phase-00/gate1/web/app/lib/note-validation.mjs
+  @@ -1,4 +1,5 @@
+  +import { validateOrganizationMetadata } from './note-organization.mjs';
+   
+   export class NoteDocumentError extends Error {
+     constructor(message, issues = []) { super(message); this.name = 'NoteDocumentError'; this.issues = issues; }
+  @@ -20,5 +21,6 @@ export function assertNoteRecord(note, { allowUnsupported = false } = {}) {
+  +  validateOrganizationMetadata(note);
+     validateNoteDocument(note.document, allowUnsupported);
+   }
+  +2 -0
+
+spikes/phase-00/gate1/web/app/lib/save-coordinator.mjs
+  @@ -52,5 +52,18 @@ export function createSaveCoordinator({ note, repository, journal, onChange = ()
+  -  return { edit, flush, transition, snapshot, clearJournal: () => journal.clear() };
+  +  async function updateMetadata(changes) {
+  +    const result = await flush();
+  +    if (!result.ok) return result;
+  +    try {
+  +      if (!journal.isCurrent()) throw new NoteConflictError();
+  +      saved = await repository.updateOrganization(saved.id, changes, saved.revision);
+  +      error = null; notify();
+  +      return { ok: true, note: saved };
+  +    } catch (cause) {
+  +      error = cause; notify();
+  +      return { ok: false, error: cause };
+  +    }
+  +  }
+  +  return { edit, flush, transition, updateMetadata, snapshot, clearJournal: () => journal.clear() };
+   }
+  +14 -1
+
+spikes/phase-00/gate1/web/app/lib/save-coordinator.test.mjs
+  @@ -78,3 +78,33 @@ test('deletion epoch prevents stale-tab save after same-ID reimport', async () =
+  +
+  +test('organization mutation waits for draft autosave and uses its committed revision', async () => {
+  +  const f = fixture(), organizationWrites = [];
+  +  f.repository.updateOrganization = async (id, changes, revision) => {
+  +    organizationWrites.push({ id, changes, revision });
+  +    return { ...f.coordinator.snapshot().note, ...changes, revision: revision + 1 };
+  +  };
+  +  f.coordinator.edit(draft('Latest body'));
+  +  const mutation = f.coordinator.updateMetadata({ pinned: true });
+  +  assert.equal(f.calls.length, 1); assert.equal(organizationWrites.length, 0);
+  +  f.finish(0);
+  +  assert.equal((await mutation).ok, true);
+  +  assert.deepEqual(organizationWrites, [{ id: 'one', changes: { pinned: true }, revision: 1 }]);
+  +  assert.equal(f.coordinator.snapshot().note.title, 'Latest body');
+  +  assert.equal(f.coordinator.snapshot().note.pinned, true);
+  +  assert.equal(f.coordinator.snapshot().note.revision, 2);
+  +  assert.equal(f.journal.value, null);
+  +});
+  +
+  +test('failed draft save blocks organization mutation and retains its recovery journal', async () => {
+  +  const f = fixture(); let organizationWrites = 0;
+  +  f.repository.updateOrganization = async () => { organizationWrites += 1; return f.coordinator.snapshot().note; };
+  +  f.coordinator.edit(draft('Unsaved body'));
+  +  const mutation = f.coordinator.updateMetadata({ tags: ['Work'] });
+  +  f.calls[0].gate.reject(new Error('disk full'));
+  +  assert.equal((await mutation).ok, false);
+  +  assert.equal(organizationWrites, 0);
+  +  assert.equal(f.journal.value.title, 'Unsaved body');
+  +  assert.equal(f.coordinator.snapshot().note.revision, 0);
+  +});
+  +30 -0
+
+spikes/phase-00/gate1/web/app/notes/[id]/page.tsx
+  @@ -7,20 +7,23 @@ import { createNotesRepository, NoteConflictError } from '../../lib/local-notes.
+  +import { normalizeTagLabel, tagKey } from '../../lib/note-organization.mjs';
+   import { canonicalToMarkdown, createTiptapEditor, validateCanonicalDocument, toTiptapJSON } from '../../../packages/document-engine/src/index.js';
+   import { AudioRecorder } from '../../ui/audio-recorder';
+   
+  -type Note = { id: string; title: string; document: any; schemaVersion: number; createdAt: number; updatedAt: number; lifecycle: 'active' | 'archived' | 'trashed'; revision: number };
+  +type Note = { id: string; title: string; document: any; schemaVersion: number; createdAt: number; updatedAt: number; lifecycle: 'active' | 'archived' | 'trashed'; revision: number; pinned?: boolean; tags?: string[] };
+   
+   export default function NoteEditorPage() {
+     const params = useParams<{ id: string }>(); const id = params.id; const router = useRouter();
+     const [note, setNote] = useState<Note | null>(null), [title, setTitle] = useState(''), [doc, setDoc] = useState<any>(null);
+     const [state, setState] = useState('Loading…'), [error, setError] = useState(''), [conflict, setConflict] = useState(false), [ready, setReady] = useState(false);
+     const [recovery, setRecovery] = useState<any>(null), [markdown, setMarkdown] = useState<any>(null), [busy, setBusy] = useState(false);
+  +  const [tagInput, setTagInput] = useState(''), [availableTags, setAvailableTags] = useState<string[]>([]);
+     const elementRef = useRef<HTMLDivElement>(null), editorRef = useRef<any>(null), timerRef = useRef<any>(null), coordinatorRef = useRef<any>(null);
+     const operationRef = useRef(false), recoveryRef = useRef<any>(null), aliveRef = useRef(false), recordingRef = useRef(false);
+     const validation = doc ? validateCanonicalDocument(doc) : null;
+  -  const editable = validation?.status === 'supported' && note?.lifecycle === 'active';
+  +  const recordSchemaSupported = note?.schemaVersion === 1;
+  +  const editable = recordSchemaSupported && validation?.status === 'supported' && note?.lifecycle === 'active';
+     const editableRef = useRef(false); editableRef.current = editable;
+     const selectRecovery = (next: any) => { recoveryRef.current = next; setRecovery(next); };
+   
+  @@ -39,6 +42,11 @@ export default function NoteEditorPage() {
+  +        const allNotes = await repo.list();
+  +        if (!alive) return;
+  +        const tagMap = new Map<string, string>();
+  +        for (const row of allNotes) for (const tag of Array.isArray(row.tags) ? row.tags : []) if (!tagMap.has(tagKey(tag))) tagMap.set(tagKey(tag), tag);
+  +        setAvailableTags([...tagMap.values()].sort((left, right) => left.localeCompare(right, undefined, { sensitivity: 'base' })));
+           const coordinator = createSaveCoordinator({ note: loaded, repository: repo, journal: createRecoveryJournal(recoveryStorage(), loaded), onChange: (snapshot: any) => {
+             if (!alive) return;
+             setNote(snapshot.note);
+  @@ -106,7 +114,7 @@ export default function NoteEditorPage() {
+  -      const copy = { ...coordinator.snapshot().note, id: crypto.randomUUID(), title: `${draft.title || 'Untitled note'} (copy)`, document: draft.document, schemaVersion: draft.document.schemaVersion, createdAt: Date.now(), updatedAt: Date.now(), lifecycle: 'active', revision: 0 };
+  +      const copy = { ...coordinator.snapshot().note, id: crypto.randomUUID(), title: `${draft.title || 'Untitled note'} (copy)`, document: draft.document, schemaVersion: draft.document.schemaVersion, createdAt: Date.now(), updatedAt: Date.now(), lifecycle: 'active', revision: 0, pinned: false, tags: [] };
+         await createNotesRepository().create(copy); coordinator.clearJournal(); router.replace(`/notes/${copy.id}`); return true;
+       });
+     }
+  @@ -118,7 +126,7 @@ export default function NoteEditorPage() {
+  -        const copy = { id: crypto.randomUUID(), title: `${candidate.title || 'Untitled note'} (recovered)`, document: candidate.document, schemaVersion: candidate.document.schemaVersion, createdAt: now, updatedAt: now, lifecycle: 'active', revision: 0 };
+  +        const copy = { id: crypto.randomUUID(), title: `${candidate.title || 'Untitled note'} (recovered)`, document: candidate.document, schemaVersion: candidate.document.schemaVersion, createdAt: now, updatedAt: now, lifecycle: 'active', revision: 0, pinned: false, tags: [] };
+           await createNotesRepository().create(copy); coordinatorRef.current.clearJournal(); clearRecoveryEntry(recoveryStorage(), candidate); router.replace(`/notes/${copy.id}`); return true;
+         }
+         try {
+  @@ -155,16 +163,60 @@ export default function NoteEditorPage() {
+  +  async function updateOrganization(changes: { pinned?: boolean; tags?: string[] }) {
+  +    if (!editable || recoveryRef.current) return;
+  +    await operation(async () => {
+  +      const result = await coordinatorRef.current.updateMetadata(changes);
+  +      return result.ok;
+  +    });
+  +  }
+  +
+  +  async function addTag(event: React.FormEvent<HTMLFormElement>) {
+  +    event.preventDefault();
+  +    try {
+  +      const label = normalizeTagLabel(tagInput);
+  +      const existing = availableTags.find((tag) => tagKey(tag) === tagKey(label));
+  +      const tags = Array.isArray(note?.tags) ? note.tags : [];
+  +      if (tags.some((tag) => tagKey(tag) === tagKey(label))) { setTagInput(''); setError('That tag is already on this note.'); return; }
+  +      await updateOrganization({ tags: [...tags, existing ?? label] });
+  +      setTagInput(''); setError('');
+  +    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not add this tag.'); }
+  +  }
+  +
+  +  function removeTag(tagToRemove: string) {
+  +    const tags = (Array.isArray(note?.tags) ? note.tags : []).filter((tag) => tagKey(tag) !== tagKey(tagToRemove));
+  +    void updateOrganization({ tags });
+  +  }
+  +
+  +  function toggleChecklist() {
+  +    const editor = editorRef.current;
+  +    if (!editor) return;
+  +    if (editor.isEmpty) {
+  +      editor.chain().focus().insertContent({ type: 'taskList', content: [{ type: 'taskItem', attrs: { checked: false }, content: [{ type: 'paragraph' }] }] }).run();
+  +      let firstItemCursor: number | null = null;
+  +      editor.state.doc.descendants((node: any, position: number) => {
+  +        if (firstItemCursor === null && node.type.name === 'taskItem') firstItemCursor = position + 2;
+  +      });
+  +      if (firstItemCursor !== null) editor.commands.focus(firstItemCursor);
+  +    } else editor.chain().focus().toggleTaskList().run();
+  +  }
+  +
+     if (!ready) return <div className="empty-state"><h2>Opening note…</h2><p>Reading from this device.</p></div>;
+     if (error && !note) return <div className="notice error" role="alert">{error}<p><Link href="/">Back to notes</Link></p></div>;
+     return <>
+       <div className="editor-top"><Link href={note?.lifecycle === 'archived' ? '/archive' : note?.lifecycle === 'trashed' ? '/trash' : '/'} className="back-link">← Back to notes</Link><div className="actions"><span className="save-state" aria-live="polite">{state}</span>{note?.lifecycle === 'active' ? <button className="btn" disabled={busy} onClick={() => void changeLifecycle('archived')}>Archive</button> : note?.lifecycle === 'archived' ? <button className="btn" disabled={busy} onClick={() => void changeLifecycle('active')}>Restore</button> : <button className="btn" disabled={busy} onClick={() => void changeLifecycle('active')}>Restore</button>}<button className="btn" disabled={busy} onClick={() => void changeLifecycle('trashed')}>Move to trash</button><button className="btn" onClick={exportMarkdown} disabled={!editable || busy || Boolean(recovery)}>Export Markdown</button></div></div>
+       {error && <div className="notice error" role="alert">{error}{editable && <p>{!conflict && <button className="btn" disabled={busy} onClick={() => void operation(async () => (await coordinatorRef.current.flush()).ok)}>Retry save</button>} <button className="btn" disabled={busy} onClick={() => void saveDraftAsCopy()}>Save this draft as a new note</button></p>}</div>}
+       {note?.lifecycle !== 'active' && <div className="notice">This note is in {note?.lifecycle}. Restore it before editing.</div>}
+  +    {note && !recordSchemaSupported && <div className="notice">This note record uses a newer schema. It is open read-only so this version will preserve its original data.</div>}
+       <label className="screen-reader" htmlFor="note-title">Note title</label><input id="note-title" className="editor-title" value={title} onChange={(event) => updateTitle(event.target.value)} disabled={!editable || busy || Boolean(recovery)} placeholder="Untitled note" />
+  +    {note && note.lifecycle === 'active' && recordSchemaSupported && <section className="note-organization" aria-label="Note organization">
+  +      <div className="organization-pin-row"><span className="toolbar-label">Organization</span><button className="pin-button" type="button" aria-pressed={Boolean(note.pinned)} disabled={!editable || busy || Boolean(recovery)} onClick={() => void updateOrganization({ pinned: !note.pinned })}>{note.pinned ? '★ Pinned' : '☆ Pin note'}</button></div>
+  +      <div className="organization-tags"><span className="toolbar-label">Tags</span>{(Array.isArray(note.tags) ? note.tags : []).map((tag) => <span className="tag-chip editor-tag" key={tagKey(tag)}>{tag}<button type="button" aria-label={`Remove tag ${tag}`} disabled={!editable || busy || Boolean(recovery)} onClick={() => removeTag(tag)}>×</button></span>)}{(!note.tags || note.tags.length === 0) && <span className="tag-empty">No tags yet.</span>}</div>
+  +      <form className="tag-entry" onSubmit={(event) => void addTag(event)}><label className="screen-reader" htmlFor="note-tag-input">Add a tag</label><input id="note-tag-input" className="searchbox" list="note-tag-suggestions" maxLength={80} placeholder="Add a tag…" value={tagInput} onChange={(event) => setTagInput(event.target.value)} disabled={!editable || busy || Boolean(recovery)} /><datalist id="note-tag-suggestions">{availableTags.map((tag) => <option value={tag} key={tagKey(tag)} />)}</datalist><button className="btn" type="submit" disabled={!editable || busy || Boolean(recovery) || !tagInput.trim()}>Add tag</button></form>
+  +    </section>}
+       {validation?.status === 'supported' && note?.lifecycle === 'trashed' && <div className="notice">Restore this note to edit it. Its content is preserved below.</div>}
+       {validation?.status === 'supported' && editable ? <><div className="editor-toolbar" aria-label="Text formatting">
+  -      <button className="tool-button" aria-label="Bold" title="Bold" onClick={() => editorRef.current?.chain().focus().toggleBold().run()}><strong>B</strong></button><button className="tool-button" aria-label="Italic" title="Italic" onClick={() => editorRef.current?.chain().focus().toggleItalic().run()}><em>I</em></button><button className="tool-button" aria-label="Strike" title="Strike" onClick={() => editorRef.current?.chain().focus().toggleStrike().run()}><s>S</s></button><button className="tool-button" aria-label="Heading 2" title="Heading" onClick={() => editorRef.current?.chain().focus().toggleHeading({ level: 2 }).run()}>H₂</button><button className="tool-button" aria-label="Bullet list" title="Bullet list" onClick={() => editorRef.current?.chain().focus().toggleBulletList().run()}>• List</button><button className="tool-button" aria-label="Ordered list" title="Numbered list" onClick={() => editorRef.current?.chain().focus().toggleOrderedList().run()}>1. List</button><button className="tool-button" aria-label="Checklist" title="Checklist" onClick={() => editorRef.current?.chain().focus().toggleTaskList().run()}>☑</button><button className="tool-button" aria-label="Quote" title="Quote" onClick={() => editorRef.current?.chain().focus().toggleBlockquote().run()}>“</button><button className="tool-button" aria-label="Code block" title="Code block" onClick={() => editorRef.current?.chain().focus().toggleCodeBlock().run()}>&lt;/&gt;</button>
+  +      <button className="tool-button" aria-label="Bold" title="Bold" onClick={() => editorRef.current?.chain().focus().toggleBold().run()}><strong>B</strong></button><button className="tool-button" aria-label="Italic" title="Italic" onClick={() => editorRef.current?.chain().focus().toggleItalic().run()}><em>I</em></button><button className="tool-button" aria-label="Strike" title="Strike" onClick={() => editorRef.current?.chain().focus().toggleStrike().run()}><s>S</s></button><button className="tool-button" aria-label="Heading 2" title="Heading" onClick={() => editorRef.current?.chain().focus().toggleHeading({ level: 2 }).run()}>H₂</button><button className="tool-button" aria-label="Bullet list" title="Bullet list" onClick={() => editorRef.current?.chain().focus().toggleBulletList().run()}>• List</button><button className="tool-button" aria-label="Ordered list" title="Numbered list" onClick={() => editorRef.current?.chain().focus().toggleOrderedList().run()}>1. List</button><button className="tool-button" aria-label="Checklist" title="Checklist" onClick={toggleChecklist}>☑</button><button className="tool-button" aria-label="Quote" title="Quote" onClick={() => editorRef.current?.chain().focus().toggleBlockquote().run()}>“</button><button className="tool-button" aria-label="Code block" title="Code block" onClick={() => editorRef.current?.chain().focus().toggleCodeBlock().run()}>&lt;/&gt;</button>
+       </div><div ref={elementRef} className="editor-content" aria-label="Note content" /></>
+         : <section>{validation?.status !== 'supported' && <div className="notice">This document uses a schema this editor cannot safely modify. It is open read-only so its original data stays intact.</div>}<pre className="readonly-panel">{JSON.stringify(doc, null, 2)}</pre></section>}
+       {note && <AudioRecorder noteId={note.id} disabled={!editable || busy || Boolean(recovery)} onActivityChange={(active) => { recordingRef.current = active; }} />}
+  +57 -5
+
+spikes/phase-00/gate1/web/app/page.tsx
+  @@ -1,9 +1,13 @@
+  -import { useEffect, useState } from 'react';
+  +import { useCallback, useEffect, useMemo, useState } from 'react';
+   import { createNotesRepository, makeEmptyNote } from './lib/local-notes.js';
+  -import { filterNotes } from './lib/mvp-utils.mjs';
+  +import { filterNotes, filterNotesByTags, sortNotes } from './lib/mvp-utils.mjs';
+  +import { tagKey } from './lib/note-organization.mjs';
+  +
+  +type SortMode = 'updated' | 'created' | 'title';
+  +const HOME_PREFERENCES_KEY = 'noteos:mvp03:home-preferences';
+   
+   function textOf(document: any) {
+     const text: string[] = [];
+  @@ -12,24 +16,93 @@ function textOf(document: any) {
+  +function preferencesFromStorage() {
+  +  try {
+  +    const value = JSON.parse(localStorage.getItem(HOME_PREFERENCES_KEY) ?? '{}');
+  +    return {
+  +      query: typeof value.query === 'string' ? value.query : '',
+  +      sort: ['updated', 'created', 'title'].includes(value.sort) ? value.sort as SortMode : 'updated',
+  +      tags: Array.isArray(value.tags) ? value.tags.filter((tag: unknown) => typeof tag === 'string') : [],
+  +    };
+  +  } catch { return { query: '', sort: 'updated' as SortMode, tags: [] as string[] }; }
+  +}
+  +
+   export default function Home() {
+     const [notes, setNotes] = useState<any[]>([]);
+     const [query, setQuery] = useState('');
+  +  const [sort, setSort] = useState<SortMode>('updated');
+  +  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  +  const [preferencesReady, setPreferencesReady] = useState(false);
+     const [error, setError] = useState('');
+     const [ready, setReady] = useState(false);
+  -  const repo = createNotesRepository();
+  -  async function refresh() { try { setNotes(await repo.list()); setError(''); } catch (e) { setError(e instanceof Error ? e.message : 'Could not open local notes.'); } finally { setReady(true); } }
+  -  useEffect(() => { void refresh(); }, []);
+  -  const active = filterNotes(notes, query, 'active');
+  +
+  +  const refresh = useCallback(async (clearError = true) => {
+  +    try { setNotes(await createNotesRepository().list()); if (clearError) setError(''); }
+  +    catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not open local notes.'); }
+  +    finally { setReady(true); }
+  +  }, []);
+  +
+  +  useEffect(() => {
+  +    const preferences = preferencesFromStorage();
+  +    setQuery(preferences.query); setSort(preferences.sort); setSelectedTags(preferences.tags); setPreferencesReady(true);
+  +    void refresh();
+  +  }, [refresh]);
+  +
+  +  useEffect(() => {
+  +    if (!preferencesReady) return;
+  +    localStorage.setItem(HOME_PREFERENCES_KEY, JSON.stringify({ query, sort, tags: selectedTags }));
+  +  }, [preferencesReady, query, sort, selectedTags]);
+  +
+  +  const availableTags = useMemo(() => {
+  +    const labels = new Map<string, string>();
+  +    for (const note of notes.filter((row) => row.lifecycle === 'active')) {
+  +      for (const tag of Array.isArray(note.tags) ? note.tags : []) if (!labels.has(tagKey(tag))) labels.set(tagKey(tag), tag);
+  +    }
+  +    return [...labels.values()].sort((left, right) => left.localeCompare(right, undefined, { sensitivity: 'base' }));
+  +  }, [notes]);
+  +
+  +  const visibleNotes = useMemo(() => {
+  +    const matched = filterNotes(notes, query, 'active');
+  +    return sortNotes(filterNotesByTags(matched, selectedTags), sort);
+  +  }, [notes, query, selectedTags, sort]);
+  +
+     async function createNote() {
+  -    try { const note = await repo.create(makeEmptyNote()); location.assign(`/notes/${encodeURIComponent(note.id)}`); }
+  -    catch (e) { setError(e instanceof Error ? e.message : 'Could not create a note.'); }
+  +    try { const note = await createNotesRepository().create(makeEmptyNote()); location.assign(`/notes/${encodeURIComponent(note.id)}`); }
+  +    catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not create a note.'); }
+  +  }
+  +
+  +  async function togglePin(note: any) {
+  +    try {
+  +      const updated = await createNotesRepository().updateOrganization(note.id, { pinned: !note.pinned }, note.revision);
+  +      setNotes((current) => current.map((row) => row.id === updated.id ? updated : row)); setError('');
+  +    } catch (cause) {
+  +      await refresh(false);
+  +      setError(cause instanceof Error ? cause.message : 'Could not update this note. Refresh and try again.');
+  +    }
+     }
+  +
+  +  function toggleTag(tag: string) {
+  +    const key = tagKey(tag);
+  +    setSelectedTags((current) => current.some((item) => tagKey(item) === key)
+  +      ? current.filter((item) => tagKey(item) !== key)
+  +      : [...current, tag]);
+  +  }
+  +
+  +  const hasFilters = Boolean(query || selectedTags.length);
+     return <>
+       <div className="page-heading"><div><p className="eyebrow">A quiet place to think</p><h1 className="page-title">Your notes</h1><p className="page-lede">A little space for what you want to remember.</p></div><div className="actions"><button className="btn btn-primary" onClick={createNote}>＋ New note</button></div></div>
+       {error && <div className="notice error" role="alert">{error} Your notes stay stored locally.</div>}
+  -    <div className="search-row"><label className="screen-reader" htmlFor="note-search">Search notes</label><input id="note-search" className="searchbox" type="search" placeholder="Search your notes…" value={query} onChange={(event) => setQuery(event.target.value)} /><span className="toolbar-label">{active.length} {active.length === 1 ? 'note' : 'notes'}</span></div>
+  -    {active.length ? <section className="notes-grid" aria-label="Active notes">{active.map((note: any) => <Link className="note-card" href={`/notes/${encodeURIComponent(note.id)}`} key={note.id}><h2>{note.title || 'Untitled note'}</h2><p className="note-preview">{textOf(note.document) || 'Start with a thought…'}</p><div className="note-meta"><span>{new Date(note.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span><span>Open ↗</span></div></Link>)}</section>
+  -      : <div className="empty-state"><h2>{ready ? (query ? 'No notes found' : 'A fresh page') : 'Opening your notes…'}</h2><p>{ready ? (query ? 'Try another word or phrase.' : 'Create a note to get your thoughts started.') : 'Everything is stored on this device.'}</p>{ready && !query && <button className="btn btn-primary" onClick={createNote}>Create your first note</button>}</div>}
+  +    <div className="notes-controls">
+  +      <div className="search-row"><label className="screen-reader" htmlFor="note-search">Search notes</label><input id="note-search" className="searchbox" type="search" placeholder="Search titles, notes and tags…" value={query} onChange={(event) => setQuery(event.target.value)} /><span className="toolbar-label">{visibleNotes.length} {visibleNotes.length === 1 ? 'note' : 'notes'}</span></div>
+  +      <label className="sort-control"><span>Sort</span><select aria-label="Sort notes" value={sort} onChange={(event) => setSort(event.target.value as SortMode)}><option value="updated">Recently updated</option><option value="created">Recently created</option><option value="title">Title A–Z</option></select></label>
+  +    </div>
+  +    {availableTags.length > 0 && <div className="tag-filter-row" aria-label="Filter notes by tag"><span className="toolbar-label">Tags</span>{availableTags.map((tag) => <button key={tagKey(tag)} type="button" className={`tag-chip tag-filter ${selectedTags.some((item) => tagKey(item) === tagKey(tag)) ? 'is-selected' : ''}`} aria-pressed={selectedTags.some((item) => tagKey(item) === tagKey(tag))} onClick={() => toggleTag(tag)}>{tag}</button>)}{selectedTags.length > 0 && <button className="text-button" onClick={() => setSelectedTags([])}>Clear tags</button>}</div>}
+  +    {visibleNotes.length ? <section className="notes-grid" aria-label="Active notes">{visibleNotes.map((note: any) => <article className="note-card" key={note.id}>
+  +      <div className="note-card-top"><span className="note-pin-state">{note.pinned ? 'Pinned' : ''}</span>{note.schemaVersion === 1 && <button className="pin-button" type="button" aria-label={note.pinned ? `Unpin ${note.title || 'Untitled note'}` : `Pin ${note.title || 'Untitled note'}`} aria-pressed={Boolean(note.pinned)} onClick={() => void togglePin(note)}>{note.pinned ? '★ Pinned' : '☆ Pin'}</button>}</div>
+  +      <Link className="note-card-link" href={`/notes/${encodeURIComponent(note.id)}`}><h2>{note.title || 'Untitled note'}</h2><p className="note-preview">{textOf(note.document) || 'Start with a thought…'}</p><span className="note-open-label">Open note ↗</span></Link>
+  +      {Array.isArray(note.tags) && note.tags.length > 0 && <div className="note-card-tags" aria-label={`Tags for ${note.title || 'Untitled note'}`}>{note.tags.map((tag: string) => <button key={tagKey(tag)} type="button" className="tag-chip" aria-label={`Filter by ${tag}`} onClick={() => toggleTag(tag)}>{tag}</button>)}</div>}
+  +      <div className="note-meta"><span>{new Date(note.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span><span>{note.pinned ? 'Pinned first' : 'On this device'}</span></div>
+  +    </article>)}</section>
+  +      : <div className="empty-state"><h2>{ready ? (hasFilters ? 'No notes match these filters' : 'A fresh page') : 'Opening your notes…'}</h2><p>{ready ? (hasFilters ? 'Clear a tag or try another search to see more notes.' : 'Create a note to get your thoughts started.') : 'Everything is stored on this device.'}</p>{ready && hasFilters && <button className="btn" onClick={() => { setQuery(''); setSelectedTags([]); }}>Clear search and filters</button>}{ready && !hasFilters && <button className="btn btn-primary" onClick={createNote}>Create your first note</button>}</div>}
+     </>;
+   }
+  +84 -11
+
+spikes/phase-00/gate1/web/package.json
+  @@ -8,6 +8,7 @@
+  +    "test:mvp03-browser": "node scripts/mvp-03-browser.mjs",
+       "test:audio-browser": "node scripts/mvp-02-browser.mjs",
+       "test:documents": "npm --prefix packages/document-engine test",
+       "benchmark:documents": "npm --prefix packages/document-engine run benchmark"
+  +1 -0
+
+========================================================================================
+FILE: source/spikes/phase-00/gate1/web/app/globals.css
+========================================================================================
+:root{--paper:#f7f5f0;--surface:#fffefa;--ink:#253247;--muted:#737b84;--line:#e5e0d6;--accent:#b46c45;--accent-soft:#f5e9df;--green:#456b58;--danger:#a4483b;--shadow:0 14px 45px #2833470b}
+*{box-sizing:border-box}html,body{margin:0;min-height:100%;background:var(--paper);color:var(--ink)}body{font-family:'DM Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:15px}button,input,textarea{font:inherit}button{cursor:pointer}a{color:inherit;text-decoration:none}button:focus-visible,a:focus-visible,input:focus-visible,textarea:focus-visible,[contenteditable=true]:focus-visible{outline:3px solid #d39b78;outline-offset:3px}
+.app-frame{min-height:100vh;display:grid;grid-template-columns:246px minmax(0,1fr)}.rail{position:sticky;top:0;height:100vh;padding:27px 18px 18px 23px;border-right:1px solid var(--line);display:flex;flex-direction:column;background:#f9f7f2}.brand{display:flex;align-items:center;gap:10px;padding:0 9px;margin-bottom:44px;font-family:Literata,Georgia,serif;font-size:21px;font-weight:600;letter-spacing:-.04em}.brand-mark{display:grid;place-items:center;width:30px;height:30px;background:#d8ad8e;color:white;border-radius:50% 50% 50% 4px;font-family:Georgia;font-size:17px}.nav-group{display:grid;gap:5px}.nav-link{display:flex;align-items:center;gap:12px;padding:11px 12px;border-radius:9px;color:#596371;font-size:14px}.nav-link:hover,.nav-link.active{background:#eee9df;color:#26344a}.nav-icon{width:18px;text-align:center;font-size:16px}.nav-bottom{margin-top:auto}.privacy-card{padding:13px 14px;margin:0 2px 15px;border:1px solid #e9e3d9;border-radius:11px;background:#fffdf9}.privacy-card strong{display:block;font-size:12px;margin-bottom:5px}.privacy-card p{font-size:11px;line-height:1.55;color:var(--muted);margin:0}.storage-caption{margin:0 3px;color:#888f96;font-size:10px}.main-area{min-width:0}.mobile-head{display:none}.main-content{max-width:1180px;margin:0 auto;padding:54px clamp(22px,5vw,75px) 80px}.eyebrow{font-size:11px;letter-spacing:.13em;text-transform:uppercase;color:var(--accent);font-weight:700;margin:0 0 12px}.page-title{font-family:Literata,Georgia,serif;font-weight:500;letter-spacing:-.045em;font-size:clamp(32px,4vw,46px);line-height:1.12;margin:0}.page-lede{color:var(--muted);margin:12px 0 0;line-height:1.65}.page-heading{display:flex;justify-content:space-between;align-items:end;gap:24px;margin-bottom:36px}.actions{display:flex;gap:9px;flex-wrap:wrap}.btn{border:1px solid #dcd6ca;background:var(--surface);color:var(--ink);border-radius:8px;padding:10px 14px;font-weight:600;font-size:13px;transition:transform .15s,background .15s}.btn:hover{transform:translateY(-1px);background:#fff}.btn-primary{background:#34475d;border-color:#34475d;color:white}.btn-primary:hover{background:#293b50}.btn-danger{color:var(--danger);border-color:#e8c9c2}.search-row{display:flex;align-items:center;gap:10px;margin-bottom:25px}.searchbox{width:min(100%,420px);padding:11px 14px;border:1px solid var(--line);border-radius:9px;background:#fffefa;color:var(--ink)}.notes-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.note-card{position:relative;display:flex;flex-direction:column;min-height:188px;padding:20px;border:1px solid var(--line);border-radius:11px;background:var(--surface);box-shadow:var(--shadow);transition:border .15s,transform .15s}.note-card:hover{transform:translateY(-2px);border-color:#d2b49e}.note-card h2{font-family:Literata,Georgia,serif;font-size:19px;font-weight:500;line-height:1.35;margin:0 0 10px;letter-spacing:-.02em}.note-preview{color:#7b8288;font-size:13px;line-height:1.6;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;white-space:pre-wrap}.note-meta{margin-top:auto;padding-top:18px;display:flex;justify-content:space-between;color:#9a9b98;font-size:11px}.empty-state{padding:75px 20px;text-align:center;border:1px dashed #d9d1c4;border-radius:12px}.empty-state h2{font-family:Literata,Georgia,serif;font-size:23px;font-weight:500}.empty-state p{color:var(--muted);margin:0 0 18px}.editor-top{display:flex;justify-content:space-between;align-items:center;margin:-11px 0 27px}.back-link{color:#69727d;font-size:13px}.save-state{font-size:12px;color:var(--green)}.editor-title{font-family:Literata,Georgia,serif;font-size:36px;font-weight:500;letter-spacing:-.04em;border:0;background:transparent;color:var(--ink);outline:none;width:100%;padding:0 0 18px;border-bottom:1px solid var(--line)}.editor-toolbar{display:flex;gap:5px;flex-wrap:wrap;padding:13px 0;border-bottom:1px solid var(--line)}.tool-button{min-width:34px;height:31px;padding:0 9px;border:1px solid transparent;background:transparent;color:#536071;border-radius:6px;font-weight:600}.tool-button:hover,.tool-button.is-active{background:#eae5dc}.editor-content{font-family:Literata,Georgia,serif;font-size:18px;line-height:1.85;min-height:55vh;padding:27px 5px;outline:none}.editor-content p{margin:0 0 1em}.editor-content h1,.editor-content h2,.editor-content h3{line-height:1.3}.editor-content blockquote{margin:1em 0;padding-left:18px;border-left:2px solid #d2a17f;color:#6d7277}.editor-content ul,.editor-content ol{padding-left:1.5em}.editor-content pre{padding:15px;background:#f0eee8;border-radius:8px;font-size:14px;overflow:auto}.readonly-panel{white-space:pre-wrap;overflow:auto;max-height:65vh;padding:18px;background:#f1eee8;border-radius:9px;font:12px/1.5 ui-monospace,monospace}.notice{padding:12px 14px;border-radius:8px;margin:12px 0;background:#fff4e8;color:#815a31;font-size:13px}.notice.error{background:#fff0ee;color:#9e433a}.toolbar-label{font-size:12px;color:#777}.section-title{font-family:Literata,Georgia,serif;font-weight:500;font-size:24px}.backup-panel{max-width:760px;padding:25px;border:1px solid var(--line);border-radius:12px;background:var(--surface);margin-bottom:16px}.backup-panel p,.backup-panel li{color:#67717c;line-height:1.65;font-size:14px}.file-input{display:block;margin:15px 0}.dialog-backdrop{position:fixed;inset:0;background:#1d2a3b66;display:grid;place-items:center;padding:20px;z-index:10}.dialog{width:min(460px,100%);background:var(--surface);border-radius:13px;padding:25px;box-shadow:0 20px 80px #1d2a3b33}.dialog h2{font-family:Literata,Georgia,serif;font-weight:500}.dialog p{color:#67717c;line-height:1.6}.dialog-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:24px}.checkbox-row{display:flex;align-items:center;gap:8px;font-size:13px;color:#67717c}.screen-reader{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+@media(max-width:900px){.notes-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.app-frame{grid-template-columns:208px minmax(0,1fr)}.rail{padding-left:14px}}
+@media(max-width:650px){.app-frame{display:block}.rail{display:none}.mobile-head{display:flex;position:sticky;top:0;z-index:5;align-items:center;justify-content:space-between;padding:10px 16px;background:#f9f7f2ed;border-bottom:1px solid var(--line);backdrop-filter:blur(12px)}.mobile-head .brand{margin:0;font-size:18px}.mobile-nav{display:flex;gap:5px}.mobile-nav a{padding:8px;color:#68717b;font-size:12px}.main-content{padding:34px 19px 64px}.page-heading{align-items:start;flex-direction:column;margin-bottom:26px}.notes-grid{grid-template-columns:1fr}.note-card{min-height:155px}.editor-title{font-size:30px}.editor-content{font-size:17px}.editor-top{margin-top:0}.actions{width:100%}.actions .btn{flex:1}}
+.audio-panel{padding:22px;margin:18px 0 26px;border:1px solid var(--line);border-radius:12px;background:var(--surface)}.audio-heading{display:flex;justify-content:space-between;gap:16px}.audio-heading .eyebrow{margin-bottom:7px}.audio-heading .section-title{margin:0}.audio-copy,.audio-empty{color:var(--muted);font-size:13px;line-height:1.6}.audio-copy{margin:7px 0 0}.audio-controls{display:flex;align-items:center;flex-wrap:wrap;gap:9px;margin:18px 0 10px}.audio-controls .save-state{flex:1 1 220px}.recording-indicator{color:#a34038;font-weight:700;font-size:13px}.audio-warning{color:#815a31;background:#fff4e8;padding:10px 12px;border-radius:7px;font-size:12px;line-height:1.5}.recording-list{list-style:none;padding:0;margin:12px 0 0;display:grid;gap:9px}.recording-item{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:14px;border:1px solid var(--line);border-radius:9px;background:#fffdfa}.recording-main{min-width:0;flex:1}.recording-title-row{display:flex;align-items:center;flex-wrap:wrap;gap:8px}.recording-title-row strong{font-family:Literata,Georgia,serif;font-size:16px;font-weight:600}.recording-title-input{width:min(100%,280px)}.recording-state{font-size:11px;color:var(--green)}.recording-state-interrupted,.recording-state-failed{color:var(--danger)}.recording-state-recording{color:var(--danger);font-weight:700}.recording-meta{display:flex;flex-wrap:wrap;gap:10px;margin-top:6px;color:var(--muted);font-size:11px}.recording-player{display:block;width:min(100%,480px);height:40px;margin-top:10px}.recording-actions{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:2px}.audio-panel .tool-button{height:34px}.audio-panel .notice{margin:10px 0}
+@media(max-width:650px){.audio-panel{padding:16px;margin-top:14px}.recording-item{align-items:flex-start;flex-direction:column}.recording-actions{justify-content:flex-start}.audio-controls .save-state{flex-basis:100%}}
+
+.notes-controls{display:flex;align-items:center;gap:18px;margin-bottom:14px}.notes-controls .search-row{flex:1;min-width:0;margin-bottom:0}.notes-controls .searchbox{flex:1;min-width:0}.sort-control{display:flex;align-items:center;gap:9px;color:var(--muted);font-size:12px}.sort-control select{max-width:190px;padding:10px 30px 10px 11px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink)}.tag-filter-row{display:flex;align-items:center;flex-wrap:wrap;gap:7px;margin:0 0 22px}.tag-chip{display:inline-flex;align-items:center;gap:5px;max-width:100%;padding:5px 9px;border:1px solid #e4ddd1;border-radius:999px;background:#f5f1e9;color:#596371;font-size:11px;line-height:1.35;overflow-wrap:anywhere}.tag-filter{cursor:pointer}.tag-filter:hover,.tag-filter.is-selected{border-color:#c89371;background:#f2e4d7;color:#563d2e}.text-button{padding:5px 7px;border:0;background:transparent;color:#68717b;font-size:12px;text-decoration:underline;text-underline-offset:3px}.note-card-top{display:flex;align-items:center;justify-content:space-between;min-height:28px;margin-bottom:8px}.note-pin-state{color:#a36b45;font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}.pin-button{padding:6px 9px;border:1px solid #e4ddd1;border-radius:7px;background:transparent;color:#68717b;font-size:12px;font-weight:600;cursor:pointer}.pin-button:hover:not(:disabled),.pin-button[aria-pressed=true]{border-color:#d7b195;background:#f7eee5;color:#68482f}.pin-button:disabled{cursor:not-allowed;opacity:.55}.note-card-link{display:block;flex:1;color:inherit}.note-card-link:hover{color:inherit}.note-card-link h2{margin-bottom:8px}.note-card-tags{display:flex;flex-wrap:wrap;gap:5px;margin-top:12px}.note-card-tags .tag-chip{border:0;padding:4px 7px;cursor:pointer}.note-card-tags .tag-chip:hover{background:#eee2d6}.note-open-label{display:inline-block;margin-top:10px;color:#8a7565;font-size:11px}.note-organization{display:grid;gap:13px;padding:12px 0 16px;border-bottom:1px solid var(--line)}.organization-pin-row,.organization-tags{display:flex;align-items:center;flex-wrap:wrap;gap:8px}.organization-pin-row{justify-content:space-between}.organization-tags .toolbar-label{margin-right:2px}.editor-tag{padding-right:4px}.editor-tag button{width:22px;height:22px;border:0;border-radius:50%;background:transparent;color:#68717b;font-size:17px;line-height:1;cursor:pointer}.editor-tag button:hover:not(:disabled){background:#e7ded2}.editor-tag button:disabled{opacity:.5}.tag-empty{color:#8b9196;font-size:12px}.tag-entry{display:flex;gap:8px;max-width:520px}.tag-entry .searchbox{flex:1;min-width:0}.tag-entry .btn{white-space:nowrap}
+@media(max-width:650px){.mobile-head{flex-direction:column;align-items:stretch;gap:8px}.mobile-head .brand{align-self:flex-start}.mobile-nav{width:100%;overflow-x:auto;overscroll-behavior-inline:contain;scrollbar-width:none}.mobile-nav::-webkit-scrollbar{display:none}.mobile-nav .nav-link{flex:0 0 auto;white-space:nowrap}.notes-controls{align-items:stretch;flex-direction:column;gap:10px}.notes-controls .search-row{width:100%}.notes-controls .search-row .toolbar-label{white-space:nowrap}.sort-control{justify-content:space-between}.sort-control select{flex:1;max-width:none}.tag-filter-row{gap:6px;margin-bottom:17px}.note-card{min-width:0}.note-card-top{margin-bottom:5px}.note-organization{padding:10px 0 14px}.tag-entry{width:100%}.tag-entry .searchbox{width:100%}}
+.editor-content ul[data-type="taskList"]{list-style:none;padding-left:0}
+
+========================================================================================
+FILE: source/spikes/phase-00/gate1/web/app/lib/local-notes.js
+========================================================================================
+import { assertNoteRecord, validateNoteDocument } from './note-validation.mjs';
+import { normalizeTagList } from './note-organization.mjs';
+export { NoteDocumentError } from './note-validation.mjs';
+
+const DATABASE_NAME = 'noteos-mvp-01';
+const DATABASE_VERSION = 2;
+const STORE_NAME = 'notes';
+const RECORDINGS_STORE = 'recordings';
+const RECORDING_CHUNKS_STORE = 'recordingChunks';
+
+export class NoteNotFoundError extends Error {
+  constructor(id) {
+    super(`Note ${id} was not found.`);
+    this.name = 'NoteNotFoundError';
+  }
+}
+
+export class NoteConflictError extends Error {
+  constructor() {
+    super('This note changed in another tab. The current version was kept.');
+    this.name = 'NoteConflictError';
+  }
+}
+
+export class ImportCollisionError extends Error {
+  constructor(count) {
+    super(`${count} note ID${count === 1 ? '' : 's'} already exist. No notes were imported.`);
+    this.name = 'ImportCollisionError';
+    this.count = count;
+  }
+}
+
+export class NoteStateError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'NoteStateError';
+  }
+}
+
+function requestResult(request) {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error ?? new Error('IndexedDB request failed.'));
+  });
+}
+
+function transactionResult(transaction) {
+  return new Promise((resolve, reject) => {
+    transaction.oncomplete = () => resolve();
+    transaction.onabort = () => reject(transaction.error ?? new Error('IndexedDB transaction was aborted.'));
+    transaction.onerror = () => reject(transaction.error ?? new Error('IndexedDB transaction failed.'));
+  });
+}
+
+function abort(transaction, error) {
+  try { transaction.abort(); } catch { /* The transaction may already be finished. */ }
+  return error;
+}
+
+export function makeEmptyNote(now = Date.now(), id = crypto.randomUUID()) {
+  return {
+    id,
+    title: 'Untitled note',
+    document: { schemaVersion: 1, type: 'doc', content: [] },
+    schemaVersion: 1,
+    createdAt: now,
+    updatedAt: now,
+    lifecycle: 'active',
+    revision: 0,
+    pinned: false,
+    tags: [],
+  };
+}
+
+function assertExpectedRevision(revision) {
+  if (!Number.isInteger(revision) || revision < 0) throw new TypeError('An expected note revision is required.');
+}
+
+export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, databaseName = DATABASE_NAME) {
+  let databasePromise;
+
+  function openDatabase() {
+    if (!indexedDBFactory) return Promise.reject(new Error('This browser does not provide IndexedDB.'));
+    if (!databasePromise) {
+      databasePromise = new Promise((resolve, reject) => {
+        const request = indexedDBFactory.open(databaseName, DATABASE_VERSION);
+        request.onupgradeneeded = () => {
+          const database = request.result;
+          if (!database.objectStoreNames.contains(STORE_NAME)) {
+            const store = database.createObjectStore(STORE_NAME, { keyPath: 'id' });
+            store.createIndex('lifecycle', 'lifecycle', { unique: false });
+            store.createIndex('updatedAt', 'updatedAt', { unique: false });
+          }
+          if (!database.objectStoreNames.contains(RECORDINGS_STORE)) {
+            const recordings = database.createObjectStore(RECORDINGS_STORE, { keyPath: 'id' });
+            recordings.createIndex('noteId', 'noteId', { unique: false });
+            recordings.createIndex('status', 'status', { unique: false });
+            recordings.createIndex('updatedAt', 'updatedAt', { unique: false });
+          }
+          if (!database.objectStoreNames.contains(RECORDING_CHUNKS_STORE)) {
+            const chunks = database.createObjectStore(RECORDING_CHUNKS_STORE, { keyPath: 'id' });
+            chunks.createIndex('recordingId', 'recordingId', { unique: false });
+            chunks.createIndex('recordingSequence', ['recordingId', 'sequence'], { unique: true });
+          }
+        };
+        request.onsuccess = () => {
+          request.result.onversionchange = () => request.result.close();
+          resolve(request.result);
+        };
+        request.onerror = () => reject(request.error ?? new Error('Could not open local note storage.'));
+        request.onblocked = () => reject(new Error('Local note storage is open in another tab. Close older noteOS tabs and retry.'));
+      }).catch((error) => {
+        databasePromise = undefined;
+        throw error;
+      });
+    }
+    return databasePromise;
+  }
+
+  async function list() {
+    const database = await openDatabase();
+    const transaction = database.transaction(STORE_NAME, 'readonly');
+    const done = transactionResult(transaction);
+    const rows = await requestResult(transaction.objectStore(STORE_NAME).getAll());
+    await done;
+    return rows.sort((left, right) => Number(right.updatedAt) - Number(left.updatedAt));
+  }
+
+  async function get(id) {
+    const database = await openDatabase();
+    const transaction = database.transaction(STORE_NAME, 'readonly');
+    const done = transactionResult(transaction);
+    const row = await requestResult(transaction.objectStore(STORE_NAME).get(id));
+    await done;
+    return row ?? null;
+  }
+
+  async function create(note = makeEmptyNote()) {
+    assertNoteRecord(note);
+    const database = await openDatabase();
+    const transaction = database.transaction(STORE_NAME, 'readwrite');
+    const done = transactionResult(transaction);
+    transaction.objectStore(STORE_NAME).add(note);
+    await done;
+    return note;
+  }
+
+  async function save(id, changes, expectedRevision) {
+    assertExpectedRevision(expectedRevision);
+    if (!changes || typeof changes.title !== 'string') throw new TypeError('A note title must be a string.');
+    const validation = validateNoteDocument(changes.document, false);
+    const database = await openDatabase();
+    const transaction = database.transaction(STORE_NAME, 'readwrite');
+    const done = transactionResult(transaction);
+    const store = transaction.objectStore(STORE_NAME);
+
+    try {
+      const current = await requestResult(store.get(id));
+      if (!current) throw abort(transaction, new NoteNotFoundError(id));
+      if (current.revision !== expectedRevision) throw abort(transaction, new NoteConflictError());
+      if (current.schemaVersion !== 1) throw abort(transaction, new NoteStateError('This note record uses a newer schema and is read-only in this version.'));
+      if (current.lifecycle === 'trashed') throw abort(transaction, new NoteStateError('Restore a trashed note before editing it.'));
+      const updated = {
+        ...current,
+        title: changes.title,
+        document: validation.document,
+        updatedAt: Date.now(),
+        revision: current.revision + 1,
+      };
+      store.put(updated);
+      await done;
+      return updated;
+    } catch (error) {
+      try { await done; } catch { /* Consume the abort before returning the original error. */ }
+      throw error;
+    }
+  }
+
+  async function updateOrganization(id, changes, expectedRevision) {
+    assertExpectedRevision(expectedRevision);
+    if (!changes || typeof changes !== 'object' || Array.isArray(changes)) throw new TypeError('Organization changes must be an object.');
+    const hasPinned = Object.hasOwn(changes, 'pinned'), hasTags = Object.hasOwn(changes, 'tags');
+    if (!hasPinned && !hasTags) throw new TypeError('Choose a pin or tag change.');
+    if (hasPinned && typeof changes.pinned !== 'boolean') throw new TypeError('Pin state must be true or false.');
+    const tags = hasTags ? normalizeTagList(changes.tags) : undefined;
+    const database = await openDatabase();
+    const transaction = database.transaction(STORE_NAME, 'readwrite');
+    const done = transactionResult(transaction), store = transaction.objectStore(STORE_NAME);
+    try {
+      const current = await requestResult(store.get(id));
+      if (!current) throw abort(transaction, new NoteNotFoundError(id));
+      if (current.revision !== expectedRevision) throw abort(transaction, new NoteConflictError());
+      if (current.schemaVersion !== 1) throw abort(transaction, new NoteStateError('This note record uses a newer schema and is read-only in this version.'));
+      if (current.lifecycle !== 'active') throw abort(transaction, new NoteStateError('Restore this note before changing its organization.'));
+      const updated = {
+        ...current,
+        ...(hasPinned ? { pinned: changes.pinned } : {}),
+        ...(hasTags ? { tags } : {}),
+        revision: current.revision + 1,
+      };
+      assertNoteRecord(updated);
+      store.put(updated);
+      await done;
+      return updated;
+    } catch (error) { try { await done; } catch { /* Consume the transaction abort. */ } throw error; }
+  }
+
+  async function setLifecycle(id, lifecycle, expectedRevision) {
+    if (!['active', 'archived', 'trashed'].includes(lifecycle)) throw new TypeError('Invalid note lifecycle.');
+    assertExpectedRevision(expectedRevision);
+    const database = await openDatabase();
+    const transaction = database.transaction(STORE_NAME, 'readwrite');
+    const done = transactionResult(transaction);
+    const store = transaction.objectStore(STORE_NAME);
+
+    try {
+      const current = await requestResult(store.get(id));
+      if (!current) throw abort(transaction, new NoteNotFoundError(id));
+      if (current.revision !== expectedRevision) throw abort(transaction, new NoteConflictError());
+      if (current.lifecycle === 'trashed' && lifecycle === 'archived') {
+        throw abort(transaction, new NoteStateError('Restore a trashed note before archiving it.'));
+      }
+      const updated = { ...current, lifecycle, updatedAt: Date.now(), revision: current.revision + 1 };
+      store.put(updated);
+      await done;
+      return updated;
+    } catch (error) {
+      try { await done; } catch { /* Consume the abort before returning the original error. */ }
+      throw error;
+    }
+  }
+
+  async function deleteForever(id, expectedRevision) {
+    assertExpectedRevision(expectedRevision);
+    const database = await openDatabase();
+    const transaction = database.transaction([STORE_NAME, RECORDINGS_STORE, RECORDING_CHUNKS_STORE], 'readwrite');
+    const done = transactionResult(transaction);
+    const store = transaction.objectStore(STORE_NAME);
+    try {
+      const current = await requestResult(store.get(id));
+      if (!current) throw abort(transaction, new NoteNotFoundError(id));
+      if (current.revision !== expectedRevision) throw abort(transaction, new NoteConflictError());
+      if (current.lifecycle !== 'trashed') throw abort(transaction, new NoteStateError('Only trashed notes can be permanently deleted.'));
+      const recordings = transaction.objectStore(RECORDINGS_STORE);
+      const chunks = transaction.objectStore(RECORDING_CHUNKS_STORE);
+      const linked = await requestResult(recordings.index('noteId').getAll(id));
+      if (linked.some((recording) => ['recording', 'paused'].includes(recording.status))) {
+        throw abort(transaction, new NoteStateError('Stop the active recording before permanently deleting this note.'));
+      }
+      for (const recording of linked) {
+        const keys = await requestResult(chunks.index('recordingId').getAllKeys(recording.id));
+        for (const key of keys) chunks.delete(key);
+        recordings.delete(recording.id);
+      }
+      store.delete(id);
+      await done;
+      return current;
+    } catch (error) {
+      try { await done; } catch { /* Consume the abort before returning the original error. */ }
+      throw error;
+    }
+  }
+
+  async function importNotes(notes, mode = 'merge') {
+    if (!['merge', 'skip'].includes(mode)) throw new TypeError('Choose merge or skip.');
+    if (!Array.isArray(notes)) throw new TypeError('Backup notes must be an array.');
+    const ids = new Set();
+    for (const note of notes) {
+      if (!note || typeof note.id !== 'string' || !note.id || ids.has(note.id)) {
+        throw new TypeError('The backup contains a missing or duplicate note ID.');
+      }
+      assertNoteRecord(note, { allowUnsupported: true });
+      ids.add(note.id);
+    }
+
+    const database = await openDatabase();
+    const transaction = database.transaction(STORE_NAME, 'readwrite');
+    const done = transactionResult(transaction);
+    const store = transaction.objectStore(STORE_NAME);
+    const existing = await requestResult(store.getAll());
+    const existingIds = new Set(existing.map((note) => note.id));
+    const collisions = notes.filter((note) => existingIds.has(note.id)).length;
+    if (mode === 'skip' && collisions > 0) {
+      abort(transaction, new ImportCollisionError(collisions));
+      try { await done; } catch { /* Expected: the all-or-nothing import was aborted. */ }
+      throw new ImportCollisionError(collisions);
+    }
+
+    const additions = notes.filter((note) => !existingIds.has(note.id));
+    for (const note of additions) store.add(note);
+    await done;
+    return { imported: additions.length, skipped: collisions };
+  }
+
+  return { list, get, create, save, updateOrganization, setLifecycle, deleteForever, importNotes };
+}
+
+function assertAudioTimestamp(value, label) {
+  if (!Number.isSafeInteger(value) || value < 0) throw new TypeError(`${label} must be a non-negative timestamp.`);
+}
+
+function assertRecordingState(state) {
+  if (!['recording', 'paused', 'complete', 'interrupted', 'failed'].includes(state)) throw new TypeError('Invalid recording state.');
+}
+
+export function createAudioRepository(indexedDBFactory = globalThis.indexedDB, databaseName = DATABASE_NAME) {
+  let databasePromise;
+  function openDatabase() {
+    if (!indexedDBFactory) return Promise.reject(new Error('This browser does not provide IndexedDB.'));
+    if (!databasePromise) {
+      databasePromise = new Promise((resolve, reject) => {
+        const request = indexedDBFactory.open(databaseName, DATABASE_VERSION);
+        request.onsuccess = () => { request.result.onversionchange = () => request.result.close(); resolve(request.result); };
+        request.onerror = () => reject(request.error ?? new Error('Could not open local audio storage.'));
+        request.onblocked = () => reject(new Error('Local audio storage is open in another tab. Close older noteOS tabs and retry.'));
+      }).catch((error) => { databasePromise = undefined; throw error; });
+    }
+    return databasePromise;
+  }
+  async function run(tx, request) {
+    const done = transactionResult(tx);
+    const result = await requestResult(request);
+    await done;
+    return result;
+  }
+  async function list(noteId) {
+    const database = await openDatabase();
+    const tx = database.transaction(RECORDINGS_STORE, 'readonly');
+    const rows = await run(tx, tx.objectStore(RECORDINGS_STORE).index('noteId').getAll(noteId));
+    return rows.sort((a, b) => b.createdAt - a.createdAt);
+  }
+  async function listUnfinished() {
+    const database = await openDatabase();
+    const tx = database.transaction(RECORDINGS_STORE, 'readonly');
+    const rows = await run(tx, tx.objectStore(RECORDINGS_STORE).getAll());
+    return rows.filter((recording) => ['recording', 'paused'].includes(recording.status));
+  }
+  async function get(recordingId) {
+    const database = await openDatabase();
+    const tx = database.transaction(RECORDINGS_STORE, 'readonly');
+    return (await run(tx, tx.objectStore(RECORDINGS_STORE).get(recordingId))) ?? null;
+  }
+  async function create(noteId, { mimeType, ownerId, createdAt = Date.now() }) {
+    if (typeof noteId !== 'string' || !noteId) throw new TypeError('A note ID is required.');
+    if (typeof mimeType !== 'string' || !mimeType) throw new TypeError('An audio MIME type is required.');
+    if (typeof ownerId !== 'string' || !ownerId) throw new TypeError('A recording owner ID is required.');
+    assertAudioTimestamp(createdAt, 'createdAt');
+    const database = await openDatabase();
+    const tx = database.transaction([STORE_NAME, RECORDINGS_STORE], 'readwrite');
+    const done = transactionResult(tx);
+    try {
+      const note = await requestResult(tx.objectStore(STORE_NAME).get(noteId));
+      if (!note) throw abort(tx, new NoteNotFoundError(noteId));
+      if (note.lifecycle !== 'active') throw abort(tx, new NoteStateError('Restore this note before recording audio.'));
+      const store = tx.objectStore(RECORDINGS_STORE);
+      const current = await requestResult(store.index('noteId').getAll(noteId));
+      if (current.some((entry) => ['recording', 'paused'].includes(entry.status))) throw abort(tx, new NoteStateError('A recording is already active for this note.'));
+      const recording = { id: crypto.randomUUID(), noteId, title: 'Audio recording', mimeType, status: 'recording', ownerId, createdAt, updatedAt: createdAt, durationMs: 0, chunkCount: 0 };
+      store.add(recording);
+      await done;
+      return recording;
+    } catch (error) { try { await done; } catch { /* Consume transaction abort before returning the original error. */ } throw error; }
+  }
+  async function appendChunk(recordingId, sequence, blob, durationMs) {
+    if (!Number.isSafeInteger(sequence) || sequence < 0) throw new TypeError('Chunk sequence must be non-negative.');
+    if (!(blob instanceof Blob) || blob.size === 0) return get(recordingId);
+    if (!Number.isSafeInteger(durationMs) || durationMs < 0) throw new TypeError('Recording duration must be non-negative.');
+    const database = await openDatabase();
+    const tx = database.transaction([RECORDINGS_STORE, RECORDING_CHUNKS_STORE], 'readwrite');
+    const done = transactionResult(tx);
+    const recordings = tx.objectStore(RECORDINGS_STORE), chunks = tx.objectStore(RECORDING_CHUNKS_STORE);
+    try {
+      const recording = await requestResult(recordings.get(recordingId));
+      if (!recording || !['recording', 'paused'].includes(recording.status)) throw abort(tx, new NoteStateError('This recording is no longer writable.'));
+      chunks.add({ id: `${recordingId}:${sequence}`, recordingId, sequence, blob });
+      recordings.put({ ...recording, chunkCount: Math.max(recording.chunkCount, sequence + 1), durationMs: Math.max(recording.durationMs, durationMs), updatedAt: Date.now() });
+      await done;
+      return { ...recording, chunkCount: Math.max(recording.chunkCount, sequence + 1), durationMs: Math.max(recording.durationMs, durationMs), updatedAt: Date.now() };
+    } catch (error) { try { await done; } catch { /* Return the original failed transaction. */ } throw error; }
+  }
+  async function setStatus(recordingId, status, { durationMs } = {}) {
+    assertRecordingState(status);
+    const database = await openDatabase();
+    const tx = database.transaction(RECORDINGS_STORE, 'readwrite');
+    const done = transactionResult(tx), store = tx.objectStore(RECORDINGS_STORE);
+    try {
+      const recording = await requestResult(store.get(recordingId));
+      if (!recording) throw abort(tx, new NoteNotFoundError(recordingId));
+      const allowed = { recording: ['paused', 'complete', 'interrupted', 'failed'], paused: ['recording', 'complete', 'interrupted', 'failed'], complete: [], interrupted: [], failed: [] };
+      if (recording.status !== status && !allowed[recording.status].includes(status)) throw abort(tx, new NoteStateError(`Cannot change recording from ${recording.status} to ${status}.`));
+      const updated = { ...recording, status, updatedAt: Date.now(), ...(durationMs === undefined ? {} : { durationMs }) };
+      if (durationMs !== undefined && (!Number.isSafeInteger(durationMs) || durationMs < 0)) throw abort(tx, new TypeError('Recording duration must be non-negative.'));
+      store.put(updated); await done; return updated;
+    } catch (error) { try { await done; } catch { /* Consume the abort. */ } throw error; }
+  }
+  async function rename(recordingId, title) {
+    if (typeof title !== 'string' || !title.trim() || title.length > 120) throw new TypeError('Recording title must contain 1–120 characters.');
+    const database = await openDatabase(), tx = database.transaction(RECORDINGS_STORE, 'readwrite'), done = transactionResult(tx), store = tx.objectStore(RECORDINGS_STORE);
+    try {
+      const recording = await requestResult(store.get(recordingId));
+      if (!recording) throw abort(tx, new NoteNotFoundError(recordingId));
+      const updated = { ...recording, title: title.trim(), updatedAt: Date.now() }; store.put(updated); await done; return updated;
+    } catch (error) { try { await done; } catch { /* Consume the abort. */ } throw error; }
+  }
+  async function chunks(recordingId) {
+    const database = await openDatabase(), tx = database.transaction(RECORDING_CHUNKS_STORE, 'readonly');
+    const rows = await run(tx, tx.objectStore(RECORDING_CHUNKS_STORE).index('recordingSequence').getAll(IDBKeyRange.bound([recordingId, 0], [recordingId, Number.MAX_SAFE_INTEGER])));
+    return rows.sort((a, b) => a.sequence - b.sequence);
+  }
+  async function remove(recordingId) {
+    const database = await openDatabase(), tx = database.transaction([RECORDINGS_STORE, RECORDING_CHUNKS_STORE], 'readwrite'), done = transactionResult(tx);
+    const recordings = tx.objectStore(RECORDINGS_STORE), chunkStore = tx.objectStore(RECORDING_CHUNKS_STORE);
+    try {
+      const recording = await requestResult(recordings.get(recordingId));
+      if (!recording) throw abort(tx, new NoteNotFoundError(recordingId));
+      if (['recording', 'paused'].includes(recording.status)) throw abort(tx, new NoteStateError('Stop the active recording before deleting it.'));
+      const keys = await requestResult(chunkStore.index('recordingId').getAllKeys(recordingId));
+      for (const key of keys) chunkStore.delete(key);
+      recordings.delete(recordingId); await done; return recording;
+    } catch (error) { try { await done; } catch { /* Consume the abort. */ } throw error; }
+  }
+  async function recover(recordingId) {
+    const database = await openDatabase(), tx = database.transaction(RECORDINGS_STORE, 'readwrite'), done = transactionResult(tx), store = tx.objectStore(RECORDINGS_STORE);
+    try {
+      const recording = await requestResult(store.get(recordingId));
+      if (!recording || !['recording', 'paused'].includes(recording.status)) {
+        await done;
+        return null;
+      }
+      const next = { ...recording, status: 'interrupted', updatedAt: Date.now() };
+      store.put(next);
+      await done;
+      return next;
+    } catch (error) { try { await done; } catch { /* Consume transaction abort. */ } throw error; }
+  }
+  return { list, listUnfinished, get, create, appendChunk, setStatus, rename, chunks, remove, recover };
+}
+
+========================================================================================
+FILE: source/spikes/phase-00/gate1/web/app/lib/local-notes.test.mjs
+========================================================================================
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import 'fake-indexeddb/auto';
+import { validateCanonicalDocument } from '../../packages/document-engine/src/index.js';
+import {
+  createNotesRepository,
+  ImportCollisionError,
+  makeEmptyNote,
+  NoteConflictError,
+  NoteDocumentError,
+  NoteNotFoundError,
+  NoteStateError,
+} from './local-notes.js';
+
+let databaseSequence = 0;
+function repository() {
+  databaseSequence += 1;
+  const name = `noteos-mvp-test-${databaseSequence}`;
+  return { name, repo: createNotesRepository(globalThis.indexedDB, name) };
+}
+
+function canonical(text = 'saved') {
+  return { schemaVersion: 1, type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] };
+}
+
+function makeNote(id, title = id, document = canonical()) {
+  return { ...makeEmptyNote(100, id), title, document };
+}
+
+test('revision race rejects stale saves and preserves the newer committed record', async () => {
+  const { name, repo: firstTab } = repository();
+  const secondTab = createNotesRepository(globalThis.indexedDB, name);
+  const created = await firstTab.create(makeNote('race'));
+  const newer = await firstTab.save(created.id, { title: 'new tab value', document: canonical('new') }, created.revision);
+  await assert.rejects(secondTab.save(created.id, { title: 'stale value', document: canonical('stale') }, created.revision), NoteConflictError);
+  assert.equal((await secondTab.get(created.id)).title, 'new tab value');
+  assert.equal((await secondTab.get(created.id)).revision, newer.revision);
+});
+
+test('canonical documents are validated at create and save boundaries', async () => {
+  const { repo } = repository();
+  const invalid = { schemaVersion: 1, type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text' }] }] };
+  await assert.rejects(repo.create(makeNote('invalid-create', 'invalid', invalid)), NoteDocumentError);
+  const created = await repo.create(makeNote('valid'));
+  await assert.rejects(repo.save(created.id, { title: 'invalid', document: invalid }, created.revision), NoteDocumentError);
+  assert.equal((await repo.get(created.id)).title, 'valid');
+});
+
+test('backup import validates all documents before writing and preserves future schema read-only', async () => {
+  const { repo } = repository();
+  const future = makeNote('future', 'Future', { schemaVersion: 2, type: 'doc', content: [], futurePayload: { keep: true } });
+  const malformed = makeNote('bad', 'Bad', { schemaVersion: 1, type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text' }] }] });
+  await assert.rejects(repo.importNotes([makeNote('valid-first'), malformed]), NoteDocumentError);
+  assert.equal(await repo.get('valid-first'), null);
+  const result = await repo.importNotes([future]);
+  assert.deepEqual(result, { imported: 1, skipped: 0 });
+  assert.deepEqual((await repo.get('future')).document, future.document);
+  assert.equal(validateCanonicalDocument((await repo.get('future')).document).status, 'unsupported');
+});
+
+test('skip import is all-or-nothing on collision; merge never overwrites matching IDs', async () => {
+  const { repo } = repository();
+  await repo.create(makeNote('existing', 'keep me'));
+  await assert.rejects(repo.importNotes([makeNote('new'), makeNote('existing', 'overwrite')], 'skip'), ImportCollisionError);
+  assert.equal(await repo.get('new'), null);
+  assert.equal((await repo.get('existing')).title, 'keep me');
+  const result = await repo.importNotes([makeNote('new'), makeNote('existing', 'overwrite')], 'merge');
+  assert.deepEqual(result, { imported: 1, skipped: 1 });
+  assert.equal((await repo.get('existing')).title, 'keep me');
+  assert.equal((await repo.get('new')).title, 'new');
+});
+
+test('permanent deletion requires a trashed note and matching revision; missing notes are explicit', async () => {
+  const { name, repo } = repository();
+  const otherTab = createNotesRepository(globalThis.indexedDB, name);
+  const created = await repo.create(makeNote('delete-race'));
+  await assert.rejects(repo.deleteForever(created.id, created.revision), NoteStateError);
+  const changed = await otherTab.save(created.id, { title: 'changed in other tab', document: canonical('edited') }, created.revision);
+  const trashed = await repo.setLifecycle(created.id, 'trashed', changed.revision);
+  await assert.rejects(otherTab.deleteForever(created.id, created.revision), NoteConflictError);
+  assert.equal((await repo.get(created.id)).lifecycle, 'trashed');
+  await assert.rejects(otherTab.save(created.id, { title: 'edit trashed', document: canonical() }, trashed.revision), NoteStateError);
+  await repo.deleteForever(created.id, trashed.revision);
+  assert.equal(await repo.get(created.id), null);
+  await assert.rejects(repo.deleteForever(created.id, trashed.revision), NoteNotFoundError);
+});
+
+test('permanent deletion rejects stale revisions after a restore transition', async () => {
+  const { repo } = repository();
+  const created = await repo.create(makeNote('restore-race'));
+  const trashed = await repo.setLifecycle(created.id, 'trashed', created.revision);
+  const restored = await repo.setLifecycle(created.id, 'active', trashed.revision);
+  await assert.rejects(repo.deleteForever(created.id, trashed.revision), NoteConflictError);
+  assert.equal((await repo.get(created.id)).lifecycle, 'active');
+  await assert.rejects(repo.deleteForever(created.id, restored.revision), NoteStateError);
+});
+
+test('organization updates are revision guarded, keep content timestamps, and reject duplicate or invalid tags', async () => {
+  const { name, repo: first } = repository();
+  const second = createNotesRepository(globalThis.indexedDB, name);
+  const note = await first.create(makeNote('organization'));
+  const updated = await first.updateOrganization(note.id, { pinned: true, tags: ['Work', 'Công việc', '日本語'] }, note.revision);
+  assert.equal(updated.pinned, true); assert.deepEqual(updated.tags, ['Work', 'Công việc', '日本語']);
+  assert.equal(updated.updatedAt, note.updatedAt); assert.equal(updated.revision, note.revision + 1);
+  await assert.rejects(first.updateOrganization(note.id, { tags: ['same', ' same '] }, updated.revision), /duplicate tags/i);
+  await assert.rejects(first.updateOrganization(note.id, { tags: ['  '] }, updated.revision), /tag name/i);
+  await assert.rejects(first.updateOrganization(note.id, { tags: ['x'.repeat(33)] }, updated.revision), /up to 32/i);
+  await assert.rejects(second.save(note.id, { title: 'stale overwrite', document: note.document }, note.revision), NoteConflictError);
+  assert.equal((await second.get(note.id)).title, note.title);
+  assert.equal((await second.get(note.id)).pinned, true);
+});
+
+test('archive, trash, and restore retain pinned and tag metadata', async () => {
+  const { repo } = repository();
+  const note = await repo.create({ ...makeNote('organization-lifecycle'), pinned: true, tags: ['Personal', '日本語'] });
+  const archived = await repo.setLifecycle(note.id, 'archived', note.revision);
+  assert.equal(archived.pinned, true); assert.deepEqual(archived.tags, ['Personal', '日本語']);
+  const restored = await repo.setLifecycle(note.id, 'active', archived.revision);
+  const trashed = await repo.setLifecycle(note.id, 'trashed', restored.revision);
+  assert.equal(trashed.pinned, true); assert.deepEqual(trashed.tags, ['Personal', '日本語']);
+  const active = await repo.setLifecycle(note.id, 'active', trashed.revision);
+  assert.equal(active.pinned, true); assert.deepEqual(active.tags, ['Personal', '日本語']);
+});
+
+test('future note record schemas remain preserved but cannot be edited or organized as schema v1', async () => {
+  const { repo } = repository();
+  const future = { ...makeEmptyNote(100, 'future-record'), schemaVersion: 2, futureMetadata: { keep: true } };
+  await repo.create(future);
+  await assert.rejects(repo.save(future.id, { title: 'unsafe', document: future.document }, future.revision), /newer schema/i);
+  await assert.rejects(repo.updateOrganization(future.id, { pinned: true }, future.revision), /newer schema/i);
+  assert.deepEqual(await repo.get(future.id), future);
+});
+
+========================================================================================
+FILE: source/spikes/phase-00/gate1/web/app/lib/mvp-utils.mjs
+========================================================================================
+import { assertNoteRecord } from './note-validation.mjs';
+import { normalizeTagList, tagKey } from './note-organization.mjs';
+
+export const BACKUP_FORMAT = 'noteos.local-backup';
+export const BACKUP_VERSION = 1;
+
+export function searchableText(value) {
+  return String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[đĐ]/g, (character) => character === 'Đ' ? 'D' : 'd')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+}
+
+function collectNodeText(node, output) {
+  if (!node || typeof node !== 'object') return;
+  if (node.type === 'text' && typeof node.text === 'string') output.push(node.text);
+  for (const child of Array.isArray(node.content) ? node.content : []) collectNodeText(child, output);
+}
+
+export function noteSearchText(note) {
+  const pieces = [note?.title, ...(Array.isArray(note?.tags) ? note.tags : [])];
+  collectNodeText(note?.document, pieces);
+  return searchableText(pieces.join(' '));
+}
+
+export function filterNotesByTags(notes, selectedTags = []) {
+  const required = selectedTags.map(tagKey);
+  if (!required.length) return [...notes];
+  return notes.filter((note) => {
+    const tags = new Set((Array.isArray(note.tags) ? note.tags : []).map(tagKey));
+    return required.every((tag) => tags.has(tag));
+  });
+}
+
+export function sortNotes(notes, mode = 'updated') {
+  const compareDate = (left, right) => Number(right.updatedAt) - Number(left.updatedAt) || String(left.id).localeCompare(String(right.id));
+  const compareOther = (left, right) => {
+    if (mode === 'created') return Number(right.createdAt) - Number(left.createdAt) || compareDate(left, right);
+    if (mode === 'title') return String(left.title ?? '').localeCompare(String(right.title ?? ''), undefined, { sensitivity: 'base', numeric: true }) || compareDate(left, right);
+    return compareDate(left, right);
+  };
+  return [...notes].sort((left, right) => {
+    const pinOrder = Number(Boolean(right.pinned)) - Number(Boolean(left.pinned));
+    if (pinOrder) return pinOrder;
+    if (left.pinned && right.pinned) return compareDate(left, right);
+    return compareOther(left, right);
+  });
+}
+
+export function filterNotes(notes, query, lifecycle) {
+  const normalized = searchableText(query);
+  return notes.filter((note) => note.lifecycle === lifecycle && (!normalized || noteSearchText(note).includes(normalized)));
+}
+
+export function makeBackup(notes, exportedAt = new Date().toISOString()) {
+  return { format: BACKUP_FORMAT, version: BACKUP_VERSION, exportedAt, notes };
+}
+
+export function parseBackup(input) {
+  let bundle;
+  try { bundle = typeof input === 'string' ? JSON.parse(input) : input; }
+  catch { throw new TypeError('Backup file is not valid JSON.'); }
+  if (!bundle || bundle.format !== BACKUP_FORMAT || bundle.version !== BACKUP_VERSION || !Array.isArray(bundle.notes)) {
+    throw new TypeError('This file is not a supported noteOS backup (version 1).');
+  }
+  const ids = new Set();
+  for (const note of bundle.notes) {
+    if (!note || typeof note.id !== 'string' || !note.id.trim() || ids.has(note.id)) throw new TypeError('Backup contains a missing or duplicate note ID.');
+    assertNoteRecord(note, { allowUnsupported: true });
+    ids.add(note.id);
+  }
+  return bundle;
+}
+
+export { normalizeTagList };
+
+export function titleFromDocument(document) {
+  const text = [];
+  collectNodeText(document, text);
+  return text.join('').split('\n').map((line) => line.trim()).find(Boolean)?.slice(0, 80) || 'Untitled note';
+}
+
+export function formatSavedAt(timestamp) {
+  if (!timestamp) return '';
+  return new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(new Date(timestamp));
+}
+
+========================================================================================
+FILE: source/spikes/phase-00/gate1/web/app/lib/mvp-utils.test.mjs
+========================================================================================
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { filterNotes, filterNotesByTags, makeBackup, noteSearchText, parseBackup, searchableText, sortNotes } from './mvp-utils.mjs';
+
+const note = (id, title, body, lifecycle = 'active') => ({
+  id, title, document: { schemaVersion: 1, type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: body }] }] },
+  schemaVersion: 1, createdAt: 1, updatedAt: 2, lifecycle, revision: 0,
+});
+
+test('search folds Vietnamese accents including đ/Đ and punctuation while retaining Japanese text', () => {
+  assert.equal(searchableText('  Ghi chú: Buổi sáng! '), 'ghi chu buoi sang');
+  assert.equal(searchableText('Điện thoại ở Đà Nẵng'), 'dien thoai o da nang');
+  const notes = [note('vi', 'Điện thoại', 'Đà Nẵng'), note('ja', '日記', '今日は雨です')];
+  assert.deepEqual(filterNotes(notes, 'dien thoai', 'active').map(({ id }) => id), ['vi']);
+  assert.deepEqual(filterNotes(notes, 'ĐA nang', 'active').map(({ id }) => id), ['vi']);
+  assert.deepEqual(filterNotes(notes, '今日は', 'active').map(({ id }) => id), ['ja']);
+  assert.deepEqual(filterNotes(notes, '雨です', 'active').map(({ id }) => id), ['ja']);
+  assert.deepEqual(filterNotes(notes, 'ひらがな', 'active').map(({ id }) => id), []);
+  assert.equal(noteSearchText(notes[0]).includes('dien thoai'), true);
+});
+
+test('lifecycle filtering does not include archived or trashed notes in active search', () => {
+  const notes = [note('a', 'Same phrase', 'same'), note('b', 'Same archived', 'same', 'archived'), note('c', 'Same trashed', 'same', 'trashed')];
+  assert.deepEqual(filterNotes(notes, 'same', 'active').map(({ id }) => id), ['a']);
+});
+
+test('tag filtering uses case-insensitive canonical Unicode identity and requires every selected tag', () => {
+  const notes = [
+    { ...note('both', 'One', 'x'), tags: ['Work', '日本語'] },
+    { ...note('work', 'Two', 'x'), tags: ['work'] },
+    { ...note('kana', 'Three', 'x'), tags: ['にほんご'] },
+  ];
+  assert.deepEqual(filterNotesByTags(notes, ['WORK']).map(({ id }) => id), ['both', 'work']);
+  assert.deepEqual(filterNotesByTags(notes, ['work', '日本語']).map(({ id }) => id), ['both']);
+  assert.deepEqual(filterNotesByTags(notes, ['日本語']).map(({ id }) => id), ['both']);
+  assert.equal(noteSearchText({ ...notes[0], tags: ['Công việc', '日本語'] }).includes('cong viec'), true);
+});
+
+test('pinned notes stay first; pinned ties use updatedAt and remaining notes honor selected sort', () => {
+  const notes = [
+    { ...note('older-pin', 'A pin', 'x'), pinned: true, updatedAt: 3 },
+    { ...note('newer-pin', 'Z pin', 'x'), pinned: true, updatedAt: 9 },
+    { ...note('recent', 'Zulu', 'x'), updatedAt: 20 },
+    { ...note('alpha', 'Alpha', 'x'), updatedAt: 10 },
+  ];
+  assert.deepEqual(sortNotes(notes).map(({ id }) => id), ['newer-pin', 'older-pin', 'recent', 'alpha']);
+  assert.deepEqual(sortNotes(notes, 'title').map(({ id }) => id), ['newer-pin', 'older-pin', 'alpha', 'recent']);
+});
+
+test('backup parser accepts version 1 data and preserves document values', () => {
+  const source = note('one', 'A note', 'hello');
+  const parsed = parseBackup(JSON.stringify(makeBackup([source], '2026-10-21T00:00:00.000Z')));
+  assert.equal(parsed.version, 1);
+  assert.deepEqual(parsed.notes[0].document, source.document);
+});
+
+test('backup v1 preserves organization metadata and remains compatible with older v1 notes', () => {
+  const source = { ...note('tagged', '日本語', '本文'), pinned: true, tags: ['仕事', 'Công việc'] };
+  const parsed = parseBackup(makeBackup([source]));
+  assert.equal(parsed.notes[0].pinned, true); assert.deepEqual(parsed.notes[0].tags, source.tags);
+  const older = note('older', 'Old export', 'body'); delete older.pinned; delete older.tags;
+  assert.deepEqual(parseBackup(makeBackup([older])).notes[0], older);
+});
+
+test('backup v1 rejects invalid organization metadata without rewriting source notes', () => {
+  const invalid = { ...note('invalid-tags', 'Bad', 'x'), pinned: true, tags: ['duplicate', ' Duplicate '] };
+  const before = structuredClone(invalid);
+  assert.throws(() => parseBackup(makeBackup([invalid])), /duplicate tags/i);
+  assert.deepEqual(invalid, before);
+});
+
+test('backup parser rejects duplicate IDs before repository mutation', () => {
+  assert.throws(() => parseBackup(makeBackup([note('same', 'one', 'x'), note('same', 'two', 'y')])), /duplicate note ID/i);
+});
+
+test('backup parser rejects unsupported bundle versions and invalid note metadata', () => {
+  assert.throws(() => parseBackup({ format: 'noteos.local-backup', version: 7, notes: [] }), /not a supported/i);
+  const invalid = note('bad', 'Bad', 'x'); invalid.updatedAt = Number.NaN;
+  assert.throws(() => parseBackup(makeBackup([invalid])), /invalid metadata/i);
+});
+
+========================================================================================
+FILE: source/spikes/phase-00/gate1/web/app/lib/note-organization.mjs
+========================================================================================
+const MAX_TAGS_PER_NOTE = 20;
+const MAX_TAG_LENGTH = 32;
+
+export function tagKey(value) {
+  return String(value ?? '').normalize('NFC').toLowerCase();
+}
+
+export function normalizeTagLabel(value) {
+  if (typeof value !== 'string') throw new TypeError('Tags must be text.');
+  const label = value.trim();
+  if (!label) throw new TypeError('Enter a tag name.');
+  if (Array.from(label).length > MAX_TAG_LENGTH) throw new TypeError(`Tags can contain up to ${MAX_TAG_LENGTH} characters.`);
+  if (/[\u0000-\u001f\u007f]/u.test(label)) throw new TypeError('Tags cannot contain control characters.');
+  return label;
+}
+
+export function normalizeTagList(values) {
+  if (!Array.isArray(values)) throw new TypeError('Note tags must be a list.');
+  if (values.length > MAX_TAGS_PER_NOTE) throw new TypeError(`A note can have up to ${MAX_TAGS_PER_NOTE} tags.`);
+  const tags = [], seen = new Set();
+  for (const value of values) {
+    const label = normalizeTagLabel(value), key = tagKey(label);
+    if (seen.has(key)) throw new TypeError('A note cannot contain duplicate tags.');
+    seen.add(key); tags.push(label);
+  }
+  return tags;
+}
+
+export function validateOrganizationMetadata(note) {
+  if (note.schemaVersion !== 1) return;
+  if (note.pinned !== undefined && typeof note.pinned !== 'boolean') throw new TypeError(`Backup note “${note.id}” has invalid pin metadata.`);
+  if (note.tags !== undefined) normalizeTagList(note.tags);
+}
+
+========================================================================================
+FILE: source/spikes/phase-00/gate1/web/app/lib/note-validation.mjs
+========================================================================================
+import { validateCanonicalDocument } from '../../packages/document-engine/src/index.js';
+import { validateOrganizationMetadata } from './note-organization.mjs';
+
+export class NoteDocumentError extends Error {
+  constructor(message, issues = []) { super(message); this.name = 'NoteDocumentError'; this.issues = issues; }
+}
+
+export function validateNoteDocument(document, allowUnsupported = false) {
+  if (!document || Array.isArray(document) || document.type !== 'doc' || !Array.isArray(document.content) || !Number.isSafeInteger(document.schemaVersion) || document.schemaVersion < 1) {
+    throw new NoteDocumentError('A canonical document requires a version, doc root and content array.');
+  }
+  const result = validateCanonicalDocument(document);
+  if (result.status === 'invalid' || (!allowUnsupported && result.status !== 'supported')) {
+    throw new NoteDocumentError(result.issues?.[0]?.message ?? 'The note document cannot be safely written.', result.issues ?? []);
+  }
+  return result;
+}
+
+export function assertNoteRecord(note, { allowUnsupported = false } = {}) {
+  if (!note || typeof note.id !== 'string' || !note.id.trim()) throw new TypeError('A note requires a stable ID.');
+  if (typeof note.title !== 'string' || !Number.isSafeInteger(note.schemaVersion) || note.schemaVersion < 1 || !Number.isSafeInteger(note.createdAt) || note.createdAt < 0 || !Number.isSafeInteger(note.updatedAt) || note.updatedAt < 0 || !['active', 'archived', 'trashed'].includes(note.lifecycle) || !Number.isSafeInteger(note.revision) || note.revision < 0) {
+    throw new TypeError(`Backup note “${note.id}” has invalid metadata.`);
+  }
+  validateOrganizationMetadata(note);
+  validateNoteDocument(note.document, allowUnsupported);
+}
+
+========================================================================================
+FILE: source/spikes/phase-00/gate1/web/app/lib/save-coordinator.mjs
+========================================================================================
+import { NoteConflictError } from './local-notes.js';
+import { sameContent } from './recovery-journal.mjs';
+
+/** @param {{note: any, repository: any, journal: any, onChange?: (state: any) => void}} options */
+export function createSaveCoordinator({ note, repository, journal, onChange = () => {} }) {
+  let saved = structuredClone(note);
+  let draft = { title: note.title, document: structuredClone(note.document) };
+  let generation = 0;
+  let running = null;
+  let pending = null;
+  let error = null;
+  const dirty = () => !sameContent(draft, saved);
+  const snapshot = () => ({ note: saved, draft, generation, dirty: dirty(), inFlight: Boolean(pending), error });
+  const notify = () => onChange(snapshot());
+  const persist = () => journal.write(draft, generation, saved.revision, pending);
+  function edit(next) {
+    if (sameContent(next, draft)) return;
+    draft = structuredClone(next); generation += 1; error = null;
+    if (dirty() || pending) persist(); else journal.clear();
+    notify();
+  }
+  function flush() {
+    if (running) return running;
+    if (!dirty()) return Promise.resolve({ ok: true, note: saved });
+    running = (async () => {
+      // Bound each drain. New edits continue through the existing debounce, never an error retry loop.
+      for (let writes = 0; writes < 10 && dirty(); writes += 1) {
+        if (!journal.isCurrent()) { error = new NoteConflictError(); notify(); return { ok: false, error }; }
+        const target = structuredClone(draft);
+        pending = { ...target, generation, expectedRevision: saved.revision };
+        persist(); error = null; notify();
+        try {
+          saved = await repository.save(saved.id, target, saved.revision);
+          pending = null;
+          if (dirty()) persist(); else journal.clear();
+          notify();
+        } catch (cause) {
+          pending = null; error = cause; persist(); notify();
+          return { ok: false, error: cause };
+        }
+      }
+      return dirty() ? { ok: false, pending: true } : { ok: true, note: saved };
+    })().finally(() => { running = null; });
+    return running;
+  }
+  async function transition(lifecycle) {
+    const result = await flush();
+    if (!result.ok) return result;
+    try {
+      if (!journal.isCurrent()) throw new NoteConflictError();
+      if (saved.lifecycle !== lifecycle) saved = await repository.setLifecycle(saved.id, lifecycle, saved.revision);
+      notify(); return { ok: true, note: saved };
+    } catch (cause) { error = cause; notify(); return { ok: false, error: cause }; }
+  }
+  async function updateMetadata(changes) {
+    const result = await flush();
+    if (!result.ok) return result;
+    try {
+      if (!journal.isCurrent()) throw new NoteConflictError();
+      saved = await repository.updateOrganization(saved.id, changes, saved.revision);
+      error = null; notify();
+      return { ok: true, note: saved };
+    } catch (cause) {
+      error = cause; notify();
+      return { ok: false, error: cause };
+    }
+  }
+  return { edit, flush, transition, updateMetadata, snapshot, clearJournal: () => journal.clear() };
+}
+
+========================================================================================
+FILE: source/spikes/phase-00/gate1/web/app/lib/save-coordinator.test.mjs
+========================================================================================
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createSaveCoordinator } from './save-coordinator.mjs';
+import { NoteConflictError } from './local-notes.js';
+
+const doc = text => ({ schemaVersion: 1, type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] });
+const draft = text => ({ title: text, document: doc(text) });
+const note = () => ({ id: 'one', ...draft('Old body'), revision: 0, lifecycle: 'active', createdAt: 1, updatedAt: 1 });
+function deferred() { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
+function fixture() {
+  const calls = [], states = [];
+  const journal = { current: true, value: null, isCurrent() { return this.current; }, write(value, generation, revision, pending) { this.value = structuredClone({ ...value, generation, revision, pending }); }, clear() { this.value = null; } };
+  const repository = { save(id, value, revision) { const gate = deferred(); calls.push({ id, value, revision, gate }); return gate.promise; }, async setLifecycle(id, lifecycle, revision) { return { ...note(), ...draft('C'), lifecycle, revision: revision + 1 }; } };
+  const coordinator = createSaveCoordinator({ note: note(), repository, journal, onChange: s => states.push(structuredClone(s)) });
+  const finish = (index) => calls[index].gate.resolve({ ...note(), ...calls[index].value, revision: calls[index].revision + 1, updatedAt: index + 2 });
+  return { calls, states, journal, repository, coordinator, finish };
+}
+
+test('serializes delayed A then newest B/C, preserves latest journal and does not show Saved early', async () => {
+  const f = fixture(); f.coordinator.edit(draft('A'));
+  const first = f.coordinator.flush();
+  f.coordinator.edit(draft('B')); f.coordinator.edit(draft('C'));
+  assert.equal(f.coordinator.flush(), first);
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.journal.value.title, 'C');
+  f.finish(0); await Promise.resolve();
+  assert.equal(f.calls.length, 2);
+  assert.equal(f.calls[1].value.title, 'C');
+  assert.equal(f.calls[1].revision, 1);
+  assert.equal(f.journal.value.title, 'C');
+  assert.equal(f.coordinator.snapshot().dirty, true);
+  assert.equal(f.coordinator.snapshot().inFlight, true);
+  f.finish(1); assert.equal((await first).ok, true);
+  assert.equal(f.coordinator.snapshot().note.title, 'C');
+  assert.equal(f.coordinator.snapshot().note.revision, 2);
+  assert.equal(f.journal.value, null);
+});
+
+test('C arriving while B saves is drained with the next expected revision', async () => {
+  const f = fixture(); f.coordinator.edit(draft('A')); const flushing = f.coordinator.flush();
+  f.coordinator.edit(draft('B')); f.finish(0); await Promise.resolve();
+  f.coordinator.edit(draft('C')); f.finish(1); await Promise.resolve();
+  assert.equal(f.calls[2].revision, 2); assert.equal(f.calls[2].value.title, 'C');
+  f.finish(2); assert.equal((await flushing).ok, true); assert.equal(f.journal.value, null);
+});
+
+test('autosave and lifecycle share a flush and lifecycle uses the committed revision', async () => {
+  const f = fixture(); let transition;
+  f.repository.setLifecycle = async (id, lifecycle, revision) => { transition = { id, lifecycle, revision }; return { ...note(), ...draft('C'), lifecycle, revision: revision + 1 }; };
+  f.coordinator.edit(draft('C')); const saving = f.coordinator.flush(); const changing = f.coordinator.transition('archived');
+  assert.equal(f.calls.length, 1); assert.equal(transition, undefined);
+  f.finish(0); await saving; assert.equal((await changing).ok, true);
+  assert.equal(transition.revision, 1); assert.equal(f.calls.length, 1);
+});
+
+test('failed in-flight save retains newest draft and journal and blocks lifecycle without retry', async () => {
+  const f = fixture(); let transitioned = false; f.repository.setLifecycle = async () => { transitioned = true; };
+  f.coordinator.edit(draft('A')); const saving = f.coordinator.flush(); const changing = f.coordinator.transition('trashed');
+  f.coordinator.edit(draft('B')); f.calls[0].gate.reject(new Error('disk full'));
+  assert.equal((await saving).ok, false); assert.equal((await changing).ok, false);
+  assert.equal(transitioned, false); assert.equal(f.calls.length, 1); assert.equal(f.journal.value.title, 'B'); assert.equal(f.coordinator.snapshot().dirty, true);
+});
+
+test('cross-tab stale revision stays rejected; no adoption of another tab revision', async () => {
+  const f = fixture(); f.coordinator.edit(draft('A')); const result = f.coordinator.transition('archived');
+  f.calls[0].gate.reject(new NoteConflictError()); assert.equal((await result).ok, false);
+  assert.equal(f.coordinator.snapshot().note.revision, 0); assert.equal(f.journal.value.title, 'A');
+});
+
+test('unchanged draft does not save or increment revision; unsupported/trashed record can restore', async () => {
+  const f = fixture(); assert.equal((await f.coordinator.flush()).ok, true); assert.equal(f.calls.length, 0);
+  const calls = [];
+  const coordinator = createSaveCoordinator({ note: { ...note(), lifecycle: 'trashed', schemaVersion: 99, document: { schemaVersion: 99, type: 'doc', content: [] } }, journal: f.journal, repository: { save() { throw Error('unnecessary save'); }, async setLifecycle(id, lifecycle, revision) { calls.push(revision); return { ...note(), lifecycle, revision: revision + 1 }; } } });
+  assert.equal((await coordinator.transition('active')).ok, true); assert.deepEqual(calls, [0]);
+});
+
+test('deletion epoch prevents stale-tab save after same-ID reimport', async () => {
+  const f = fixture(); f.coordinator.edit(draft('A')); f.journal.current = false;
+  assert.equal((await f.coordinator.flush()).ok, false); assert.equal(f.calls.length, 0); assert.equal(f.coordinator.snapshot().dirty, true);
+});
+
+test('organization mutation waits for draft autosave and uses its committed revision', async () => {
+  const f = fixture(), organizationWrites = [];
+  f.repository.updateOrganization = async (id, changes, revision) => {
+    organizationWrites.push({ id, changes, revision });
+    return { ...f.coordinator.snapshot().note, ...changes, revision: revision + 1 };
+  };
+  f.coordinator.edit(draft('Latest body'));
+  const mutation = f.coordinator.updateMetadata({ pinned: true });
+  assert.equal(f.calls.length, 1); assert.equal(organizationWrites.length, 0);
+  f.finish(0);
+  assert.equal((await mutation).ok, true);
+  assert.deepEqual(organizationWrites, [{ id: 'one', changes: { pinned: true }, revision: 1 }]);
+  assert.equal(f.coordinator.snapshot().note.title, 'Latest body');
+  assert.equal(f.coordinator.snapshot().note.pinned, true);
+  assert.equal(f.coordinator.snapshot().note.revision, 2);
+  assert.equal(f.journal.value, null);
+});
+
+test('failed draft save blocks organization mutation and retains its recovery journal', async () => {
+  const f = fixture(); let organizationWrites = 0;
+  f.repository.updateOrganization = async () => { organizationWrites += 1; return f.coordinator.snapshot().note; };
+  f.coordinator.edit(draft('Unsaved body'));
+  const mutation = f.coordinator.updateMetadata({ tags: ['Work'] });
+  f.calls[0].gate.reject(new Error('disk full'));
+  assert.equal((await mutation).ok, false);
+  assert.equal(organizationWrites, 0);
+  assert.equal(f.journal.value.title, 'Unsaved body');
+  assert.equal(f.coordinator.snapshot().note.revision, 0);
+});
+
+========================================================================================
+FILE: source/spikes/phase-00/gate1/web/app/notes/[id]/page.tsx
+========================================================================================
+'use client';
+
+import { GuardedLink as Link, useNavigationGuard } from '../../ui/navigation-guard';
+import { useParams, useRouter } from 'next/navigation';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { createNotesRepository, NoteConflictError } from '../../lib/local-notes.js';
+import { createSaveCoordinator } from '../../lib/save-coordinator.mjs';
+import { createRecoveryJournal, recoveryCandidates, clearRecoveryEntry, recoveryStorage } from '../../lib/recovery-journal.mjs';
+import { formatSavedAt } from '../../lib/mvp-utils.mjs';
+import { normalizeTagLabel, tagKey } from '../../lib/note-organization.mjs';
+import { canonicalToMarkdown, createTiptapEditor, validateCanonicalDocument, toTiptapJSON } from '../../../packages/document-engine/src/index.js';
+import { AudioRecorder } from '../../ui/audio-recorder';
+
+type Note = { id: string; title: string; document: any; schemaVersion: number; createdAt: number; updatedAt: number; lifecycle: 'active' | 'archived' | 'trashed'; revision: number; pinned?: boolean; tags?: string[] };
+
+export default function NoteEditorPage() {
+  const params = useParams<{ id: string }>(); const id = params.id; const router = useRouter();
+  const [note, setNote] = useState<Note | null>(null), [title, setTitle] = useState(''), [doc, setDoc] = useState<any>(null);
+  const [state, setState] = useState('Loading…'), [error, setError] = useState(''), [conflict, setConflict] = useState(false), [ready, setReady] = useState(false);
+  const [recovery, setRecovery] = useState<any>(null), [markdown, setMarkdown] = useState<any>(null), [busy, setBusy] = useState(false);
+  const [tagInput, setTagInput] = useState(''), [availableTags, setAvailableTags] = useState<string[]>([]);
+  const elementRef = useRef<HTMLDivElement>(null), editorRef = useRef<any>(null), timerRef = useRef<any>(null), coordinatorRef = useRef<any>(null);
+  const operationRef = useRef(false), recoveryRef = useRef<any>(null), aliveRef = useRef(false), recordingRef = useRef(false);
+  const validation = doc ? validateCanonicalDocument(doc) : null;
+  const recordSchemaSupported = note?.schemaVersion === 1;
+  const editable = recordSchemaSupported && validation?.status === 'supported' && note?.lifecycle === 'active';
+  const editableRef = useRef(false); editableRef.current = editable;
+  const selectRecovery = (next: any) => { recoveryRef.current = next; setRecovery(next); };
+
+  function showFailure(cause: any) {
+    const stale = cause instanceof NoteConflictError || cause?.name === 'NoteConflictError';
+    setConflict(stale);
+    setError(stale ? 'This note changed in another tab. Your draft is kept here. Save it as a new note before leaving.' : 'Could not save locally. Stay here and retry, or save your draft as a new note. Browser recovery is best effort.');
+  }
+
+  useEffect(() => {
+    let alive = true; aliveRef.current = true;
+    setReady(false);
+    const repo = createNotesRepository();
+    void (async () => {
+      try {
+        const loaded = await repo.get(id);
+        if (!loaded) throw new Error('This note no longer exists. Return to Notes or import a backup.');
+        if (!alive) return;
+        const allNotes = await repo.list();
+        if (!alive) return;
+        const tagMap = new Map<string, string>();
+        for (const row of allNotes) for (const tag of Array.isArray(row.tags) ? row.tags : []) if (!tagMap.has(tagKey(tag))) tagMap.set(tagKey(tag), tag);
+        setAvailableTags([...tagMap.values()].sort((left, right) => left.localeCompare(right, undefined, { sensitivity: 'base' })));
+        const coordinator = createSaveCoordinator({ note: loaded, repository: repo, journal: createRecoveryJournal(recoveryStorage(), loaded), onChange: (snapshot: any) => {
+          if (!alive) return;
+          setNote(snapshot.note);
+          setState(snapshot.error ? 'Not saved' : snapshot.inFlight ? 'Saving…' : snapshot.dirty ? 'Unsaved changes' : `Saved ${formatSavedAt(snapshot.note.updatedAt)}`);
+          if (snapshot.error) showFailure(snapshot.error); else { setError(''); setConflict(false); }
+        } });
+        coordinatorRef.current = coordinator;
+        setNote(loaded); setTitle(loaded.title); setDoc(loaded.document);
+        selectRecovery(recoveryCandidates(recoveryStorage(), loaded)[0] ?? null);
+        setState(`Saved ${formatSavedAt(loaded.updatedAt)}`); setReady(true);
+      } catch (cause) { if (alive) { setError(cause instanceof Error ? cause.message : 'Could not open this note.'); setReady(true); } }
+    })();
+    const beforeUnload = (event: BeforeUnloadEvent) => { const snapshot = coordinatorRef.current?.snapshot(); if (snapshot?.dirty || snapshot?.inFlight) { event.preventDefault(); event.returnValue = ''; } };
+    window.addEventListener('beforeunload', beforeUnload);
+    return () => { alive = false; aliveRef.current = false; clearTimeout(timerRef.current); window.removeEventListener('beforeunload', beforeUnload); editorRef.current?.destroy?.(); editorRef.current = null; coordinatorRef.current = null; };
+  }, [id]);
+
+  function scheduleSave() {
+    clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(async () => { const result = await coordinatorRef.current?.flush(); if (result?.pending && aliveRef.current) scheduleSave(); }, 650);
+  }
+  function changeDraft(next: any) {
+    if (operationRef.current || recoveryRef.current) return;
+    coordinatorRef.current?.edit(next); scheduleSave();
+  }
+  useEffect(() => {
+    if (!ready || !doc || !elementRef.current || !editable) return;
+    try {
+      editorRef.current = createTiptapEditor({ element: elementRef.current, document: doc, onUpdate: (next: any) => {
+        if (operationRef.current || recoveryRef.current) return;
+        setDoc(next); changeDraft({ ...coordinatorRef.current.snapshot().draft, document: next });
+      } });
+      editorRef.current.view.dom.setAttribute('aria-label', 'Note content');
+      editorRef.current.setEditable(!operationRef.current && !recoveryRef.current);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not open editor safely.'); }
+    return () => { editorRef.current?.destroy?.(); editorRef.current = null; elementRef.current?.replaceChildren(); };
+  // Content updates use the mounted instance; recovery calls setContent explicitly.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, editable, id]);
+
+  async function operation(action: () => Promise<boolean>) {
+    if (operationRef.current) return false;
+    operationRef.current = true; setBusy(true); editorRef.current?.setEditable(false); clearTimeout(timerRef.current);
+    try { return await action(); }
+    catch (cause) { showFailure(cause); return false; }
+    finally { operationRef.current = false; if (aliveRef.current) { setBusy(false); editorRef.current?.setEditable(editableRef.current && !recoveryRef.current); } }
+  }
+  const flushBeforeNavigation = useCallback(async () => {
+    if (recordingRef.current) { setError('Stop and save the audio recording before leaving this note. Background recording is not supported.'); return false; }
+    if (recoveryRef.current) { setError('Choose how to handle the recovery draft before leaving.'); return false; }
+    return operation(async () => { const result = await coordinatorRef.current?.flush(); return result?.ok ?? true; });
+  // Refs contain the current note operation and draft, independent of render timing.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+  useNavigationGuard(flushBeforeNavigation);
+
+  function updateTitle(value: string) {
+    if (operationRef.current || recoveryRef.current) return;
+    setTitle(value); changeDraft({ ...coordinatorRef.current.snapshot().draft, title: value });
+  }
+  async function saveDraftAsCopy() {
+    if (recordingRef.current) { setError('Stop and save the audio recording before opening another note.'); return; }
+    await operation(async () => {
+      const coordinator = coordinatorRef.current;
+      await coordinator.flush();
+      // A failed flush keeps the original safe; a separate ID preserves this draft.
+      const draft = coordinator.snapshot().draft;
+      const copy = { ...coordinator.snapshot().note, id: crypto.randomUUID(), title: `${draft.title || 'Untitled note'} (copy)`, document: draft.document, schemaVersion: draft.document.schemaVersion, createdAt: Date.now(), updatedAt: Date.now(), lifecycle: 'active', revision: 0, pinned: false, tags: [] };
+      await createNotesRepository().create(copy); coordinator.clearJournal(); router.replace(`/notes/${copy.id}`); return true;
+    });
+  }
+  async function useRecovery(asCopy: boolean) {
+    const candidate = recoveryRef.current;
+    if (!candidate) return;
+    await operation(async () => {
+      const converted = toTiptapJSON(candidate.document);
+      if (!candidate.valid || converted.status !== 'ready' || !converted.json) { setError('Recovery document is not safe to edit. Its journal has been retained.'); return false; }
+      if (asCopy) {
+        const now = Date.now();
+        const copy = { id: crypto.randomUUID(), title: `${candidate.title || 'Untitled note'} (recovered)`, document: candidate.document, schemaVersion: candidate.document.schemaVersion, createdAt: now, updatedAt: now, lifecycle: 'active', revision: 0, pinned: false, tags: [] };
+        await createNotesRepository().create(copy); coordinatorRef.current.clearJournal(); clearRecoveryEntry(recoveryStorage(), candidate); router.replace(`/notes/${copy.id}`); return true;
+      }
+      try {
+        if (!editorRef.current || !editorRef.current.commands.setContent(converted.json, { emitUpdate: false, errorOnInvalidContent: true })) throw new Error('Recovery apply failed');
+      } catch { setError('Could not safely apply the recovery draft. Its journal has been retained.'); return false; }
+      setTitle(candidate.title); setDoc(candidate.document);
+      coordinatorRef.current.edit({ title: candidate.title, document: candidate.document });
+      const result = await coordinatorRef.current.flush();
+      if (!result.ok) { if (result.error?.name === 'NoteConflictError') selectRecovery({ ...candidate, sameRevision: false }); return false; }
+      clearRecoveryEntry(recoveryStorage(), candidate);
+      selectRecovery(recoveryCandidates(recoveryStorage(), result.note)[0] ?? null); return true;
+    });
+  }
+  async function discardRecovery() {
+    await operation(async () => {
+      const saved = coordinatorRef.current.snapshot().note;
+      const converted = toTiptapJSON(saved.document);
+      try {
+        if (editorRef.current && converted.json && !editorRef.current.commands.setContent(converted.json, { emitUpdate: false, errorOnInvalidContent: true })) throw new Error('Could not reset editor');
+      } catch { setError('Could not return to the saved content. The recovery journal has been retained.'); return false; }
+      coordinatorRef.current.edit({ title: saved.title, document: saved.document }); setTitle(saved.title); setDoc(saved.document);
+      clearRecoveryEntry(recoveryStorage(), recoveryRef.current);
+      selectRecovery(recoveryCandidates(recoveryStorage(), saved)[0] ?? null); return true;
+    });
+  }
+  async function changeLifecycle(next: 'active' | 'archived' | 'trashed') {
+    if (recordingRef.current) { setError('Stop and save the audio recording before changing this note. Background recording is not supported.'); return; }
+    if (recoveryRef.current) { setError('Handle the recovery draft before changing this note.'); return; }
+    await operation(async () => {
+      const result = await coordinatorRef.current.transition(next);
+      if (!result.ok) return false;
+      router.push(next === 'archived' ? '/archive' : next === 'trashed' ? '/trash' : '/'); return true;
+    });
+  }
+  function exportMarkdown() { if (doc && validation?.status === 'supported') setMarkdown(canonicalToMarkdown(doc)); }
+
+  async function updateOrganization(changes: { pinned?: boolean; tags?: string[] }) {
+    if (!editable || recoveryRef.current) return;
+    await operation(async () => {
+      const result = await coordinatorRef.current.updateMetadata(changes);
+      return result.ok;
+    });
+  }
+
+  async function addTag(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    try {
+      const label = normalizeTagLabel(tagInput);
+      const existing = availableTags.find((tag) => tagKey(tag) === tagKey(label));
+      const tags = Array.isArray(note?.tags) ? note.tags : [];
+      if (tags.some((tag) => tagKey(tag) === tagKey(label))) { setTagInput(''); setError('That tag is already on this note.'); return; }
+      await updateOrganization({ tags: [...tags, existing ?? label] });
+      setTagInput(''); setError('');
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not add this tag.'); }
+  }
+
+  function removeTag(tagToRemove: string) {
+    const tags = (Array.isArray(note?.tags) ? note.tags : []).filter((tag) => tagKey(tag) !== tagKey(tagToRemove));
+    void updateOrganization({ tags });
+  }
+
+  function toggleChecklist() {
+    const editor = editorRef.current;
+    if (!editor) return;
+    if (editor.isEmpty) {
+      editor.chain().focus().insertContent({ type: 'taskList', content: [{ type: 'taskItem', attrs: { checked: false }, content: [{ type: 'paragraph' }] }] }).run();
+      let firstItemCursor: number | null = null;
+      editor.state.doc.descendants((node: any, position: number) => {
+        if (firstItemCursor === null && node.type.name === 'taskItem') firstItemCursor = position + 2;
+      });
+      if (firstItemCursor !== null) editor.commands.focus(firstItemCursor);
+    } else editor.chain().focus().toggleTaskList().run();
+  }
+
+  if (!ready) return <div className="empty-state"><h2>Opening note…</h2><p>Reading from this device.</p></div>;
+  if (error && !note) return <div className="notice error" role="alert">{error}<p><Link href="/">Back to notes</Link></p></div>;
+  return <>
+    <div className="editor-top"><Link href={note?.lifecycle === 'archived' ? '/archive' : note?.lifecycle === 'trashed' ? '/trash' : '/'} className="back-link">← Back to notes</Link><div className="actions"><span className="save-state" aria-live="polite">{state}</span>{note?.lifecycle === 'active' ? <button className="btn" disabled={busy} onClick={() => void changeLifecycle('archived')}>Archive</button> : note?.lifecycle === 'archived' ? <button className="btn" disabled={busy} onClick={() => void changeLifecycle('active')}>Restore</button> : <button className="btn" disabled={busy} onClick={() => void changeLifecycle('active')}>Restore</button>}<button className="btn" disabled={busy} onClick={() => void changeLifecycle('trashed')}>Move to trash</button><button className="btn" onClick={exportMarkdown} disabled={!editable || busy || Boolean(recovery)}>Export Markdown</button></div></div>
+    {error && <div className="notice error" role="alert">{error}{editable && <p>{!conflict && <button className="btn" disabled={busy} onClick={() => void operation(async () => (await coordinatorRef.current.flush()).ok)}>Retry save</button>} <button className="btn" disabled={busy} onClick={() => void saveDraftAsCopy()}>Save this draft as a new note</button></p>}</div>}
+    {note?.lifecycle !== 'active' && <div className="notice">This note is in {note?.lifecycle}. Restore it before editing.</div>}
+    {note && !recordSchemaSupported && <div className="notice">This note record uses a newer schema. It is open read-only so this version will preserve its original data.</div>}
+    <label className="screen-reader" htmlFor="note-title">Note title</label><input id="note-title" className="editor-title" value={title} onChange={(event) => updateTitle(event.target.value)} disabled={!editable || busy || Boolean(recovery)} placeholder="Untitled note" />
+    {note && note.lifecycle === 'active' && recordSchemaSupported && <section className="note-organization" aria-label="Note organization">
+      <div className="organization-pin-row"><span className="toolbar-label">Organization</span><button className="pin-button" type="button" aria-pressed={Boolean(note.pinned)} disabled={!editable || busy || Boolean(recovery)} onClick={() => void updateOrganization({ pinned: !note.pinned })}>{note.pinned ? '★ Pinned' : '☆ Pin note'}</button></div>
+      <div className="organization-tags"><span className="toolbar-label">Tags</span>{(Array.isArray(note.tags) ? note.tags : []).map((tag) => <span className="tag-chip editor-tag" key={tagKey(tag)}>{tag}<button type="button" aria-label={`Remove tag ${tag}`} disabled={!editable || busy || Boolean(recovery)} onClick={() => removeTag(tag)}>×</button></span>)}{(!note.tags || note.tags.length === 0) && <span className="tag-empty">No tags yet.</span>}</div>
+      <form className="tag-entry" onSubmit={(event) => void addTag(event)}><label className="screen-reader" htmlFor="note-tag-input">Add a tag</label><input id="note-tag-input" className="searchbox" list="note-tag-suggestions" maxLength={80} placeholder="Add a tag…" value={tagInput} onChange={(event) => setTagInput(event.target.value)} disabled={!editable || busy || Boolean(recovery)} /><datalist id="note-tag-suggestions">{availableTags.map((tag) => <option value={tag} key={tagKey(tag)} />)}</datalist><button className="btn" type="submit" disabled={!editable || busy || Boolean(recovery) || !tagInput.trim()}>Add tag</button></form>
+    </section>}
+    {validation?.status === 'supported' && note?.lifecycle === 'trashed' && <div className="notice">Restore this note to edit it. Its content is preserved below.</div>}
+    {validation?.status === 'supported' && editable ? <><div className="editor-toolbar" aria-label="Text formatting">
+      <button className="tool-button" aria-label="Bold" title="Bold" onClick={() => editorRef.current?.chain().focus().toggleBold().run()}><strong>B</strong></button><button className="tool-button" aria-label="Italic" title="Italic" onClick={() => editorRef.current?.chain().focus().toggleItalic().run()}><em>I</em></button><button className="tool-button" aria-label="Strike" title="Strike" onClick={() => editorRef.current?.chain().focus().toggleStrike().run()}><s>S</s></button><button className="tool-button" aria-label="Heading 2" title="Heading" onClick={() => editorRef.current?.chain().focus().toggleHeading({ level: 2 }).run()}>H₂</button><button className="tool-button" aria-label="Bullet list" title="Bullet list" onClick={() => editorRef.current?.chain().focus().toggleBulletList().run()}>• List</button><button className="tool-button" aria-label="Ordered list" title="Numbered list" onClick={() => editorRef.current?.chain().focus().toggleOrderedList().run()}>1. List</button><button className="tool-button" aria-label="Checklist" title="Checklist" onClick={toggleChecklist}>☑</button><button className="tool-button" aria-label="Quote" title="Quote" onClick={() => editorRef.current?.chain().focus().toggleBlockquote().run()}>“</button><button className="tool-button" aria-label="Code block" title="Code block" onClick={() => editorRef.current?.chain().focus().toggleCodeBlock().run()}>&lt;/&gt;</button>
+    </div><div ref={elementRef} className="editor-content" aria-label="Note content" /></>
+      : <section>{validation?.status !== 'supported' && <div className="notice">This document uses a schema this editor cannot safely modify. It is open read-only so its original data stays intact.</div>}<pre className="readonly-panel">{JSON.stringify(doc, null, 2)}</pre></section>}
+    {note && <AudioRecorder noteId={note.id} disabled={!editable || busy || Boolean(recovery)} onActivityChange={(active) => { recordingRef.current = active; }} />}
+    {markdown && <div className="backup-panel"><h2 className="section-title">Markdown export</h2>{markdown.warnings.length > 0 && <div className="notice">Some formatting is simplified in Markdown: {markdown.warnings.map((warning: any) => warning.message).join(' ')}</div>}<textarea className="searchbox" aria-label="Markdown output" readOnly value={markdown.markdown ?? ''} rows={12} /><button className="btn" onClick={() => { const blob = new Blob([markdown.markdown ?? ''], { type: 'text/markdown' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `${title || 'note'}.md`; a.click(); URL.revokeObjectURL(url); }}>Download .md</button></div>}
+    {recovery && <div className="dialog-backdrop"><section className="dialog" role="dialog" aria-modal="true" aria-labelledby="recovery-title"><h2 id="recovery-title">A recovery draft was found</h2><p>{!recovery.valid ? 'This recovery document cannot be applied safely. Its original journal is retained until you explicitly discard it.' : recovery.sameRevision ? 'An uncommitted recovery draft was found for this note.' : 'The saved note has changed since this draft was made. To avoid overwriting either version, recover the draft as a separate note.'}</p>{error && <p role="alert">{error}</p>}<div className="dialog-actions"><button className="btn" disabled={busy} onClick={discardRecovery}>Keep saved version</button><button className="btn btn-primary" disabled={busy || !recovery.valid} onClick={() => void useRecovery(!recovery.sameRevision)}>{recovery.sameRevision ? 'Restore draft' : 'Recover as new note'}</button></div></section></div>}
+  </>;
+}
+
+========================================================================================
+FILE: source/spikes/phase-00/gate1/web/app/page.tsx
+========================================================================================
+'use client';
+
+import Link from 'next/link';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { createNotesRepository, makeEmptyNote } from './lib/local-notes.js';
+import { filterNotes, filterNotesByTags, sortNotes } from './lib/mvp-utils.mjs';
+import { tagKey } from './lib/note-organization.mjs';
+
+type SortMode = 'updated' | 'created' | 'title';
+const HOME_PREFERENCES_KEY = 'noteos:mvp03:home-preferences';
+
+function textOf(document: any) {
+  const text: string[] = [];
+  const walk = (node: any) => { if (node?.type === 'text') text.push(node.text); else if (node?.type === 'hardBreak') text.push(' '); (node?.content ?? []).forEach(walk); };
+  walk(document);
+  return text.join(' ').replace(/\s+/g, ' ').trim();
+}
+
+function preferencesFromStorage() {
+  try {
+    const value = JSON.parse(localStorage.getItem(HOME_PREFERENCES_KEY) ?? '{}');
+    return {
+      query: typeof value.query === 'string' ? value.query : '',
+      sort: ['updated', 'created', 'title'].includes(value.sort) ? value.sort as SortMode : 'updated',
+      tags: Array.isArray(value.tags) ? value.tags.filter((tag: unknown) => typeof tag === 'string') : [],
+    };
+  } catch { return { query: '', sort: 'updated' as SortMode, tags: [] as string[] }; }
+}
+
+export default function Home() {
+  const [notes, setNotes] = useState<any[]>([]);
+  const [query, setQuery] = useState('');
+  const [sort, setSort] = useState<SortMode>('updated');
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [preferencesReady, setPreferencesReady] = useState(false);
+  const [error, setError] = useState('');
+  const [ready, setReady] = useState(false);
+
+  const refresh = useCallback(async (clearError = true) => {
+    try { setNotes(await createNotesRepository().list()); if (clearError) setError(''); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not open local notes.'); }
+    finally { setReady(true); }
+  }, []);
+
+  useEffect(() => {
+    const preferences = preferencesFromStorage();
+    setQuery(preferences.query); setSort(preferences.sort); setSelectedTags(preferences.tags); setPreferencesReady(true);
+    void refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    if (!preferencesReady) return;
+    localStorage.setItem(HOME_PREFERENCES_KEY, JSON.stringify({ query, sort, tags: selectedTags }));
+  }, [preferencesReady, query, sort, selectedTags]);
+
+  const availableTags = useMemo(() => {
+    const labels = new Map<string, string>();
+    for (const note of notes.filter((row) => row.lifecycle === 'active')) {
+      for (const tag of Array.isArray(note.tags) ? note.tags : []) if (!labels.has(tagKey(tag))) labels.set(tagKey(tag), tag);
+    }
+    return [...labels.values()].sort((left, right) => left.localeCompare(right, undefined, { sensitivity: 'base' }));
+  }, [notes]);
+
+  const visibleNotes = useMemo(() => {
+    const matched = filterNotes(notes, query, 'active');
+    return sortNotes(filterNotesByTags(matched, selectedTags), sort);
+  }, [notes, query, selectedTags, sort]);
+
+  async function createNote() {
+    try { const note = await createNotesRepository().create(makeEmptyNote()); location.assign(`/notes/${encodeURIComponent(note.id)}`); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not create a note.'); }
+  }
+
+  async function togglePin(note: any) {
+    try {
+      const updated = await createNotesRepository().updateOrganization(note.id, { pinned: !note.pinned }, note.revision);
+      setNotes((current) => current.map((row) => row.id === updated.id ? updated : row)); setError('');
+    } catch (cause) {
+      await refresh(false);
+      setError(cause instanceof Error ? cause.message : 'Could not update this note. Refresh and try again.');
+    }
+  }
+
+  function toggleTag(tag: string) {
+    const key = tagKey(tag);
+    setSelectedTags((current) => current.some((item) => tagKey(item) === key)
+      ? current.filter((item) => tagKey(item) !== key)
+      : [...current, tag]);
+  }
+
+  const hasFilters = Boolean(query || selectedTags.length);
+  return <>
+    <div className="page-heading"><div><p className="eyebrow">A quiet place to think</p><h1 className="page-title">Your notes</h1><p className="page-lede">A little space for what you want to remember.</p></div><div className="actions"><button className="btn btn-primary" onClick={createNote}>＋ New note</button></div></div>
+    {error && <div className="notice error" role="alert">{error} Your notes stay stored locally.</div>}
+    <div className="notes-controls">
+      <div className="search-row"><label className="screen-reader" htmlFor="note-search">Search notes</label><input id="note-search" className="searchbox" type="search" placeholder="Search titles, notes and tags…" value={query} onChange={(event) => setQuery(event.target.value)} /><span className="toolbar-label">{visibleNotes.length} {visibleNotes.length === 1 ? 'note' : 'notes'}</span></div>
+      <label className="sort-control"><span>Sort</span><select aria-label="Sort notes" value={sort} onChange={(event) => setSort(event.target.value as SortMode)}><option value="updated">Recently updated</option><option value="created">Recently created</option><option value="title">Title A–Z</option></select></label>
+    </div>
+    {availableTags.length > 0 && <div className="tag-filter-row" aria-label="Filter notes by tag"><span className="toolbar-label">Tags</span>{availableTags.map((tag) => <button key={tagKey(tag)} type="button" className={`tag-chip tag-filter ${selectedTags.some((item) => tagKey(item) === tagKey(tag)) ? 'is-selected' : ''}`} aria-pressed={selectedTags.some((item) => tagKey(item) === tagKey(tag))} onClick={() => toggleTag(tag)}>{tag}</button>)}{selectedTags.length > 0 && <button className="text-button" onClick={() => setSelectedTags([])}>Clear tags</button>}</div>}
+    {visibleNotes.length ? <section className="notes-grid" aria-label="Active notes">{visibleNotes.map((note: any) => <article className="note-card" key={note.id}>
+      <div className="note-card-top"><span className="note-pin-state">{note.pinned ? 'Pinned' : ''}</span>{note.schemaVersion === 1 && <button className="pin-button" type="button" aria-label={note.pinned ? `Unpin ${note.title || 'Untitled note'}` : `Pin ${note.title || 'Untitled note'}`} aria-pressed={Boolean(note.pinned)} onClick={() => void togglePin(note)}>{note.pinned ? '★ Pinned' : '☆ Pin'}</button>}</div>
+      <Link className="note-card-link" href={`/notes/${encodeURIComponent(note.id)}`}><h2>{note.title || 'Untitled note'}</h2><p className="note-preview">{textOf(note.document) || 'Start with a thought…'}</p><span className="note-open-label">Open note ↗</span></Link>
+      {Array.isArray(note.tags) && note.tags.length > 0 && <div className="note-card-tags" aria-label={`Tags for ${note.title || 'Untitled note'}`}>{note.tags.map((tag: string) => <button key={tagKey(tag)} type="button" className="tag-chip" aria-label={`Filter by ${tag}`} onClick={() => toggleTag(tag)}>{tag}</button>)}</div>}
+      <div className="note-meta"><span>{new Date(note.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span><span>{note.pinned ? 'Pinned first' : 'On this device'}</span></div>
+    </article>)}</section>
+      : <div className="empty-state"><h2>{ready ? (hasFilters ? 'No notes match these filters' : 'A fresh page') : 'Opening your notes…'}</h2><p>{ready ? (hasFilters ? 'Clear a tag or try another search to see more notes.' : 'Create a note to get your thoughts started.') : 'Everything is stored on this device.'}</p>{ready && hasFilters && <button className="btn" onClick={() => { setQuery(''); setSelectedTags([]); }}>Clear search and filters</button>}{ready && !hasFilters && <button className="btn btn-primary" onClick={createNote}>Create your first note</button>}</div>}
+  </>;
+}
+
+========================================================================================
+FILE: source/spikes/phase-00/gate1/web/package.json
+========================================================================================
+{
+  "name": "noteos-gate1-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev -H 127.0.0.1 -p 3000",
+    "build": "next build",
+    "start": "next start -H 0.0.0.0 -p 3000",
+    "typecheck": "tsc --noEmit",
+    "test:mvp": "node --test app/lib/*.test.mjs",
+    "test:mvp03-browser": "node scripts/mvp-03-browser.mjs",
+    "test:audio-browser": "node scripts/mvp-02-browser.mjs",
+    "test:documents": "npm --prefix packages/document-engine test",
+    "benchmark:documents": "npm --prefix packages/document-engine run benchmark"
+  },
+  "dependencies": {
+    "@nozbe/watermelondb": "0.28.0",
+    "@powersync/web": "2.5.0",
+    "@tiptap/core": "3.32.0",
+    "@tiptap/extension-document": "3.32.0",
+    "@tiptap/extension-link": "3.32.0",
+    "@tiptap/extension-list": "3.32.0",
+    "@tiptap/starter-kit": "3.32.0",
+    "next": "16.4.2",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.1",
+    "@types/react": "19.2.7",
+    "fake-indexeddb": "6.2.6",
+    "typescript": "5.9.3"
+  }
+}
+
+========================================================================================
+FILE: source/spikes/phase-00/gate1/web/scripts/mvp-03-browser.mjs
+========================================================================================
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import { mkdir, writeFile } from 'node:fs/promises';
+
+const require = createRequire(import.meta.url);
+const root = fileURLToPath(new URL('../../../../../', import.meta.url));
+const evidence = process.env.NOTEOS_MVP03_EVIDENCE ?? `${root}/artifacts/review/noteOS-MVP-03-review/evidence`;
+const lens = process.env.NOTEOS_PLAYWRIGHT_ROOT ?? `${root}/../ui-lens`;
+const { chromium } = require(require.resolve('playwright', { paths: [lens] }));
+const baseUrl = process.env.NOTEOS_TEST_URL ?? 'http://127.0.0.1:3000';
+await mkdir(evidence, { recursive: true });
+const browser = await chromium.launch();
+const results = [], diagnostics = { browser: null, consoleErrors: [], pageErrors: [], externalRequests: [] };
+diagnostics.browser = browser.version();
+const check = (condition, message) => { if (!condition) throw new Error(message); };
+async function scenario(name, run, viewport = { width: 1280, height: 900 }) {
+  const context = await browser.newContext({ acceptDownloads: true, viewport });
+  await context.route('**/*', (route) => new URL(route.request().url()).origin === baseUrl ? route.continue() : route.abort());
+  const page = await context.newPage();
+  page.setDefaultTimeout(4000);
+  page.on('console', (message) => { if (message.type() === 'error') diagnostics.consoleErrors.push(`${name}: ${message.text()}`); });
+  page.on('pageerror', (error) => diagnostics.pageErrors.push(`${name}: ${error.message}`));
+  page.on('request', (request) => { if (!request.url().startsWith(baseUrl)) diagnostics.externalRequests.push(`${name}: ${request.url()}`); });
+  try { await run(page, context); results.push({ name, status: 'PASS' }); }
+  catch (error) {
+    results.push({ name, status: 'FAIL', error: error instanceof Error ? error.stack : String(error) });
+    await page.screenshot({ path: `${evidence}/${name.replace(/[^a-z0-9]+/gi, '-')}.png`, fullPage: true }).catch(() => {});
+  } finally { await context.close(); }
+}
+async function openNew(page) {
+  await page.goto(baseUrl);
+  await page.getByRole('button', { name: /New note/ }).first().click();
+  await page.locator('#note-title').waitFor();
+  return new URL(page.url()).pathname.split('/').pop();
+}
+async function readNote(page, id) {
+  return page.evaluate((noteId) => new Promise((resolve, reject) => {
+    const request = indexedDB.open('noteos-mvp-01');
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const db = request.result, tx = db.transaction('notes', 'readonly'), get = tx.objectStore('notes').get(noteId);
+      get.onsuccess = () => resolve(get.result); get.onerror = () => reject(get.error);
+      tx.oncomplete = () => db.close();
+    };
+  }), id);
+}
+async function waitSaved(page) { await page.getByText(/^Saved /).waitFor({ timeout: 10000 }); }
+try {
+  await scenario('checklist-tags-pin-search-backup', async (page) => {
+    const id = await openNew(page);
+    await page.locator('#note-title').fill('Checklist — ghi chú 東京 🌿');
+    await page.getByRole('button', { name: 'Checklist' }).click();
+    const editor = page.locator('.editor-content');
+    await editor.locator('li[data-checked] p').first().click();
+    await page.keyboard.insertText('Mua cà phê ☕');
+    await page.keyboard.press('Enter');
+    const secondItem = editor.locator('li[data-checked] p').nth(1);
+    await secondItem.click(); await page.keyboard.insertText('東京を記録する 🗒️');
+    await editor.locator('li[data-checked] input[type="checkbox"]').first().check();
+    await secondItem.click(); await page.keyboard.press('Home'); await page.keyboard.press('Shift+End'); await page.getByRole('button', { name: 'Bold' }).click();
+    await page.locator('#note-tag-input').fill('Tiếng Việt'); await page.getByRole('button', { name: 'Add tag' }).click();
+    await page.locator('#note-tag-input').fill('東京'); await page.getByRole('button', { name: 'Add tag' }).click();
+    await page.getByRole('button', { name: /Pin note/ }).click();
+    await waitSaved(page);
+    let saved = await readNote(page, id);
+    check(saved.pinned && saved.tags.includes('Tiếng Việt') && saved.tags.includes('東京'), 'Pin or Unicode tags did not persist.');
+    check(saved.document.content.some((node) => node.type === 'taskList' && node.content[0].attrs.checked === true), 'Checked task state did not persist in canonical JSON.');
+    await page.screenshot({ path: `${evidence}/editor-checklist-tags.png`, fullPage: true });
+    await page.reload(); await page.locator('.editor-content').waitFor();
+    saved = await readNote(page, id);
+    check(saved.document.content.some((node) => node.type === 'taskList' && node.content.length === 2 && node.content[0].attrs.checked === true), 'Checklist did not survive reload.');
+    check(await page.locator('.editor-content strong').count() > 0, 'Formatting did not remain alongside checklist content.');
+    const secondCheckbox = page.locator('.editor-content li[data-checked] input[type="checkbox"]').nth(1);
+    await secondCheckbox.check(); await waitSaved(page);
+    check((await readNote(page, id)).document.content.find((node) => node.type === 'taskList').content[1].attrs.checked === true, 'Checkbox update did not autosave.');
+    await secondCheckbox.uncheck(); await waitSaved(page);
+    check((await readNote(page, id)).document.content.find((node) => node.type === 'taskList').content[1].attrs.checked === false, 'Uncheck did not autosave.');
+    await page.getByRole('button', { name: 'Remove tag Tiếng Việt' }).click(); await waitSaved(page);
+    check(!(await readNote(page, id)).tags.includes('Tiếng Việt'), 'Tag removal did not persist.');
+    await page.locator('#note-tag-input').fill('Tiếng Việt'); await page.getByRole('button', { name: 'Add tag' }).click(); await waitSaved(page);
+    const tasks = page.locator('.editor-content li[data-checked]');
+    await tasks.nth(1).locator('p').click(); await page.keyboard.press('End'); await page.keyboard.press('Enter');
+    await tasks.nth(2).locator('p').click(); await page.keyboard.press('Home'); await page.keyboard.press('Backspace');
+    await waitSaved(page);
+    check(await page.locator('.editor-content ul[data-type="taskList"] li[data-checked]').count() >= 2, 'Enter/Backspace damaged checklist keyboard behavior.');
+    await page.goto(baseUrl);
+    await page.getByRole('button', { name: 'Pin Checklist — ghi chú 東京 🌿' }).waitFor();
+    await page.getByLabel('Filter by Tiếng Việt').click();
+    await page.screenshot({ path: `${evidence}/home-pinned-tags-filtered.png`, fullPage: true });
+    await page.getByLabel('Search notes').fill('東京');
+    check(await page.locator('.note-card').count() === 1, 'Japanese tag/title search did not find the note.');
+    await page.getByLabel('Sort notes').selectOption('title');
+    await page.reload();
+    check(await page.getByLabel('Search notes').inputValue() === '東京', 'Search preferences did not persist after reload.');
+    await page.getByLabel('Search notes').fill('no-match-xyz');
+    await page.getByRole('heading', { name: 'No notes match these filters' }).waitFor();
+    await page.screenshot({ path: `${evidence}/home-filtered-empty.png`, fullPage: true });
+    await page.getByRole('button', { name: 'Clear search and filters' }).click();
+    await page.goto(`${baseUrl}/backup`);
+    const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download backup' }).click()]);
+    check(download.suggestedFilename().endsWith('.json'), 'Backup export did not create a JSON download.');
+    const exported = await readNote(page, id); check(exported.pinned && exported.tags.length === 2, 'Backup export changed organization metadata in source storage.');
+    const backup = { format: 'noteos.local-backup', version: 1, exportedAt: new Date().toISOString(), notes: [{ ...exported, id: `${id}-copy`, title: 'Imported checklist' }] };
+    await page.locator('input[type="file"]').setInputFiles({ name: 'noteos-backup.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(backup)) });
+    await page.getByRole('button', { name: 'Validate and import' }).click();
+    await page.getByRole('status').filter({ hasText: 'Imported 1 notes' }).waitFor();
+    check((await readNote(page, `${id}-copy`)).tags.includes('東京'), 'Backup v1 import lost organization metadata.');
+  });
+  await scenario('stale-tab-organization-conflict', async (page, context) => {
+    const id = await openNew(page); await page.locator('#note-title').fill('Two-tab draft'); await waitSaved(page);
+    const other = await context.newPage(); await other.goto(page.url()); await other.locator('#note-title').waitFor({ state: 'visible' }); await other.waitForFunction(() => !document.querySelector('#note-title')?.disabled, null, { timeout: 5000 });
+    await other.locator('#note-title').fill('Committed from second tab'); await waitSaved(other);
+    await page.locator('.editor-content [contenteditable="true"]').click(); await page.keyboard.insertText('Local draft');
+    await page.locator('#note-tag-input').fill('race'); await page.getByRole('button', { name: 'Add tag' }).click();
+    await page.getByText('Not saved', { exact: true }).waitFor({ timeout: 5000 });
+    check((await page.locator('.editor-content').innerText()).includes('Local draft'), 'The local draft was not retained after a stale revision conflict.');
+    const saved = await readNote(page, id);
+    check(saved.title === 'Committed from second tab' && !saved.tags.includes('race'), 'Stale metadata action overwrote newer tab data.');
+    await page.screenshot({ path: `${evidence}/stale-tab-conflict.png`, fullPage: true });
+  });
+  await scenario('mobile-navigation-width', async (page) => {
+    await page.goto(baseUrl);
+    const sizes = await page.evaluate(() => ({ viewport: innerWidth, document: document.documentElement.scrollWidth, nav: document.querySelector('.mobile-nav')?.getBoundingClientRect().width, navContent: document.querySelector('.mobile-nav')?.scrollWidth }));
+    check(sizes.viewport === 390 && sizes.document <= sizes.viewport, `Mobile page overflows horizontally: ${JSON.stringify(sizes)}`);
+    check(sizes.nav <= sizes.viewport && sizes.nav > 0, `Mobile navigation exceeds viewport: ${JSON.stringify(sizes)}`);
+    await page.screenshot({ path: `${evidence}/mobile-home-navigation.png`, fullPage: true });
+  }, { width: 390, height: 844 });
+} finally {
+  await browser.close();
+  await writeFile(`${evidence}/diagnostics.json`, JSON.stringify({ results, diagnostics }, null, 2));
+  process.stdout.write(`${JSON.stringify({ results, diagnostics }, null, 2)}\n`);
+  if (results.some((result) => result.status !== 'PASS') || diagnostics.pageErrors.length || diagnostics.externalRequests.length) process.exitCode = 1;
+}
+
+========================================================================================
+FILE: source/spikes/phase-00/gate1/web/scripts/mvp-03-ui-lens.mjs
+========================================================================================
+import { createRequire } from 'node:module';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+const require = createRequire(import.meta.url);
+const root = fileURLToPath(new URL('../../../../../', import.meta.url));
+const lens = process.env.NOTEOS_PLAYWRIGHT_ROOT ?? `${root}/../ui-lens`;
+const { chromium } = require(require.resolve('playwright', { paths: [lens] }));
+const { capture, newRun } = await import(pathToFileURL(`${lens}/apps/service/src/runner.ts`));
+const { configSchema } = await import(pathToFileURL(`${lens}/packages/contracts/src/index.ts`));
+const baseUrl = process.env.NOTEOS_TEST_URL ?? 'http://127.0.0.1:3000';
+const config = configSchema.parse({
+  version: 1,
+  project: 'noteOS MVP-03 Organization',
+  baseUrl,
+  outputDir: 'artifacts/review/noteOS-MVP-03-review/ui-lens',
+  viewports: { desktop: { width: 1440, height: 1000 }, mobile: { width: 390, height: 844 } },
+  targets: [
+    { id: 'home-pinned', name: 'Notes Home with pinned and tagged notes', route: '/', viewports: ['desktop'], actions: [{ type: 'waitFor', selector: '.note-card' }] },
+    { id: 'editor-checklist', name: 'Editor with Unicode checklist', route: '/notes/lens-checklist', viewports: ['desktop', 'mobile'], actions: [{ type: 'waitFor', selector: '.editor-content li[data-checked]' }] },
+    { id: 'tags-filtered', name: 'Notes filtered by shared tag', route: '/', viewports: ['desktop'], actions: [{ type: 'waitFor', selector: '.tag-filter' }, { type: 'click', selector: '.tag-filter' }] },
+    { id: 'home-filtered-empty', name: 'Useful empty search state', route: '/', viewports: ['desktop'], actions: [{ type: 'fill', selector: '#note-search', value: 'no-match-mvp03' }, { type: 'waitFor', selector: 'text=No notes match these filters' }] },
+    { id: 'mobile-navigation', name: 'Mobile navigation at 390px', route: '/', viewports: ['mobile'], actions: [{ type: 'waitFor', selector: '.mobile-nav' }] },
+  ],
+});
+
+const launch = chromium.launch.bind(chromium);
+chromium.launch = async (options = {}) => {
+  const browser = await launch(options);
+  const newContext = browser.newContext.bind(browser);
+  browser.newContext = async (contextOptions) => {
+    const context = await newContext(contextOptions);
+    const newPage = context.newPage.bind(context);
+    context.newPage = async () => {
+      const page = await newPage();
+      await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
+      await page.evaluate(async () => {
+        const now = Date.now();
+        const notes = [
+          {
+            id: 'lens-checklist', title: 'Pinned checklist — ghi chú 東京 🌿',
+            document: { schemaVersion: 1, type: 'doc', content: [
+              { type: 'paragraph', content: [{ type: 'text', text: 'Kế hoạch tuần này — 今週の予定 ✨' }] },
+              { type: 'taskList', content: [
+                { type: 'taskItem', attrs: { checked: true }, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Viết ghi chú' }] }] },
+                { type: 'taskItem', attrs: { checked: false }, content: [{ type: 'paragraph', content: [{ type: 'text', text: '東京を訪れる 🗒️' }] }] },
+              ] },
+            ] }, schemaVersion: 1, createdAt: now - 2000, updatedAt: now, lifecycle: 'active', revision: 1, pinned: true, tags: ['Tiếng Việt', '東京'],
+          },
+          {
+            id: 'lens-ordinary', title: 'Một ý tưởng khác',
+            document: { schemaVersion: 1, type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'A note for shared tag filtering.' }] }] },
+            schemaVersion: 1, createdAt: now - 1000, updatedAt: now - 1000, lifecycle: 'active', revision: 1, pinned: false, tags: ['Tiếng Việt'],
+          },
+        ];
+        await new Promise((resolve, reject) => {
+          const request = indexedDB.open('noteos-mvp-01', 2);
+          request.onerror = () => reject(request.error);
+          request.onsuccess = () => {
+            const db = request.result, tx = db.transaction('notes', 'readwrite'), store = tx.objectStore('notes');
+            for (const note of notes) store.put(note);
+            tx.oncomplete = () => { db.close(); resolve(); };
+            tx.onerror = () => reject(tx.error);
+          };
+        });
+      });
+      return page;
+    };
+    return context;
+  };
+  return browser;
+};
+
+try {
+  const run = newRun('noteos-mvp03');
+  const targets = process.env.NOTEOS_UI_TARGETS?.split(',') ?? config.targets.map((target) => target.id);
+  await capture({ id: 'noteos-mvp03', root, config }, { projectId: 'noteos-mvp03', targets, artifacts: { png: true, pdf: false, diagnostics: true } }, run);
+  process.stdout.write(`${JSON.stringify({ state: run.state, outputPath: run.outputPath, summary: run.manifest.summary }, null, 2)}\n`);
+  if (run.manifest.summary.failed) process.exitCode = 1;
+} finally { chromium.launch = launch; }

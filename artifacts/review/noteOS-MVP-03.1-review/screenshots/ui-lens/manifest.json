@@ -1,0 +1,157 @@
+{
+  "schema_version": 1,
+  "tool": "UI Lens",
+  "tool_version": "0.1.0",
+  "project": "noteOS MVP-03.1 Organization Hotfix",
+  "captured_at": "2026-10-21T07:04:40.621Z",
+  "base_url": "http://127.0.0.1:3000",
+  "git": {
+    "branch": "main",
+    "commit": "1cb9e4f5f22ac2e6d115cd5c962bcd340be5d7ad",
+    "dirty": true
+  },
+  "targets": [
+    {
+      "target_id": "home-pinned",
+      "target_name": "Notes Home with pinned and tagged notes",
+      "route": "/",
+      "url": "http://127.0.0.1:3000/",
+      "viewport": {
+        "id": "desktop",
+        "width": 1440,
+        "height": 1000,
+        "deviceScaleFactor": 1
+      },
+      "screenshot": "home-pinned/desktop.png",
+      "pdf": null,
+      "capture_mode": "fullPage",
+      "duration_ms": 1120,
+      "captured_at": "2026-10-21T07:04:40.898Z",
+      "console_error_count": 0,
+      "console_warning_count": 0,
+      "page_error_count": 0,
+      "failed_request_count": 0,
+      "http_error_count": 0,
+      "success": true
+    },
+    {
+      "target_id": "editor-checklist",
+      "target_name": "Editor with Unicode checklist",
+      "route": "/notes/lens-checklist",
+      "url": "http://127.0.0.1:3000/notes/lens-checklist",
+      "viewport": {
+        "id": "desktop",
+        "width": 1440,
+        "height": 1000,
+        "deviceScaleFactor": 1
+      },
+      "screenshot": "editor-checklist/desktop.png",
+      "pdf": null,
+      "capture_mode": "fullPage",
+      "duration_ms": 850,
+      "captured_at": "2026-10-21T07:04:42.018Z",
+      "console_error_count": 0,
+      "console_warning_count": 0,
+      "page_error_count": 0,
+      "failed_request_count": 0,
+      "http_error_count": 0,
+      "success": true
+    },
+    {
+      "target_id": "editor-checklist",
+      "target_name": "Editor with Unicode checklist",
+      "route": "/notes/lens-checklist",
+      "url": "http://127.0.0.1:3000/notes/lens-checklist",
+      "viewport": {
+        "id": "mobile",
+        "width": 390,
+        "height": 844,
+        "deviceScaleFactor": 1
+      },
+      "screenshot": "editor-checklist/mobile.png",
+      "pdf": null,
+      "capture_mode": "fullPage",
+      "duration_ms": 816,
+      "captured_at": "2026-10-21T07:04:42.868Z",
+      "console_error_count": 0,
+      "console_warning_count": 0,
+      "page_error_count": 0,
+      "failed_request_count": 0,
+      "http_error_count": 0,
+      "success": true
+    },
+    {
+      "target_id": "tags-filtered",
+      "target_name": "Notes filtered by shared tag",
+      "route": "/",
+      "url": "http://127.0.0.1:3000/",
+      "viewport": {
+        "id": "desktop",
+        "width": 1440,
+        "height": 1000,
+        "deviceScaleFactor": 1
+      },
+      "screenshot": "tags-filtered/desktop.png",
+      "pdf": null,
+      "capture_mode": "fullPage",
+      "duration_ms": 851,
+      "captured_at": "2026-10-21T07:04:43.684Z",
+      "console_error_count": 0,
+      "console_warning_count": 0,
+      "page_error_count": 0,
+      "failed_request_count": 0,
+      "http_error_count": 0,
+      "success": true
+    },
+    {
+      "target_id": "home-filtered-empty",
+      "target_name": "Useful empty search state",
+      "route": "/",
+      "url": "http://127.0.0.1:3000/",
+      "viewport": {
+        "id": "desktop",
+        "width": 1440,
+        "height": 1000,
+        "deviceScaleFactor": 1
+      },
+      "screenshot": "home-filtered-empty/desktop.png",
+      "pdf": null,
+      "capture_mode": "fullPage",
+      "duration_ms": 811,
+      "captured_at": "2026-10-21T07:04:44.535Z",
+      "console_error_count": 0,
+      "console_warning_count": 0,
+      "page_error_count": 0,
+      "failed_request_count": 0,
+      "http_error_count": 0,
+      "success": true
+    },
+    {
+      "target_id": "mobile-navigation",
+      "target_name": "Mobile navigation at 390px",
+      "route": "/",
+      "url": "http://127.0.0.1:3000/",
+      "viewport": {
+        "id": "mobile",
+        "width": 390,
+        "height": 844,
+        "deviceScaleFactor": 1
+      },
+      "screenshot": "mobile-navigation/mobile.png",
+      "pdf": null,
+      "capture_mode": "fullPage",
+      "duration_ms": 802,
+      "captured_at": "2026-10-21T07:04:45.346Z",
+      "console_error_count": 0,
+      "console_warning_count": 0,
+      "page_error_count": 0,
+      "failed_request_count": 0,
+      "http_error_count": 0,
+      "success": true
+    }
+  ],
+  "summary": {
+    "passed": 6,
+    "failed": 0
+  }
+}

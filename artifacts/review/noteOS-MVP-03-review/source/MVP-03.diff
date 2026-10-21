@@ -1,0 +1,519 @@
+spikes/phase-00/gate1/web/app/globals.css          |  4 +
+ spikes/phase-00/gate1/web/app/lib/local-notes.js   | 35 +++++++-
+ .../gate1/web/app/lib/local-notes.test.mjs         | 36 ++++++++
+ spikes/phase-00/gate1/web/app/lib/mvp-utils.mjs    | 29 ++++++-
+ .../phase-00/gate1/web/app/lib/mvp-utils.test.mjs  | 40 ++++++++-
+ .../phase-00/gate1/web/app/lib/note-validation.mjs |  2 +
+ .../gate1/web/app/lib/save-coordinator.mjs         | 15 +++-
+ .../gate1/web/app/lib/save-coordinator.test.mjs    | 30 +++++++
+ spikes/phase-00/gate1/web/app/notes/[id]/page.tsx  | 62 ++++++++++++--
+ spikes/phase-00/gate1/web/app/page.tsx             | 95 +++++++++++++++++++---
+ spikes/phase-00/gate1/web/package.json             |  1 +
+ 11 files changed, 329 insertions(+), 20 deletions(-)
+
+--- Changes ---
+
+spikes/phase-00/gate1/web/app/globals.css
+  @@ -5,3 +5,7 @@
+  +
+  +.notes-controls{display:flex;align-items:center;gap:18px;margin-bottom:14px}.notes-controls .search-row{flex:1;min-width:0;margin-bottom:0}.notes-controls .searchbox{flex:1;min-width:0}.sort-control{display:flex;align-items:center;gap:9px;color:var(--muted);font-size:12px}.sort-control select{max-width:190px;padding:10px 30px 10px 11px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink)}.tag-filter-row{display:flex;align-items:center;flex-wrap:wrap;gap:7px;margin:0 0 22px}.tag-chip{display:inline-flex;align-items:center;gap:5px;max-width:100%;padding:5px 9px;border:1px solid #e4ddd1;border-radius:999px;background:#f5f1e9;color:#596371;font-size:11px;line-height:1.35;overflow-wrap:anywhere}.tag-filter{cursor:pointer}.tag-filter:hover,.tag-filter.is-selected{border-color:#c89371;background:#f2e4d7;color:#563d2e}.text-button{padding:5px 7px;border:0;background:transparent;color:#68717b;font-size:12px;text-decoration:underline;text-underline-offset:3px}.note-card-top{display:flex;align-items:center;justify-content:space-between;min-height:28px;margin-bottom:8px}.note-pin-state{color:#a36b45;font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}.pin-button{padding:6px 9px;border:1px solid #e4ddd1;border-radius:7px;background:transparent;color:#68717b;font-size:12px;font-weight:600;cursor:pointer}.pin-button:hover:not(:disabled),.pin-button[aria-pressed=true]{border-color:#d7b195;background:#f7eee5;color:#68482f}.pin-button:disabled{cursor:not-allowed;opacity:.55}.note-card-link{display:block;flex:1;color:inherit}.note-card-link:hover{color:inherit}.note-card-link h2{margin-bottom:8px}.note-card-tags{display:flex;flex-wrap:wrap;gap:5px;margin-top:12px}.note-card-tags .tag-chip{border:0;padding:4px 7px;cursor:pointer}.note-card-tags .tag-chip:hover{background:#eee2d6}.note-open-label{display:inline-block;margin-top:10px;color:#8a7565;font-size:11px}.note-organization{display:grid;gap:13px;padding:12px 0 16px;border-bottom:1px solid var(--line)}.organization-pin-row,.organization-tags{display:flex;align-items:center;flex-wrap:wrap;gap:8px}.organization-pin-row{justify-content:space-between}.organization-tags .toolbar-label{margin-right:2px}.editor-tag{padding-right:4px}.editor-tag button{width:22px;height:22px;border:0;border-radius:50%;background:transparent;color:#68717b;font-size:17px;line-height:1;cursor:pointer}.editor-tag button:hover:not(:disabled){background:#e7ded2}.editor-tag button:disabled{opacity:.5}.tag-empty{color:#8b9196;font-size:12px}.tag-entry{display:flex;gap:8px;max-width:520px}.tag-entry .searchbox{flex:1;min-width:0}.tag-entry .btn{white-space:nowrap}
+  +@media(max-width:650px){.mobile-head{flex-direction:column;align-items:stretch;gap:8px}.mobile-head .brand{align-self:flex-start}.mobile-nav{width:100%;overflow-x:auto;overscroll-behavior-inline:contain;scrollbar-width:none}.mobile-nav::-webkit-scrollbar{display:none}.mobile-nav .nav-link{flex:0 0 auto;white-space:nowrap}.notes-controls{align-items:stretch;flex-direction:column;gap:10px}.notes-controls .search-row{width:100%}.notes-controls .search-row .toolbar-label{white-space:nowrap}.sort-control{justify-content:space-between}.sort-control select{flex:1;max-width:none}.tag-filter-row{gap:6px;margin-bottom:17px}.note-card{min-width:0}.note-card-top{margin-bottom:5px}.note-organization{padding:10px 0 14px}.tag-entry{width:100%}.tag-entry .searchbox{width:100%}}
+  +.editor-content ul[data-type="taskList"]{list-style:none;padding-left:0}
+  +4 -0
+
+spikes/phase-00/gate1/web/app/lib/local-notes.js
+  @@ -1,4 +1,5 @@
+  +import { normalizeTagList } from './note-organization.mjs';
+   export { NoteDocumentError } from './note-validation.mjs';
+   
+   const DATABASE_NAME = 'noteos-mvp-01';
+  @@ -66,6 +67,8 @@ export function makeEmptyNote(now = Date.now(), id = crypto.randomUUID()) {
+  +    pinned: false,
+  +    tags: [],
+     };
+   }
+   
+  @@ -155,6 +158,7 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
+  +      if (current.schemaVersion !== 1) throw abort(transaction, new NoteStateError('This note record uses a newer schema and is read-only in this version.'));
+         if (current.lifecycle === 'trashed') throw abort(transaction, new NoteStateError('Restore a trashed note before editing it.'));
+         const updated = {
+           ...current,
+  @@ -172,6 +176,35 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
+  +  async function updateOrganization(id, changes, expectedRevision) {
+  +    assertExpectedRevision(expectedRevision);
+  +    if (!changes || typeof changes !== 'object' || Array.isArray(changes)) throw new TypeError('Organization changes must be an object.');
+  +    const hasPinned = Object.hasOwn(changes, 'pinned'), hasTags = Object.hasOwn(changes, 'tags');
+  +    if (!hasPinned && !hasTags) throw new TypeError('Choose a pin or tag change.');
+  +    if (hasPinned && typeof changes.pinned !== 'boolean') throw new TypeError('Pin state must be true or false.');
+  +    const tags = hasTags ? normalizeTagList(changes.tags) : undefined;
+  +    const database = await openDatabase();
+  +    const transaction = database.transaction(STORE_NAME, 'readwrite');
+  +    const done = transactionResult(transaction), store = transaction.objectStore(STORE_NAME);
+  +    try {
+  +      const current = await requestResult(store.get(id));
+  +      if (!current) throw abort(transaction, new NoteNotFoundError(id));
+  +      if (current.revision !== expectedRevision) throw abort(transaction, new NoteConflictError());
+  +      if (current.schemaVersion !== 1) throw abort(transaction, new NoteStateError('This note record uses a newer schema and is read-only in this version.'));
+  +      if (current.lifecycle !== 'active') throw abort(transaction, new NoteStateError('Restore this note before changing its organization.'));
+  +      const updated = {
+  +        ...current,
+  +        ...(hasPinned ? { pinned: changes.pinned } : {}),
+  +        ...(hasTags ? { tags } : {}),
+  +        revision: current.revision + 1,
+  +      };
+  +      assertNoteRecord(updated);
+  +      store.put(updated);
+  +      await done;
+  +      return updated;
+  +    } catch (error) { try { await done; } catch { /* Consume the transaction abort. */ } throw error; }
+  +  }
+  +
+     async function setLifecycle(id, lifecycle, expectedRevision) {
+       if (!['active', 'archived', 'trashed'].includes(lifecycle)) throw new TypeError('Invalid note lifecycle.');
+       assertExpectedRevision(expectedRevision);
+  @@ -259,7 +292,7 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
+  -  return { list, get, create, save, setLifecycle, deleteForever, importNotes };
+  +  return { list, get, create, save, updateOrganization, setLifecycle, deleteForever, importNotes };
+   }
+   
+   function assertAudioTimestamp(value, label) {
+  +34 -1
+
+spikes/phase-00/gate1/web/app/lib/local-notes.test.mjs
+  @@ -94,3 +94,39 @@ test('permanent deletion rejects stale revisions after a restore transition', as
+  +
+  +test('organization updates are revision guarded, keep content timestamps, and reject duplicate or invalid tags', async () => {
+  +  const { name, repo: first } = repository();
+  +  const second = createNotesRepository(globalThis.indexedDB, name);
+  +  const note = await first.create(makeNote('organization'));
+  +  const updated = await first.updateOrganization(note.id, { pinned: true, tags: ['Work', 'Công việc', '日本語'] }, note.revision);
+  +  assert.equal(updated.pinned, true); assert.deepEqual(updated.tags, ['Work', 'Công việc', '日本語']);
+  +  assert.equal(updated.updatedAt, note.updatedAt); assert.equal(updated.revision, note.revision + 1);
+  +  await assert.rejects(first.updateOrganization(note.id, { tags: ['same', ' same '] }, updated.revision), /duplicate tags/i);
+  +  await assert.rejects(first.updateOrganization(note.id, { tags: ['  '] }, updated.revision), /tag name/i);
+  +  await assert.rejects(first.updateOrganization(note.id, { tags: ['x'.repeat(33)] }, updated.revision), /up to 32/i);
+  +  await assert.rejects(second.save(note.id, { title: 'stale overwrite', document: note.document }, note.revision), NoteConflictError);
+  +  assert.equal((await second.get(note.id)).title, note.title);
+  +  assert.equal((await second.get(note.id)).pinned, true);
+  +});
+  +
+  +test('archive, trash, and restore retain pinned and tag metadata', async () => {
+  +  const { repo } = repository();
+  +  const note = await repo.create({ ...makeNote('organization-lifecycle'), pinned: true, tags: ['Personal', '日本語'] });
+  +  const archived = await repo.setLifecycle(note.id, 'archived', note.revision);
+  +  assert.equal(archived.pinned, true); assert.deepEqual(archived.tags, ['Personal', '日本語']);
+  +  const restored = await repo.setLifecycle(note.id, 'active', archived.revision);
+  +  const trashed = await repo.setLifecycle(note.id, 'trashed', restored.revision);
+  +  assert.equal(trashed.pinned, true); assert.deepEqual(trashed.tags, ['Personal', '日本語']);
+  +  const active = await repo.setLifecycle(note.id, 'active', trashed.revision);
+  +  assert.equal(active.pinned, true); assert.deepEqual(active.tags, ['Personal', '日本語']);
+  +});
+  +
+  +test('future note record schemas remain preserved but cannot be edited or organized as schema v1', async () => {
+  +  const { repo } = repository();
+  +  const future = { ...makeEmptyNote(100, 'future-record'), schemaVersion: 2, futureMetadata: { keep: true } };
+  +  await repo.create(future);
+  +  await assert.rejects(repo.save(future.id, { title: 'unsafe', document: future.document }, future.revision), /newer schema/i);
+  +  await assert.rejects(repo.updateOrganization(future.id, { pinned: true }, future.revision), /newer schema/i);
+  +  assert.deepEqual(await repo.get(future.id), future);
+  +});
+  +36 -0
+
+spikes/phase-00/gate1/web/app/lib/mvp-utils.mjs
+  @@ -1,4 +1,5 @@
+  +import { normalizeTagList, tagKey } from './note-organization.mjs';
+   
+   export const BACKUP_FORMAT = 'noteos.local-backup';
+   export const BACKUP_VERSION = 1;
+  @@ -20,11 +21,35 @@ function collectNodeText(node, output) {
+  -  const pieces = [note?.title];
+  +  const pieces = [note?.title, ...(Array.isArray(note?.tags) ? note.tags : [])];
+     collectNodeText(note?.document, pieces);
+     return searchableText(pieces.join(' '));
+   }
+   
+  +export function filterNotesByTags(notes, selectedTags = []) {
+  +  const required = selectedTags.map(tagKey);
+  +  if (!required.length) return [...notes];
+  +  return notes.filter((note) => {
+  +    const tags = new Set((Array.isArray(note.tags) ? note.tags : []).map(tagKey));
+  +    return required.every((tag) => tags.has(tag));
+  +  });
+  +}
+  +
+  +export function sortNotes(notes, mode = 'updated') {
+  +  const compareDate = (left, right) => Number(right.updatedAt) - Number(left.updatedAt) || String(left.id).localeCompare(String(right.id));
+  +  const compareOther = (left, right) => {
+  +    if (mode === 'created') return Number(right.createdAt) - Number(left.createdAt) || compareDate(left, right);
+  +    if (mode === 'title') return String(left.title ?? '').localeCompare(String(right.title ?? ''), undefined, { sensitivity: 'base', numeric: true }) || compareDate(left, right);
+  +    return compareDate(left, right);
+  +  };
+  +  return [...notes].sort((left, right) => {
+  +    const pinOrder = Number(Boolean(right.pinned)) - Number(Boolean(left.pinned));
+  +    if (pinOrder) return pinOrder;
+  +    if (left.pinned && right.pinned) return compareDate(left, right);
+  +    return compareOther(left, right);
+  +  });
+  +}
+  +
+   export function filterNotes(notes, query, lifecycle) {
+     const normalized = searchableText(query);
+     return notes.filter((note) => note.lifecycle === lifecycle && (!normalized || noteSearchText(note).includes(normalized)));
+  @@ -50,6 +75,8 @@ export function parseBackup(input) {
+  +export { normalizeTagList };
+  +
+   export function titleFromDocument(document) {
+     const text = [];
+     collectNodeText(document, text);
+  +28 -1
+
+spikes/phase-00/gate1/web/app/lib/mvp-utils.test.mjs
+  @@ -1,6 +1,6 @@
+  -import { filterNotes, makeBackup, noteSearchText, parseBackup, searchableText } from './mvp-utils.mjs';
+  +import { filterNotes, filterNotesByTags, makeBackup, noteSearchText, parseBackup, searchableText, sortNotes } from './mvp-utils.mjs';
+   
+   const note = (id, title, body, lifecycle = 'active') => ({
+     id, title, document: { schemaVersion: 1, type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: body }] }] },
+  @@ -24,6 +24,29 @@ test('lifecycle filtering does not include archived or trashed notes in active s
+  +test('tag filtering uses case-insensitive canonical Unicode identity and requires every selected tag', () => {
+  +  const notes = [
+  +    { ...note('both', 'One', 'x'), tags: ['Work', '日本語'] },
+  +    { ...note('work', 'Two', 'x'), tags: ['work'] },
+  +    { ...note('kana', 'Three', 'x'), tags: ['にほんご'] },
+  +  ];
+  +  assert.deepEqual(filterNotesByTags(notes, ['WORK']).map(({ id }) => id), ['both', 'work']);
+  +  assert.deepEqual(filterNotesByTags(notes, ['work', '日本語']).map(({ id }) => id), ['both']);
+  +  assert.deepEqual(filterNotesByTags(notes, ['日本語']).map(({ id }) => id), ['both']);
+  +  assert.equal(noteSearchText({ ...notes[0], tags: ['Công việc', '日本語'] }).includes('cong viec'), true);
+  +});
+  +
+  +test('pinned notes stay first; pinned ties use updatedAt and remaining notes honor selected sort', () => {
+  +  const notes = [
+  +    { ...note('older-pin', 'A pin', 'x'), pinned: true, updatedAt: 3 },
+  +    { ...note('newer-pin', 'Z pin', 'x'), pinned: true, updatedAt: 9 },
+  +    { ...note('recent', 'Zulu', 'x'), updatedAt: 20 },
+  +    { ...note('alpha', 'Alpha', 'x'), updatedAt: 10 },
+  +  ];
+  +  assert.deepEqual(sortNotes(notes).map(({ id }) => id), ['newer-pin', 'older-pin', 'recent', 'alpha']);
+  +  assert.deepEqual(sortNotes(notes, 'title').map(({ id }) => id), ['newer-pin', 'older-pin', 'alpha', 'recent']);
+  +});
+  +
+   test('backup parser accepts version 1 data and preserves document values', () => {
+     const source = note('one', 'A note', 'hello');
+     const parsed = parseBackup(JSON.stringify(makeBackup([source], '2026-10-21T00:00:00.000Z')));
+  @@ -31,6 +54,21 @@ test('backup parser accepts version 1 data and preserves document values', () =>
+  +test('backup v1 preserves organization metadata and remains compatible with older v1 notes', () => {
+  +  const source = { ...note('tagged', '日本語', '本文'), pinned: true, tags: ['仕事', 'Công việc'] };
+  +  const parsed = parseBackup(makeBackup([source]));
+  +  assert.equal(parsed.notes[0].pinned, true); assert.deepEqual(parsed.notes[0].tags, source.tags);
+  +  const older = note('older', 'Old export', 'body'); delete older.pinned; delete older.tags;
+  +  assert.deepEqual(parseBackup(makeBackup([older])).notes[0], older);
+  +});
+  +
+  +test('backup v1 rejects invalid organization metadata without rewriting source notes', () => {
+  +  const invalid = { ...note('invalid-tags', 'Bad', 'x'), pinned: true, tags: ['duplicate', ' Duplicate '] };
+  +  const before = structuredClone(invalid);
+  +  assert.throws(() => parseBackup(makeBackup([invalid])), /duplicate tags/i);
+  +  assert.deepEqual(invalid, before);
+  +});
+  +
+   test('backup parser rejects duplicate IDs before repository mutation', () => {
+     assert.throws(() => parseBackup(makeBackup([note('same', 'one', 'x'), note('same', 'two', 'y')])), /duplicate note ID/i);
+   });
+  +39 -1
+
+spikes/phase-00/gate1/web/app/lib/note-validation.mjs
+  @@ -1,4 +1,5 @@
+  +import { validateOrganizationMetadata } from './note-organization.mjs';
+   
+   export class NoteDocumentError extends Error {
+     constructor(message, issues = []) { super(message); this.name = 'NoteDocumentError'; this.issues = issues; }
+  @@ -20,5 +21,6 @@ export function assertNoteRecord(note, { allowUnsupported = false } = {}) {
+  +  validateOrganizationMetadata(note);
+     validateNoteDocument(note.document, allowUnsupported);
+   }
+  +2 -0
+
+spikes/phase-00/gate1/web/app/lib/save-coordinator.mjs
+  @@ -52,5 +52,18 @@ export function createSaveCoordinator({ note, repository, journal, onChange = ()
+  -  return { edit, flush, transition, snapshot, clearJournal: () => journal.clear() };
+  +  async function updateMetadata(changes) {
+  +    const result = await flush();
+  +    if (!result.ok) return result;
+  +    try {
+  +      if (!journal.isCurrent()) throw new NoteConflictError();
+  +      saved = await repository.updateOrganization(saved.id, changes, saved.revision);
+  +      error = null; notify();
+  +      return { ok: true, note: saved };
+  +    } catch (cause) {
+  +      error = cause; notify();
+  +      return { ok: false, error: cause };
+  +    }
+  +  }
+  +  return { edit, flush, transition, updateMetadata, snapshot, clearJournal: () => journal.clear() };
+   }
+  +14 -1
+
+spikes/phase-00/gate1/web/app/lib/save-coordinator.test.mjs
+  @@ -78,3 +78,33 @@ test('deletion epoch prevents stale-tab save after same-ID reimport', async () =
+  +
+  +test('organization mutation waits for draft autosave and uses its committed revision', async () => {
+  +  const f = fixture(), organizationWrites = [];
+  +  f.repository.updateOrganization = async (id, changes, revision) => {
+  +    organizationWrites.push({ id, changes, revision });
+  +    return { ...f.coordinator.snapshot().note, ...changes, revision: revision + 1 };
+  +  };
+  +  f.coordinator.edit(draft('Latest body'));
+  +  const mutation = f.coordinator.updateMetadata({ pinned: true });
+  +  assert.equal(f.calls.length, 1); assert.equal(organizationWrites.length, 0);
+  +  f.finish(0);
+  +  assert.equal((await mutation).ok, true);
+  +  assert.deepEqual(organizationWrites, [{ id: 'one', changes: { pinned: true }, revision: 1 }]);
+  +  assert.equal(f.coordinator.snapshot().note.title, 'Latest body');
+  +  assert.equal(f.coordinator.snapshot().note.pinned, true);
+  +  assert.equal(f.coordinator.snapshot().note.revision, 2);
+  +  assert.equal(f.journal.value, null);
+  +});
+  +
+  +test('failed draft save blocks organization mutation and retains its recovery journal', async () => {
+  +  const f = fixture(); let organizationWrites = 0;
+  +  f.repository.updateOrganization = async () => { organizationWrites += 1; return f.coordinator.snapshot().note; };
+  +  f.coordinator.edit(draft('Unsaved body'));
+  +  const mutation = f.coordinator.updateMetadata({ tags: ['Work'] });
+  +  f.calls[0].gate.reject(new Error('disk full'));
+  +  assert.equal((await mutation).ok, false);
+  +  assert.equal(organizationWrites, 0);
+  +  assert.equal(f.journal.value.title, 'Unsaved body');
+  +  assert.equal(f.coordinator.snapshot().note.revision, 0);
+  +});
+  +30 -0
+
+spikes/phase-00/gate1/web/app/notes/[id]/page.tsx
+  @@ -7,20 +7,23 @@ import { createNotesRepository, NoteConflictError } from '../../lib/local-notes.
+  +import { normalizeTagLabel, tagKey } from '../../lib/note-organization.mjs';
+   import { canonicalToMarkdown, createTiptapEditor, validateCanonicalDocument, toTiptapJSON } from '../../../packages/document-engine/src/index.js';
+   import { AudioRecorder } from '../../ui/audio-recorder';
+   
+  -type Note = { id: string; title: string; document: any; schemaVersion: number; createdAt: number; updatedAt: number; lifecycle: 'active' | 'archived' | 'trashed'; revision: number };
+  +type Note = { id: string; title: string; document: any; schemaVersion: number; createdAt: number; updatedAt: number; lifecycle: 'active' | 'archived' | 'trashed'; revision: number; pinned?: boolean; tags?: string[] };
+   
+   export default function NoteEditorPage() {
+     const params = useParams<{ id: string }>(); const id = params.id; const router = useRouter();
+     const [note, setNote] = useState<Note | null>(null), [title, setTitle] = useState(''), [doc, setDoc] = useState<any>(null);
+     const [state, setState] = useState('Loading…'), [error, setError] = useState(''), [conflict, setConflict] = useState(false), [ready, setReady] = useState(false);
+     const [recovery, setRecovery] = useState<any>(null), [markdown, setMarkdown] = useState<any>(null), [busy, setBusy] = useState(false);
+  +  const [tagInput, setTagInput] = useState(''), [availableTags, setAvailableTags] = useState<string[]>([]);
+     const elementRef = useRef<HTMLDivElement>(null), editorRef = useRef<any>(null), timerRef = useRef<any>(null), coordinatorRef = useRef<any>(null);
+     const operationRef = useRef(false), recoveryRef = useRef<any>(null), aliveRef = useRef(false), recordingRef = useRef(false);
+     const validation = doc ? validateCanonicalDocument(doc) : null;
+  -  const editable = validation?.status === 'supported' && note?.lifecycle === 'active';
+  +  const recordSchemaSupported = note?.schemaVersion === 1;
+  +  const editable = recordSchemaSupported && validation?.status === 'supported' && note?.lifecycle === 'active';
+     const editableRef = useRef(false); editableRef.current = editable;
+     const selectRecovery = (next: any) => { recoveryRef.current = next; setRecovery(next); };
+   
+  @@ -39,6 +42,11 @@ export default function NoteEditorPage() {
+  +        const allNotes = await repo.list();
+  +        if (!alive) return;
+  +        const tagMap = new Map<string, string>();
+  +        for (const row of allNotes) for (const tag of Array.isArray(row.tags) ? row.tags : []) if (!tagMap.has(tagKey(tag))) tagMap.set(tagKey(tag), tag);
+  +        setAvailableTags([...tagMap.values()].sort((left, right) => left.localeCompare(right, undefined, { sensitivity: 'base' })));
+           const coordinator = createSaveCoordinator({ note: loaded, repository: repo, journal: createRecoveryJournal(recoveryStorage(), loaded), onChange: (snapshot: any) => {
+             if (!alive) return;
+             setNote(snapshot.note);
+  @@ -106,7 +114,7 @@ export default function NoteEditorPage() {
+  -      const copy = { ...coordinator.snapshot().note, id: crypto.randomUUID(), title: `${draft.title || 'Untitled note'} (copy)`, document: draft.document, schemaVersion: draft.document.schemaVersion, createdAt: Date.now(), updatedAt: Date.now(), lifecycle: 'active', revision: 0 };
+  +      const copy = { ...coordinator.snapshot().note, id: crypto.randomUUID(), title: `${draft.title || 'Untitled note'} (copy)`, document: draft.document, schemaVersion: draft.document.schemaVersion, createdAt: Date.now(), updatedAt: Date.now(), lifecycle: 'active', revision: 0, pinned: false, tags: [] };
+         await createNotesRepository().create(copy); coordinator.clearJournal(); router.replace(`/notes/${copy.id}`); return true;
+       });
+     }
+  @@ -118,7 +126,7 @@ export default function NoteEditorPage() {
+  -        const copy = { id: crypto.randomUUID(), title: `${candidate.title || 'Untitled note'} (recovered)`, document: candidate.document, schemaVersion: candidate.document.schemaVersion, createdAt: now, updatedAt: now, lifecycle: 'active', revision: 0 };
+  +        const copy = { id: crypto.randomUUID(), title: `${candidate.title || 'Untitled note'} (recovered)`, document: candidate.document, schemaVersion: candidate.document.schemaVersion, createdAt: now, updatedAt: now, lifecycle: 'active', revision: 0, pinned: false, tags: [] };
+           await createNotesRepository().create(copy); coordinatorRef.current.clearJournal(); clearRecoveryEntry(recoveryStorage(), candidate); router.replace(`/notes/${copy.id}`); return true;
+         }
+         try {
+  @@ -155,16 +163,60 @@ export default function NoteEditorPage() {
+  +  async function updateOrganization(changes: { pinned?: boolean; tags?: string[] }) {
+  +    if (!editable || recoveryRef.current) return;
+  +    await operation(async () => {
+  +      const result = await coordinatorRef.current.updateMetadata(changes);
+  +      return result.ok;
+  +    });
+  +  }
+  +
+  +  async function addTag(event: React.FormEvent<HTMLFormElement>) {
+  +    event.preventDefault();
+  +    try {
+  +      const label = normalizeTagLabel(tagInput);
+  +      const existing = availableTags.find((tag) => tagKey(tag) === tagKey(label));
+  +      const tags = Array.isArray(note?.tags) ? note.tags : [];
+  +      if (tags.some((tag) => tagKey(tag) === tagKey(label))) { setTagInput(''); setError('That tag is already on this note.'); return; }
+  +      await updateOrganization({ tags: [...tags, existing ?? label] });
+  +      setTagInput(''); setError('');
+  +    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not add this tag.'); }
+  +  }
+  +
+  +  function removeTag(tagToRemove: string) {
+  +    const tags = (Array.isArray(note?.tags) ? note.tags : []).filter((tag) => tagKey(tag) !== tagKey(tagToRemove));
+  +    void updateOrganization({ tags });
+  +  }
+  +
+  +  function toggleChecklist() {
+  +    const editor = editorRef.current;
+  +    if (!editor) return;
+  +    if (editor.isEmpty) {
+  +      editor.chain().focus().insertContent({ type: 'taskList', content: [{ type: 'taskItem', attrs: { checked: false }, content: [{ type: 'paragraph' }] }] }).run();
+  +      let firstItemCursor: number | null = null;
+  +      editor.state.doc.descendants((node: any, position: number) => {
+  +        if (firstItemCursor === null && node.type.name === 'taskItem') firstItemCursor = position + 2;
+  +      });
+  +      if (firstItemCursor !== null) editor.commands.focus(firstItemCursor);
+  +    } else editor.chain().focus().toggleTaskList().run();
+  +  }
+  +
+     if (!ready) return <div className="empty-state"><h2>Opening note…</h2><p>Reading from this device.</p></div>;
+     if (error && !note) return <div className="notice error" role="alert">{error}<p><Link href="/">Back to notes</Link></p></div>;
+     return <>
+       <div className="editor-top"><Link href={note?.lifecycle === 'archived' ? '/archive' : note?.lifecycle === 'trashed' ? '/trash' : '/'} className="back-link">← Back to notes</Link><div className="actions"><span className="save-state" aria-live="polite">{state}</span>{note?.lifecycle === 'active' ? <button className="btn" disabled={busy} onClick={() => void changeLifecycle('archived')}>Archive</button> : note?.lifecycle === 'archived' ? <button className="btn" disabled={busy} onClick={() => void changeLifecycle('active')}>Restore</button> : <button className="btn" disabled={busy} onClick={() => void changeLifecycle('active')}>Restore</button>}<button className="btn" disabled={busy} onClick={() => void changeLifecycle('trashed')}>Move to trash</button><button className="btn" onClick={exportMarkdown} disabled={!editable || busy || Boolean(recovery)}>Export Markdown</button></div></div>
+       {error && <div className="notice error" role="alert">{error}{editable && <p>{!conflict && <button className="btn" disabled={busy} onClick={() => void operation(async () => (await coordinatorRef.current.flush()).ok)}>Retry save</button>} <button className="btn" disabled={busy} onClick={() => void saveDraftAsCopy()}>Save this draft as a new note</button></p>}</div>}
+       {note?.lifecycle !== 'active' && <div className="notice">This note is in {note?.lifecycle}. Restore it before editing.</div>}
+  +    {note && !recordSchemaSupported && <div className="notice">This note record uses a newer schema. It is open read-only so this version will preserve its original data.</div>}
+       <label className="screen-reader" htmlFor="note-title">Note title</label><input id="note-title" className="editor-title" value={title} onChange={(event) => updateTitle(event.target.value)} disabled={!editable || busy || Boolean(recovery)} placeholder="Untitled note" />
+  +    {note && note.lifecycle === 'active' && recordSchemaSupported && <section className="note-organization" aria-label="Note organization">
+  +      <div className="organization-pin-row"><span className="toolbar-label">Organization</span><button className="pin-button" type="button" aria-pressed={Boolean(note.pinned)} disabled={!editable || busy || Boolean(recovery)} onClick={() => void updateOrganization({ pinned: !note.pinned })}>{note.pinned ? '★ Pinned' : '☆ Pin note'}</button></div>
+  +      <div className="organization-tags"><span className="toolbar-label">Tags</span>{(Array.isArray(note.tags) ? note.tags : []).map((tag) => <span className="tag-chip editor-tag" key={tagKey(tag)}>{tag}<button type="button" aria-label={`Remove tag ${tag}`} disabled={!editable || busy || Boolean(recovery)} onClick={() => removeTag(tag)}>×</button></span>)}{(!note.tags || note.tags.length === 0) && <span className="tag-empty">No tags yet.</span>}</div>
+  +      <form className="tag-entry" onSubmit={(event) => void addTag(event)}><label className="screen-reader" htmlFor="note-tag-input">Add a tag</label><input id="note-tag-input" className="searchbox" list="note-tag-suggestions" maxLength={80} placeholder="Add a tag…" value={tagInput} onChange={(event) => setTagInput(event.target.value)} disabled={!editable || busy || Boolean(recovery)} /><datalist id="note-tag-suggestions">{availableTags.map((tag) => <option value={tag} key={tagKey(tag)} />)}</datalist><button className="btn" type="submit" disabled={!editable || busy || Boolean(recovery) || !tagInput.trim()}>Add tag</button></form>
+  +    </section>}
+       {validation?.status === 'supported' && note?.lifecycle === 'trashed' && <div className="notice">Restore this note to edit it. Its content is preserved below.</div>}
+       {validation?.status === 'supported' && editable ? <><div className="editor-toolbar" aria-label="Text formatting">
+  -      <button className="tool-button" aria-label="Bold" title="Bold" onClick={() => editorRef.current?.chain().focus().toggleBold().run()}><strong>B</strong></button><button className="tool-button" aria-label="Italic" title="Italic" onClick={() => editorRef.current?.chain().focus().toggleItalic().run()}><em>I</em></button><button className="tool-button" aria-label="Strike" title="Strike" onClick={() => editorRef.current?.chain().focus().toggleStrike().run()}><s>S</s></button><button className="tool-button" aria-label="Heading 2" title="Heading" onClick={() => editorRef.current?.chain().focus().toggleHeading({ level: 2 }).run()}>H₂</button><button className="tool-button" aria-label="Bullet list" title="Bullet list" onClick={() => editorRef.current?.chain().focus().toggleBulletList().run()}>• List</button><button className="tool-button" aria-label="Ordered list" title="Numbered list" onClick={() => editorRef.current?.chain().focus().toggleOrderedList().run()}>1. List</button><button className="tool-button" aria-label="Checklist" title="Checklist" onClick={() => editorRef.current?.chain().focus().toggleTaskList().run()}>☑</button><button className="tool-button" aria-label="Quote" title="Quote" onClick={() => editorRef.current?.chain().focus().toggleBlockquote().run()}>“</button><button className="tool-button" aria-label="Code block" title="Code block" onClick={() => editorRef.current?.chain().focus().toggleCodeBlock().run()}>&lt;/&gt;</button>
+  +      <button className="tool-button" aria-label="Bold" title="Bold" onClick={() => editorRef.current?.chain().focus().toggleBold().run()}><strong>B</strong></button><button className="tool-button" aria-label="Italic" title="Italic" onClick={() => editorRef.current?.chain().focus().toggleItalic().run()}><em>I</em></button><button className="tool-button" aria-label="Strike" title="Strike" onClick={() => editorRef.current?.chain().focus().toggleStrike().run()}><s>S</s></button><button className="tool-button" aria-label="Heading 2" title="Heading" onClick={() => editorRef.current?.chain().focus().toggleHeading({ level: 2 }).run()}>H₂</button><button className="tool-button" aria-label="Bullet list" title="Bullet list" onClick={() => editorRef.current?.chain().focus().toggleBulletList().run()}>• List</button><button className="tool-button" aria-label="Ordered list" title="Numbered list" onClick={() => editorRef.current?.chain().focus().toggleOrderedList().run()}>1. List</button><button className="tool-button" aria-label="Checklist" title="Checklist" onClick={toggleChecklist}>☑</button><button className="tool-button" aria-label="Quote" title="Quote" onClick={() => editorRef.current?.chain().focus().toggleBlockquote().run()}>“</button><button className="tool-button" aria-label="Code block" title="Code block" onClick={() => editorRef.current?.chain().focus().toggleCodeBlock().run()}>&lt;/&gt;</button>
+       </div><div ref={elementRef} className="editor-content" aria-label="Note content" /></>
+         : <section>{validation?.status !== 'supported' && <div className="notice">This document uses a schema this editor cannot safely modify. It is open read-only so its original data stays intact.</div>}<pre className="readonly-panel">{JSON.stringify(doc, null, 2)}</pre></section>}
+       {note && <AudioRecorder noteId={note.id} disabled={!editable || busy || Boolean(recovery)} onActivityChange={(active) => { recordingRef.current = active; }} />}
+  +57 -5
+
+spikes/phase-00/gate1/web/app/page.tsx
+  @@ -1,9 +1,13 @@
+  -import { useEffect, useState } from 'react';
+  +import { useCallback, useEffect, useMemo, useState } from 'react';
+   import { createNotesRepository, makeEmptyNote } from './lib/local-notes.js';
+  -import { filterNotes } from './lib/mvp-utils.mjs';
+  +import { filterNotes, filterNotesByTags, sortNotes } from './lib/mvp-utils.mjs';
+  +import { tagKey } from './lib/note-organization.mjs';
+  +
+  +type SortMode = 'updated' | 'created' | 'title';
+  +const HOME_PREFERENCES_KEY = 'noteos:mvp03:home-preferences';
+   
+   function textOf(document: any) {
+     const text: string[] = [];
+  @@ -12,24 +16,93 @@ function textOf(document: any) {
+  +function preferencesFromStorage() {
+  +  try {
+  +    const value = JSON.parse(localStorage.getItem(HOME_PREFERENCES_KEY) ?? '{}');
+  +    return {
+  +      query: typeof value.query === 'string' ? value.query : '',
+  +      sort: ['updated', 'created', 'title'].includes(value.sort) ? value.sort as SortMode : 'updated',
+  +      tags: Array.isArray(value.tags) ? value.tags.filter((tag: unknown) => typeof tag === 'string') : [],
+  +    };
+  +  } catch { return { query: '', sort: 'updated' as SortMode, tags: [] as string[] }; }
+  +}
+  +
+   export default function Home() {
+     const [notes, setNotes] = useState<any[]>([]);
+     const [query, setQuery] = useState('');
+  +  const [sort, setSort] = useState<SortMode>('updated');
+  +  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  +  const [preferencesReady, setPreferencesReady] = useState(false);
+     const [error, setError] = useState('');
+     const [ready, setReady] = useState(false);
+  -  const repo = createNotesRepository();
+  -  async function refresh() { try { setNotes(await repo.list()); setError(''); } catch (e) { setError(e instanceof Error ? e.message : 'Could not open local notes.'); } finally { setReady(true); } }
+  -  useEffect(() => { void refresh(); }, []);
+  -  const active = filterNotes(notes, query, 'active');
+  +
+  +  const refresh = useCallback(async (clearError = true) => {
+  +    try { setNotes(await createNotesRepository().list()); if (clearError) setError(''); }
+  +    catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not open local notes.'); }
+  +    finally { setReady(true); }
+  +  }, []);
+  +
+  +  useEffect(() => {
+  +    const preferences = preferencesFromStorage();
+  +    setQuery(preferences.query); setSort(preferences.sort); setSelectedTags(preferences.tags); setPreferencesReady(true);
+  +    void refresh();
+  +  }, [refresh]);
+  +
+  +  useEffect(() => {
+  +    if (!preferencesReady) return;
+  +    localStorage.setItem(HOME_PREFERENCES_KEY, JSON.stringify({ query, sort, tags: selectedTags }));
+  +  }, [preferencesReady, query, sort, selectedTags]);
+  +
+  +  const availableTags = useMemo(() => {
+  +    const labels = new Map<string, string>();
+  +    for (const note of notes.filter((row) => row.lifecycle === 'active')) {
+  +      for (const tag of Array.isArray(note.tags) ? note.tags : []) if (!labels.has(tagKey(tag))) labels.set(tagKey(tag), tag);
+  +    }
+  +    return [...labels.values()].sort((left, right) => left.localeCompare(right, undefined, { sensitivity: 'base' }));
+  +  }, [notes]);
+  +
+  +  const visibleNotes = useMemo(() => {
+  +    const matched = filterNotes(notes, query, 'active');
+  +    return sortNotes(filterNotesByTags(matched, selectedTags), sort);
+  +  }, [notes, query, selectedTags, sort]);
+  +
+     async function createNote() {
+  -    try { const note = await repo.create(makeEmptyNote()); location.assign(`/notes/${encodeURIComponent(note.id)}`); }
+  -    catch (e) { setError(e instanceof Error ? e.message : 'Could not create a note.'); }
+  +    try { const note = await createNotesRepository().create(makeEmptyNote()); location.assign(`/notes/${encodeURIComponent(note.id)}`); }
+  +    catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not create a note.'); }
+  +  }
+  +
+  +  async function togglePin(note: any) {
+  +    try {
+  +      const updated = await createNotesRepository().updateOrganization(note.id, { pinned: !note.pinned }, note.revision);
+  +      setNotes((current) => current.map((row) => row.id === updated.id ? updated : row)); setError('');
+  +    } catch (cause) {
+  +      await refresh(false);
+  +      setError(cause instanceof Error ? cause.message : 'Could not update this note. Refresh and try again.');
+  +    }
+     }
+  +
+  +  function toggleTag(tag: string) {
+  +    const key = tagKey(tag);
+  +    setSelectedTags((current) => current.some((item) => tagKey(item) === key)
+  +      ? current.filter((item) => tagKey(item) !== key)
+  +      : [...current, tag]);
+  +  }
+  +
+  +  const hasFilters = Boolean(query || selectedTags.length);
+     return <>
+       <div className="page-heading"><div><p className="eyebrow">A quiet place to think</p><h1 className="page-title">Your notes</h1><p className="page-lede">A little space for what you want to remember.</p></div><div className="actions"><button className="btn btn-primary" onClick={createNote}>＋ New note</button></div></div>
+       {error && <div className="notice error" role="alert">{error} Your notes stay stored locally.</div>}
+  -    <div className="search-row"><label className="screen-reader" htmlFor="note-search">Search notes</label><input id="note-search" className="searchbox" type="search" placeholder="Search your notes…" value={query} onChange={(event) => setQuery(event.target.value)} /><span className="toolbar-label">{active.length} {active.length === 1 ? 'note' : 'notes'}</span></div>
+  -    {active.length ? <section className="notes-grid" aria-label="Active notes">{active.map((note: any) => <Link className="note-card" href={`/notes/${encodeURIComponent(note.id)}`} key={note.id}><h2>{note.title || 'Untitled note'}</h2><p className="note-preview">{textOf(note.document) || 'Start with a thought…'}</p><div className="note-meta"><span>{new Date(note.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span><span>Open ↗</span></div></Link>)}</section>
+  -      : <div className="empty-state"><h2>{ready ? (query ? 'No notes found' : 'A fresh page') : 'Opening your notes…'}</h2><p>{ready ? (query ? 'Try another word or phrase.' : 'Create a note to get your thoughts started.') : 'Everything is stored on this device.'}</p>{ready && !query && <button className="btn btn-primary" onClick={createNote}>Create your first note</button>}</div>}
+  +    <div className="notes-controls">
+  +      <div className="search-row"><label className="screen-reader" htmlFor="note-search">Search notes</label><input id="note-search" className="searchbox" type="search" placeholder="Search titles, notes and tags…" value={query} onChange={(event) => setQuery(event.target.value)} /><span className="toolbar-label">{visibleNotes.length} {visibleNotes.length === 1 ? 'note' : 'notes'}</span></div>
+  +      <label className="sort-control"><span>Sort</span><select aria-label="Sort notes" value={sort} onChange={(event) => setSort(event.target.value as SortMode)}><option value="updated">Recently updated</option><option value="created">Recently created</option><option value="title">Title A–Z</option></select></label>
+  +    </div>
+  +    {availableTags.length > 0 && <div className="tag-filter-row" aria-label="Filter notes by tag"><span className="toolbar-label">Tags</span>{availableTags.map((tag) => <button key={tagKey(tag)} type="button" className={`tag-chip tag-filter ${selectedTags.some((item) => tagKey(item) === tagKey(tag)) ? 'is-selected' : ''}`} aria-pressed={selectedTags.some((item) => tagKey(item) === tagKey(tag))} onClick={() => toggleTag(tag)}>{tag}</button>)}{selectedTags.length > 0 && <button className="text-button" onClick={() => setSelectedTags([])}>Clear tags</button>}</div>}
+  +    {visibleNotes.length ? <section className="notes-grid" aria-label="Active notes">{visibleNotes.map((note: any) => <article className="note-card" key={note.id}>
+  +      <div className="note-card-top"><span className="note-pin-state">{note.pinned ? 'Pinned' : ''}</span>{note.schemaVersion === 1 && <button className="pin-button" type="button" aria-label={note.pinned ? `Unpin ${note.title || 'Untitled note'}` : `Pin ${note.title || 'Untitled note'}`} aria-pressed={Boolean(note.pinned)} onClick={() => void togglePin(note)}>{note.pinned ? '★ Pinned' : '☆ Pin'}</button>}</div>
+  +      <Link className="note-card-link" href={`/notes/${encodeURIComponent(note.id)}`}><h2>{note.title || 'Untitled note'}</h2><p className="note-preview">{textOf(note.document) || 'Start with a thought…'}</p><span className="note-open-label">Open note ↗</span></Link>
+  +      {Array.isArray(note.tags) && note.tags.length > 0 && <div className="note-card-tags" aria-label={`Tags for ${note.title || 'Untitled note'}`}>{note.tags.map((tag: string) => <button key={tagKey(tag)} type="button" className="tag-chip" aria-label={`Filter by ${tag}`} onClick={() => toggleTag(tag)}>{tag}</button>)}</div>}
+  +      <div className="note-meta"><span>{new Date(note.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span><span>{note.pinned ? 'Pinned first' : 'On this device'}</span></div>
+  +    </article>)}</section>
+  +      : <div className="empty-state"><h2>{ready ? (hasFilters ? 'No notes match these filters' : 'A fresh page') : 'Opening your notes…'}</h2><p>{ready ? (hasFilters ? 'Clear a tag or try another search to see more notes.' : 'Create a note to get your thoughts started.') : 'Everything is stored on this device.'}</p>{ready && hasFilters && <button className="btn" onClick={() => { setQuery(''); setSelectedTags([]); }}>Clear search and filters</button>}{ready && !hasFilters && <button className="btn btn-primary" onClick={createNote}>Create your first note</button>}</div>}
+     </>;
+   }
+  +84 -11
+
+spikes/phase-00/gate1/web/package.json
+  @@ -8,6 +8,7 @@
+  +    "test:mvp03-browser": "node scripts/mvp-03-browser.mjs",
+       "test:audio-browser": "node scripts/mvp-02-browser.mjs",
+       "test:documents": "npm --prefix packages/document-engine test",
+       "benchmark:documents": "npm --prefix packages/document-engine run benchmark"
+  +1 -0

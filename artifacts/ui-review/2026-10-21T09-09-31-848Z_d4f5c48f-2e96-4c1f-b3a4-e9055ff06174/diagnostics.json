@@ -1,0 +1,188 @@
+{
+  "schema_version": 1,
+  "enabled": true,
+  "entries": [
+    {
+      "project": "noteOS MVP-01.1",
+      "target": "home",
+      "viewport": "desktop",
+      "timestamp": "2026-10-21T09:09:32.329Z",
+      "data": {
+        "consoleErrors": [],
+        "consoleWarnings": [],
+        "pageErrors": [],
+        "failedRequests": [],
+        "httpErrors": []
+      }
+    },
+    {
+      "project": "noteOS MVP-01.1",
+      "target": "home",
+      "viewport": "mobile",
+      "timestamp": "2026-10-21T09:09:33.053Z",
+      "data": {
+        "consoleErrors": [],
+        "consoleWarnings": [],
+        "pageErrors": [],
+        "failedRequests": [],
+        "httpErrors": []
+      }
+    },
+    {
+      "project": "noteOS MVP-01.1",
+      "target": "editor",
+      "viewport": "desktop",
+      "timestamp": "2026-10-21T09:09:33.508Z",
+      "data": {
+        "consoleErrors": [],
+        "consoleWarnings": [],
+        "pageErrors": [],
+        "failedRequests": [],
+        "httpErrors": []
+      }
+    },
+    {
+      "project": "noteOS MVP-01.1",
+      "target": "editor",
+      "viewport": "mobile",
+      "timestamp": "2026-10-21T09:09:35.120Z",
+      "data": {
+        "consoleErrors": [],
+        "consoleWarnings": [],
+        "pageErrors": [],
+        "failedRequests": [],
+        "httpErrors": []
+      }
+    },
+    {
+      "project": "noteOS MVP-01.1",
+      "target": "search",
+      "viewport": "desktop",
+      "timestamp": "2026-10-21T09:09:36.652Z",
+      "data": {
+        "consoleErrors": [],
+        "consoleWarnings": [],
+        "pageErrors": [],
+        "failedRequests": [],
+        "httpErrors": []
+      }
+    },
+    {
+      "project": "noteOS MVP-01.1",
+      "target": "search",
+      "viewport": "mobile",
+      "timestamp": "2026-10-21T09:09:38.490Z",
+      "data": {
+        "consoleErrors": [],
+        "consoleWarnings": [],
+        "pageErrors": [],
+        "failedRequests": [],
+        "httpErrors": []
+      }
+    },
+    {
+      "project": "noteOS MVP-01.1",
+      "target": "archive",
+      "viewport": "desktop",
+      "timestamp": "2026-10-21T09:09:40.055Z",
+      "data": {
+        "consoleErrors": [],
+        "consoleWarnings": [],
+        "pageErrors": [],
+        "failedRequests": [],
+        "httpErrors": []
+      }
+    },
+    {
+      "project": "noteOS MVP-01.1",
+      "target": "archive",
+      "viewport": "mobile",
+      "timestamp": "2026-10-21T09:09:42.144Z",
+      "data": {
+        "consoleErrors": [],
+        "consoleWarnings": [],
+        "pageErrors": [],
+        "failedRequests": [],
+        "httpErrors": []
+      }
+    },
+    {
+      "project": "noteOS MVP-01.1",
+      "target": "trash",
+      "viewport": "desktop",
+      "timestamp": "2026-10-21T09:09:43.716Z",
+      "data": {
+        "consoleErrors": [],
+        "consoleWarnings": [],
+        "pageErrors": [],
+        "failedRequests": [],
+        "httpErrors": []
+      }
+    },
+    {
+      "project": "noteOS MVP-01.1",
+      "target": "trash",
+      "viewport": "mobile",
+      "timestamp": "2026-10-21T09:09:45.289Z",
+      "data": {
+        "consoleErrors": [],
+        "consoleWarnings": [],
+        "pageErrors": [],
+        "failedRequests": [],
+        "httpErrors": []
+      }
+    },
+    {
+      "project": "noteOS MVP-01.1",
+      "target": "delete-confirmation",
+      "viewport": "desktop",
+      "timestamp": "2026-10-21T09:09:46.854Z",
+      "data": {
+        "consoleErrors": [],
+        "consoleWarnings": [],
+        "pageErrors": [],
+        "failedRequests": [],
+        "httpErrors": []
+      }
+    },
+    {
+      "project": "noteOS MVP-01.1",
+      "target": "delete-confirmation",
+      "viewport": "mobile",
+      "timestamp": "2026-10-21T09:10:03.229Z",
+      "data": {
+        "consoleErrors": [],
+        "consoleWarnings": [],
+        "pageErrors": [],
+        "failedRequests": [],
+        "httpErrors": []
+      }
+    },
+    {
+      "project": "noteOS MVP-01.1",
+      "target": "backup",
+      "viewport": "desktop",
+      "timestamp": "2026-10-21T09:10:19.862Z",
+      "data": {
+        "consoleErrors": [],
+        "consoleWarnings": [],
+        "pageErrors": [],
+        "failedRequests": [],
+        "httpErrors": []
+      }
+    },
+    {
+      "project": "noteOS MVP-01.1",
+      "target": "backup",
+      "viewport": "mobile",
+      "timestamp": "2026-10-21T09:10:20.337Z",
+      "data": {
+        "consoleErrors": [],
+        "consoleWarnings": [],
+        "pageErrors": [],
+        "failedRequests": [],
+        "httpErrors": []
+      }
+    }
+  ]
+}

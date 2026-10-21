@@ -1,0 +1,8 @@
+{
+  "command": "npm --prefix spikes/phase-00/gate1/web run test:mvp",
+  "status": "PASS",
+  "tests": 41,
+  "passed": 41,
+  "failed": 0,
+  "environment": "Node v24.21.0; fake-indexeddb for unit persistence tests"
+}

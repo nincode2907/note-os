@@ -1,0 +1,33 @@
+commit 83fb377cb96a874038411b883386626e2fb58d50
+Author:     Bui Van Nin <vannin2907lc@gmail.com>
+AuthorDate: Wed Oct 21 09:33:19 2026 +0700
+Commit:     Bui Van Nin <vannin2907lc@gmail.com>
+CommitDate: Wed Oct 21 09:33:19 2026 +0700
+
+    Complete MVP-01.1 Web quality acceptance
+
+ .ui-review.json                                    |  73 +++++-
+ README.md                                          |   3 +
+ docs/mvp/mvp-01-report.md                          |  80 +++++++
+ docs/mvp/mvp-01.1-report.md                        |  96 ++++++++
+ spikes/phase-00/gate1/web/AGENTS.md                |   9 +
+ spikes/phase-00/gate1/web/app/archive/page.tsx     |   2 +
+ spikes/phase-00/gate1/web/app/backup/page.tsx      |  28 +++
+ spikes/phase-00/gate1/web/app/globals.css          |   5 +
+ spikes/phase-00/gate1/web/app/layout.tsx           |   6 +-
+ spikes/phase-00/gate1/web/app/lib/local-notes.js   | 262 +++++++++++++++++++++
+ .../gate1/web/app/lib/local-notes.test.mjs         |  96 ++++++++
+ spikes/phase-00/gate1/web/app/lib/mvp-utils.mjs    |  65 +++++
+ .../phase-00/gate1/web/app/lib/mvp-utils.test.mjs  |  42 ++++
+ spikes/phase-00/gate1/web/app/notes/[id]/page.tsx  | 117 +++++++++
+ spikes/phase-00/gate1/web/app/page.tsx             |  34 ++-
+ spikes/phase-00/gate1/web/app/trash/page.tsx       |   2 +
+ spikes/phase-00/gate1/web/app/ui/app-shell.tsx     |  43 ++++
+ .../phase-00/gate1/web/app/ui/lifecycle-page.tsx   |  40 ++++
+ spikes/phase-00/gate1/web/next-env.d.ts            |   5 +
+ spikes/phase-00/gate1/web/package-lock.json        |  11 +
+ spikes/phase-00/gate1/web/package.json             |   7 +-
+ .../web/packages/document-engine/src/index.js      |   2 +-
+ .../document-engine/tests/document-engine.test.mjs |   8 +
+ spikes/phase-00/gate1/web/tsconfig.json            |  38 ++-
+ 24 files changed, 1065 insertions(+), 9 deletions(-)

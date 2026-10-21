@@ -1,7 +1,7 @@
 # Phase 00-B — Document engine and editor validation
 
-**Updated:** 2026-10-20
-**Status:** Core schema/conversion spike **PASS** (26/26 Node tests); transformation microbenchmark **PASS**; browser editor **BLOCKED**; native/iPhone editor validation **BLOCKED**; Laravel sync contract tests **NOT RUN**. This is Phase 00 evidence only, not production approval.
+**Updated:** 2026-10-21
+**Status:** Core schema/conversion spike **PASS**; B1 regression suite **PASS** (30/30 Node tests); transformation microbenchmark **PASS**; browser editor **BLOCKED**; native/iPhone editor validation **BLOCKED**; Laravel sync contract tests **NOT RUN**. This is Phase 00 evidence only, not production approval.
 
 ## Scope and implementation
 
@@ -27,7 +27,7 @@ The web spike route is `spikes/phase-00/gate1/web/app/editor/page.jsx` (`/editor
 
 Reproduction: from `spikes/phase-00/gate1/web/packages/document-engine/`, run `npm ci --ignore-scripts --no-audit --no-fund`, `npm test`, and `npm run benchmark`. The test runner is Node's built-in test framework; tests do not use MySQL, Laravel, Docker, a browser or personal data.
 
-Final result: **26 passed, 0 failed**. Coverage includes supported document nodes/marks, nested ordered and bullet lists, checklist state, attachment references, Unicode and combining marks, whitespace/newlines, Markdown/plain-text projection warnings, safe links, malformed trees, unsupported future/unknown data, canonical serialization/reload and repeated round trips. Exact output: [`node-test-output.txt`](../../artifacts/phase-00/document-engine/node-test-output.txt).
+Initial B result: **26 passed, 0 failed**. B1 later expanded this suite to 30/30; see the addendum below. Initial coverage includes supported document nodes/marks, nested ordered and bullet lists, checklist state, attachment references, Unicode and combining marks, whitespace/newlines, Markdown/plain-text projection warnings, safe links, malformed trees, unsupported future/unknown data, canonical serialization/reload and repeated round trips. Exact initial output: [`node-test-output.txt`](../../artifacts/phase-00/document-engine/node-test-output.txt).
 
 The first run had one failure: ProseMirror returns null-prototype attribute objects while JSON reload creates ordinary objects, which broke strict deep equality. The validator now normalizes its ProseMirror output through JSON serialization before returning canonical data. The rerun passed all 26 tests. This is a document-engine representation issue; it provides no evidence about the prior Watermelon 0/20 browser result.
 
@@ -84,6 +84,8 @@ npm run benchmark
 The browser and iPhone portions remain BLOCKED, not failed. No sync engine decision, Gate 1 PowerSync run, Gate 2 work, Phase 01 work, or other-project change occurred.
 
 ## Phase 00-B1 audit addendum (2026-10-21)
+
+This 30/30 B1 suite supersedes the initial 26/26 B run count; the initial result is retained below as historical evidence.
 
 **Document integrity: PASS after focused validation fixes.** Schema v1 uses the configured Tiptap/ProseMirror `doc` root and the same node/mark extensions used by the editor. Unsupported schema versions, unknown nodes/marks at any depth, unknown fields, and unknown attributes return a non-editable result before the editor can open them. ProseMirror serialization normalizes attribute objects through a JSON round trip; repeated canonical JSON round trips are stable. Text content, marks, and supported attributes are retained. Plain-text conversion splits only on LF, retains empty lines, boundary whitespace, CR characters, Unicode code points, and combining sequences, and applies no Unicode normalization.
 

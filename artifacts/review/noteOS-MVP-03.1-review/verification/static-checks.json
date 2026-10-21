@@ -1,0 +1,13 @@
+{
+  "environment": {
+    "os": "macOS 15.7.7 (24G720)",
+    "node": "v24.21.0",
+    "next": "16.4.2",
+    "browser": "Chromium 156.0.8078.4"
+  },
+  "checks": [
+    { "command": "npm --prefix spikes/phase-00/gate1/web run typecheck", "status": "PASS", "detail": "tsc --noEmit" },
+    { "command": "npm --prefix spikes/phase-00/gate1/web run build", "status": "PASS", "detail": "Optimized production build completed; existing multiple-lockfile root warning only." },
+    { "command": "git diff --check", "status": "PASS", "detail": "No whitespace errors." }
+  ]
+}

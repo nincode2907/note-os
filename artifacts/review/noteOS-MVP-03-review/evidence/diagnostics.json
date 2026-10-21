@@ -1,0 +1,22 @@
+{
+  "results": [
+    {
+      "name": "checklist-tags-pin-search-backup",
+      "status": "PASS"
+    },
+    {
+      "name": "stale-tab-organization-conflict",
+      "status": "PASS"
+    },
+    {
+      "name": "mobile-navigation-width",
+      "status": "PASS"
+    }
+  ],
+  "diagnostics": {
+    "browser": "156.0.8078.4",
+    "consoleErrors": [],
+    "pageErrors": [],
+    "externalRequests": []
+  }
+}

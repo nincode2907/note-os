@@ -95,7 +95,7 @@ Giữ block Dev Hub `15700–15799`, mapping và các entry khác nguyên trạn
 
 ## 00-B — Document engine and editor spike
 
-Updated 2026-10-20. Status: **Core schema/conversion PASS (26/26); browser editor BLOCKED; native/iPhone validation BLOCKED; Laravel sync contract tests NOT RUN.** Detailed measurements and reproduction are in [editor-benchmark.md](editor-benchmark.md).
+Updated 2026-10-21. Status: **Core schema/conversion PASS (latest B1 suite 30/30); browser editor BLOCKED; native/iPhone validation BLOCKED; Laravel sync contract tests NOT RUN.** Initial B passed 26/26; B1 extended the frozen regression suite. Detailed measurements and reproduction are in [editor-benchmark.md](editor-benchmark.md) and [validation-handoff.md](validation-handoff.md).
 
 ### Spike decisions
 

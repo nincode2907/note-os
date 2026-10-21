@@ -1,0 +1,34 @@
+{
+  "name": "noteos-gate1-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev -H 127.0.0.1 -p 3000",
+    "build": "next build",
+    "start": "next start -H 0.0.0.0 -p 3000",
+    "typecheck": "tsc --noEmit",
+    "test:mvp": "node --test app/lib/*.test.mjs",
+    "test:mvp03-browser": "node scripts/mvp-03-browser.mjs",
+    "test:audio-browser": "node scripts/mvp-02-browser.mjs",
+    "test:documents": "npm --prefix packages/document-engine test",
+    "benchmark:documents": "npm --prefix packages/document-engine run benchmark"
+  },
+  "dependencies": {
+    "@nozbe/watermelondb": "0.28.0",
+    "@powersync/web": "2.5.0",
+    "@tiptap/core": "3.32.0",
+    "@tiptap/extension-document": "3.32.0",
+    "@tiptap/extension-link": "3.32.0",
+    "@tiptap/extension-list": "3.32.0",
+    "@tiptap/starter-kit": "3.32.0",
+    "next": "16.4.2",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.1",
+    "@types/react": "19.2.7",
+    "fake-indexeddb": "6.2.6",
+    "typescript": "5.9.3"
+  }
+}

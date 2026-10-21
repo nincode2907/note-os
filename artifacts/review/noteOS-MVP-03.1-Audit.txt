@@ -1,0 +1,1794 @@
+noteOS MVP-03.1 ORGANIZATION HOTFIX — FULL AUDIT TEXT
+Generated: 2026-10-21
+Synthetic test data only. No personal notes or recordings included.
+
+========================================================================================
+REVIEW SUMMARY
+========================================================================================
+# noteOS MVP-03.1 — Organization Hotfix Report
+
+**Status:** PASS — implementation and requested verification complete  
+**Scope:** MVP-03 hotfix only; no database/schema or canonical document format changes  
+**Environment:** macOS 15.7.7 (24G720), Node v24.21.0, Chromium 156.0.8078.4, app at `http://127.0.0.1:3000`  
+**Dataset:** Synthetic notes in isolated Playwright browser contexts; no personal notes, recordings, cloud AI or external requests.
+
+## Findings and fixes
+
+| Finding | Status | Evidence |
+|---|---|---|
+| F-03-A — organization commit result and tag form state | PASS | `updateOrganization()` now returns the operation's boolean result. Add tag clears only after success, keeps the attempted input and error on failure, and adds the committed tag to suggestions. Stale two-tab conflict and injected one-shot IndexedDB `put` failure both preserve DB state; retry succeeds. Tag removal and editor pin/unpin still use the same coordinator/error path. |
+| F-03-B — Home preference writes | PASS | localStorage writes are best effort; search, sort, and tag filtering stay in React state when writes throw `SecurityError` or `QuotaExceededError`. Browser checks compare the note store before/after and find no mutations or page errors. Pin requests are locked per note during an in-flight request. |
+| F-03-C — real backup round trip | PASS | Browser test reads bytes from the actual Playwright download stream, parses `noteos.local-backup` v1, checks exact tags `Tiếng Việt` and `東京`, `pinned: true`, and the two checklist items with checked states `[true, false]`. It imports a copy of those bytes with a new ID and verifies canonical JSON equality and byte-for-byte-equivalent original record state. Captured download: `artifacts/review/noteOS-MVP-03.1-review/evidence/actual-downloaded-backup.json`. |
+| F-03-D — UI Lens fixture | PASS | The fixture now first creates a note through the app UI, then opens the already initialized DB without forcing a version upgrade. It verifies `notes`, `recordings`, and `recordingChunks` before transaction creation and fails within 5 seconds with an explicit error. Final capture completed 6/6 targets with zero console/page/request errors. |
+| F-03-E — copy organization metadata | PASS | Draft-as-copy and recovery-as-copy retain valid tags from the committed source snapshot, set `pinned: false`, and leave the source record unchanged. Stale-tab regression confirms the copy does not adopt a tag committed only by the other tab. A focused utility test rejects malformed or unsupported-schema tags. Recovery still validates its canonical document before creating a copy. |
+
+## Verification
+
+| Check | Result |
+|---|---|
+| MVP unit suite | PASS — 41 tests, 0 failures |
+| Document engine suite | PASS — 31 tests, 0 failures |
+| MVP-03 browser | PASS — 7 scenarios, 0 failures; actual download bytes verified |
+| MVP-01.2 browser | PASS — 13 scenarios, 0 failures; one navigation request was `ERR_ABORTED` during expected route transition, with no console/page errors |
+| MVP-02.1 audio/Web Lock browser | PASS — 10 scenarios, Chromium fake audio device; no physical microphone used |
+| Typecheck | PASS — `tsc --noEmit` |
+| Production build | PASS — Next.js 16.4.2 / Turbopack |
+| `git diff --check` | PASS |
+| UI Lens MVP-03.1 | PASS — 6/6 captures: pinned Home, checklist editor desktop/mobile, tag filtered Home, empty filter, mobile navigation |
+
+Production build emitted Next.js's existing multiple-lockfile workspace-root warning (it selected `spikes/phase-00/gate1/package-lock.json` and also detected the web lockfile); build completed successfully.
+
+## Root-cause notes
+
+- The tag form awaited `updateOrganization()` but that function discarded the existing operation result. The caller therefore cleared its input and error state after a stale conflict or storage failure.
+- Home already tolerated localStorage read/parse failures, but its preference write effect did not catch storage exceptions.
+- The prior backup assertion inspected the filename and constructed a separate fixture from IndexedDB. The updated assertion consumes and validates the downloaded file itself.
+- The UI Lens fixture requested DB version 2 and immediately transacted on `notes`, racing the app's first database creation/upgrade. The revised fixture uses the app's own UI bootstrap and bounded store checks.
+- Copy flows explicitly replaced source tags with an empty list. They now copy only valid tags from the committed source note and always unpin the new record.
+
+## UI Lens evidence
+
+Final run manifest and diagnostics are under `artifacts/review/noteOS-MVP-03.1-review/ui-lens/2026-10-21T07-04-40-620Z_da4e9636-65c0-4bfe-9346-477ac0137be2/`. Captures used 1440×1000 desktop and 390×844 mobile viewports. An earlier run exposed strict locator cardinality and a `:first-child` selector mismatch in the test configuration; the selectors were narrowed to actual fixture elements, and the final run passed all six captures. No shared UI Lens project files were changed.
+
+## Limits and disposition
+
+Verification covers isolated Chromium browser contexts on the recorded macOS environment. It does not claim Safari, physical iPhone, or real microphone hardware results. Storage failures were deterministic synthetic exceptions. No schema, Docker configuration, persistent data volume, other project, sync engine, STT or cloud feature was changed. MVP-04 remains unopened.
+
+**Recommendation:** accept the MVP-03.1 hotfix for final MVP-03 acceptance.
+
+**Source commit:** `bc38caf2bc38b165843c546d0ccc96125c2af79f`  
+**Report commit/final HEAD:** `d05b45ea4289ebd67c7e1e47ea004ebe9008ae1f`  
+**Push:** PASS — fetched `origin` after push; `origin/main` matches final HEAD. Existing Phase 00 edits and prior MVP review artifacts remain outside these commits.
+
+========================================================================================
+VERIFICATION SUMMARY
+========================================================================================
+# Verification Summary
+
+Environment: macOS 15.7.7 (24G720), Node v24.21.0, Chromium 156.0.8078.4. App served at `http://127.0.0.1:3000`; all browser test contexts used synthetic data.
+
+| Gate | Result | Evidence |
+|---|---|---|
+| MVP unit suite | PASS, 41/41 | Full `npm run test:mvp`; includes audio storage, note repository, organization, recovery, save coordinator and copy-tag helper. |
+| Document engine | PASS, 31/31 | Full `npm run test:documents`. |
+| MVP-03 browser | PASS, 7/7 | `mvp-03-browser.json`; actual download bytes are in `actual-downloaded-backup.json`. |
+| MVP-01.2 browser | PASS, 13/13 | `mvp-01.2-browser.json`; a route transition emitted one `ERR_ABORTED`, with no console/page error. |
+| MVP-02.1 audio/Web Lock | PASS, 10/10 | `mvp-02.1-browser.json`; Chromium fake audio device, no physical microphone. |
+| Typecheck | PASS | `tsc --noEmit`. |
+| Production build | PASS | Next.js 16.4.2/Turbopack. Existing multiple-lockfile workspace-root warning only. |
+| `git diff --check` | PASS | No whitespace errors. |
+| UI Lens | PASS, 6/6 | `screenshots/ui-lens/manifest.json` and `diagnostics.json`; all 6 targets have zero console, page, failed-request, or HTTP errors. |
+
+MVP-03 browser scenarios cover saved/reloaded checklist and formatting, exact Unicode organization metadata, real export/import, stale two-tab conflict and draft-copy isolation, injected IndexedDB write failure and retry, SecurityError and QuotaExceededError preference writes, recovery-as-copy metadata preservation, and 390px mobile overflow.
+
+No real iPhone, Safari, or physical microphone result is claimed.
+
+## Git handoff
+
+- Source commit: `bc38caf2bc38b165843c546d0ccc96125c2af79f`
+- Report commit/final HEAD: `d05b45ea4289ebd67c7e1e47ea004ebe9008ae1f`
+- Push: PASS — `origin/main` fetched after push and matched final HEAD.
+- Existing Phase 00 edits and previously untracked MVP-01/MVP-03 artifacts remain outside the commits and unchanged.
+
+========================================================================================
+MVP UNIT RESULT
+========================================================================================
+{
+  "command": "npm --prefix spikes/phase-00/gate1/web run test:mvp",
+  "status": "PASS",
+  "tests": 41,
+  "passed": 41,
+  "failed": 0,
+  "environment": "Node v24.21.0; fake-indexeddb for unit persistence tests"
+}
+
+========================================================================================
+DOCUMENT ENGINE RESULT
+========================================================================================
+{
+  "command": "npm --prefix spikes/phase-00/gate1/web run test:documents",
+  "status": "PASS",
+  "tests": 31,
+  "passed": 31,
+  "failed": 0,
+  "coverage_notes": [
+    "Canonical JSON validation and round trips",
+    "Checklist/task state",
+    "Vietnamese, Japanese and emoji preservation",
+    "Unsupported-schema read-only handling"
+  ]
+}
+
+========================================================================================
+STATIC CHECKS
+========================================================================================
+{
+  "environment": {
+    "os": "macOS 15.7.7 (24G720)",
+    "node": "v24.21.0",
+    "next": "16.4.2",
+    "browser": "Chromium 156.0.8078.4"
+  },
+  "checks": [
+    { "command": "npm --prefix spikes/phase-00/gate1/web run typecheck", "status": "PASS", "detail": "tsc --noEmit" },
+    { "command": "npm --prefix spikes/phase-00/gate1/web run build", "status": "PASS", "detail": "Optimized production build completed; existing multiple-lockfile root warning only." },
+    { "command": "git diff --check", "status": "PASS", "detail": "No whitespace errors." }
+  ]
+}
+
+========================================================================================
+SCOPED SOURCE DIFF
+========================================================================================
+diff --git a/spikes/phase-00/gate1/web/app/lib/note-organization.mjs b/spikes/phase-00/gate1/web/app/lib/note-organization.mjs
+index c974108..09d56d7 100644
+--- a/spikes/phase-00/gate1/web/app/lib/note-organization.mjs
++++ b/spikes/phase-00/gate1/web/app/lib/note-organization.mjs
+@@ -26,6 +26,12 @@ export function normalizeTagList(values) {
+   return tags;
+ }
+ 
++export function safeTagsForNoteCopy(note) {
++  if (!note || note.schemaVersion !== 1 || !Array.isArray(note.tags)) return [];
++  try { return normalizeTagList(note.tags); }
++  catch { return []; }
++}
++
+ export function validateOrganizationMetadata(note) {
+   if (note.schemaVersion !== 1) return;
+   if (note.pinned !== undefined && typeof note.pinned !== 'boolean') throw new TypeError(`Backup note “${note.id}” has invalid pin metadata.`);
+diff --git a/spikes/phase-00/gate1/web/app/notes/[id]/page.tsx b/spikes/phase-00/gate1/web/app/notes/[id]/page.tsx
+index a98e324..ea61419 100644
+--- a/spikes/phase-00/gate1/web/app/notes/[id]/page.tsx
++++ b/spikes/phase-00/gate1/web/app/notes/[id]/page.tsx
+@@ -7,7 +7,7 @@ import { createNotesRepository, NoteConflictError } from '../../lib/local-notes.
+ import { createSaveCoordinator } from '../../lib/save-coordinator.mjs';
+ import { createRecoveryJournal, recoveryCandidates, clearRecoveryEntry, recoveryStorage } from '../../lib/recovery-journal.mjs';
+ import { formatSavedAt } from '../../lib/mvp-utils.mjs';
+-import { normalizeTagLabel, tagKey } from '../../lib/note-organization.mjs';
++import { normalizeTagLabel, safeTagsForNoteCopy, tagKey } from '../../lib/note-organization.mjs';
+ import { canonicalToMarkdown, createTiptapEditor, validateCanonicalDocument, toTiptapJSON } from '../../../packages/document-engine/src/index.js';
+ import { AudioRecorder } from '../../ui/audio-recorder';
+ 
+@@ -114,7 +114,8 @@ export default function NoteEditorPage() {
+       await coordinator.flush();
+       // A failed flush keeps the original safe; a separate ID preserves this draft.
+       const draft = coordinator.snapshot().draft;
+-      const copy = { ...coordinator.snapshot().note, id: crypto.randomUUID(), title: `${draft.title || 'Untitled note'} (copy)`, document: draft.document, schemaVersion: draft.document.schemaVersion, createdAt: Date.now(), updatedAt: Date.now(), lifecycle: 'active', revision: 0, pinned: false, tags: [] };
++      const source = coordinator.snapshot().note;
++      const copy = { ...source, id: crypto.randomUUID(), title: `${draft.title || 'Untitled note'} (copy)`, document: draft.document, schemaVersion: draft.document.schemaVersion, createdAt: Date.now(), updatedAt: Date.now(), lifecycle: 'active', revision: 0, pinned: false, tags: safeTagsForNoteCopy(source) };
+       await createNotesRepository().create(copy); coordinator.clearJournal(); router.replace(`/notes/${copy.id}`); return true;
+     });
+   }
+@@ -126,7 +127,8 @@ export default function NoteEditorPage() {
+       if (!candidate.valid || converted.status !== 'ready' || !converted.json) { setError('Recovery document is not safe to edit. Its journal has been retained.'); return false; }
+       if (asCopy) {
+         const now = Date.now();
+-        const copy = { id: crypto.randomUUID(), title: `${candidate.title || 'Untitled note'} (recovered)`, document: candidate.document, schemaVersion: candidate.document.schemaVersion, createdAt: now, updatedAt: now, lifecycle: 'active', revision: 0, pinned: false, tags: [] };
++        const source = coordinatorRef.current.snapshot().note;
++        const copy: any = { id: crypto.randomUUID(), title: `${candidate.title || 'Untitled note'} (recovered)`, document: candidate.document, schemaVersion: candidate.document.schemaVersion, createdAt: now, updatedAt: now, lifecycle: 'active', revision: 0, pinned: false, tags: safeTagsForNoteCopy(source) };
+         await createNotesRepository().create(copy); coordinatorRef.current.clearJournal(); clearRecoveryEntry(recoveryStorage(), candidate); router.replace(`/notes/${copy.id}`); return true;
+       }
+       try {
+@@ -163,9 +165,9 @@ export default function NoteEditorPage() {
+   }
+   function exportMarkdown() { if (doc && validation?.status === 'supported') setMarkdown(canonicalToMarkdown(doc)); }
+ 
+-  async function updateOrganization(changes: { pinned?: boolean; tags?: string[] }) {
+-    if (!editable || recoveryRef.current) return;
+-    await operation(async () => {
++  async function updateOrganization(changes: { pinned?: boolean; tags?: string[] }): Promise<boolean> {
++    if (!editable || recoveryRef.current || !coordinatorRef.current) return false;
++    return operation(async () => {
+       const result = await coordinatorRef.current.updateMetadata(changes);
+       return result.ok;
+     });
+@@ -178,7 +180,12 @@ export default function NoteEditorPage() {
+       const existing = availableTags.find((tag) => tagKey(tag) === tagKey(label));
+       const tags = Array.isArray(note?.tags) ? note.tags : [];
+       if (tags.some((tag) => tagKey(tag) === tagKey(label))) { setTagInput(''); setError('That tag is already on this note.'); return; }
+-      await updateOrganization({ tags: [...tags, existing ?? label] });
++      const saved = await updateOrganization({ tags: [...tags, existing ?? label] });
++      if (!saved) return;
++      setAvailableTags((current) => {
++        if (current.some((tag) => tagKey(tag) === tagKey(existing ?? label))) return current;
++        return [...current, existing ?? label].sort((left, right) => left.localeCompare(right, undefined, { sensitivity: 'base' }));
++      });
+       setTagInput(''); setError('');
+     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not add this tag.'); }
+   }
+diff --git a/spikes/phase-00/gate1/web/app/page.tsx b/spikes/phase-00/gate1/web/app/page.tsx
+index 47cc1f1..c049cb6 100644
+--- a/spikes/phase-00/gate1/web/app/page.tsx
++++ b/spikes/phase-00/gate1/web/app/page.tsx
+@@ -1,7 +1,7 @@
+ 'use client';
+ 
+ import Link from 'next/link';
+-import { useCallback, useEffect, useMemo, useState } from 'react';
++import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+ import { createNotesRepository, makeEmptyNote } from './lib/local-notes.js';
+ import { filterNotes, filterNotesByTags, sortNotes } from './lib/mvp-utils.mjs';
+ import { tagKey } from './lib/note-organization.mjs';
+@@ -35,6 +35,8 @@ export default function Home() {
+   const [preferencesReady, setPreferencesReady] = useState(false);
+   const [error, setError] = useState('');
+   const [ready, setReady] = useState(false);
++  const [busyPinIds, setBusyPinIds] = useState<string[]>([]);
++  const busyPinIdsRef = useRef(new Set<string>());
+ 
+   const refresh = useCallback(async (clearError = true) => {
+     try { setNotes(await createNotesRepository().list()); if (clearError) setError(''); }
+@@ -50,7 +52,8 @@ export default function Home() {
+ 
+   useEffect(() => {
+     if (!preferencesReady) return;
+-    localStorage.setItem(HOME_PREFERENCES_KEY, JSON.stringify({ query, sort, tags: selectedTags }));
++    try { localStorage.setItem(HOME_PREFERENCES_KEY, JSON.stringify({ query, sort, tags: selectedTags })); }
++    catch { /* Preferences are best effort; current-session controls remain usable. */ }
+   }, [preferencesReady, query, sort, selectedTags]);
+ 
+   const availableTags = useMemo(() => {
+@@ -72,13 +75,16 @@ export default function Home() {
+   }
+ 
+   async function togglePin(note: any) {
++    if (busyPinIdsRef.current.has(note.id)) return;
++    busyPinIdsRef.current.add(note.id);
++    setBusyPinIds((current) => [...current, note.id]);
+     try {
+       const updated = await createNotesRepository().updateOrganization(note.id, { pinned: !note.pinned }, note.revision);
+       setNotes((current) => current.map((row) => row.id === updated.id ? updated : row)); setError('');
+     } catch (cause) {
+       await refresh(false);
+       setError(cause instanceof Error ? cause.message : 'Could not update this note. Refresh and try again.');
+-    }
++    } finally { busyPinIdsRef.current.delete(note.id); setBusyPinIds((current) => current.filter((id) => id !== note.id)); }
+   }
+ 
+   function toggleTag(tag: string) {
+@@ -98,7 +104,7 @@ export default function Home() {
+     </div>
+     {availableTags.length > 0 && <div className="tag-filter-row" aria-label="Filter notes by tag"><span className="toolbar-label">Tags</span>{availableTags.map((tag) => <button key={tagKey(tag)} type="button" className={`tag-chip tag-filter ${selectedTags.some((item) => tagKey(item) === tagKey(tag)) ? 'is-selected' : ''}`} aria-pressed={selectedTags.some((item) => tagKey(item) === tagKey(tag))} onClick={() => toggleTag(tag)}>{tag}</button>)}{selectedTags.length > 0 && <button className="text-button" onClick={() => setSelectedTags([])}>Clear tags</button>}</div>}
+     {visibleNotes.length ? <section className="notes-grid" aria-label="Active notes">{visibleNotes.map((note: any) => <article className="note-card" key={note.id}>
+-      <div className="note-card-top"><span className="note-pin-state">{note.pinned ? 'Pinned' : ''}</span>{note.schemaVersion === 1 && <button className="pin-button" type="button" aria-label={note.pinned ? `Unpin ${note.title || 'Untitled note'}` : `Pin ${note.title || 'Untitled note'}`} aria-pressed={Boolean(note.pinned)} onClick={() => void togglePin(note)}>{note.pinned ? '★ Pinned' : '☆ Pin'}</button>}</div>
++      <div className="note-card-top"><span className="note-pin-state">{note.pinned ? 'Pinned' : ''}</span>{note.schemaVersion === 1 && <button className="pin-button" type="button" disabled={busyPinIds.includes(note.id)} aria-label={note.pinned ? `Unpin ${note.title || 'Untitled note'}` : `Pin ${note.title || 'Untitled note'}`} aria-pressed={Boolean(note.pinned)} onClick={() => void togglePin(note)}>{note.pinned ? '★ Pinned' : '☆ Pin'}</button>}</div>
+       <Link className="note-card-link" href={`/notes/${encodeURIComponent(note.id)}`}><h2>{note.title || 'Untitled note'}</h2><p className="note-preview">{textOf(note.document) || 'Start with a thought…'}</p><span className="note-open-label">Open note ↗</span></Link>
+       {Array.isArray(note.tags) && note.tags.length > 0 && <div className="note-card-tags" aria-label={`Tags for ${note.title || 'Untitled note'}`}>{note.tags.map((tag: string) => <button key={tagKey(tag)} type="button" className="tag-chip" aria-label={`Filter by ${tag}`} onClick={() => toggleTag(tag)}>{tag}</button>)}</div>}
+       <div className="note-meta"><span>{new Date(note.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span><span>{note.pinned ? 'Pinned first' : 'On this device'}</span></div>
+diff --git a/spikes/phase-00/gate1/web/scripts/mvp-03-browser.mjs b/spikes/phase-00/gate1/web/scripts/mvp-03-browser.mjs
+index f00c0cb..1a7e054 100644
+--- a/spikes/phase-00/gate1/web/scripts/mvp-03-browser.mjs
++++ b/spikes/phase-00/gate1/web/scripts/mvp-03-browser.mjs
+@@ -4,7 +4,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
+ 
+ const require = createRequire(import.meta.url);
+ const root = fileURLToPath(new URL('../../../../../', import.meta.url));
+-const evidence = process.env.NOTEOS_MVP03_EVIDENCE ?? `${root}/artifacts/review/noteOS-MVP-03-review/evidence`;
++const evidence = process.env.NOTEOS_MVP03_EVIDENCE ?? `${root}/artifacts/review/noteOS-MVP-03.1-review/evidence`;
+ const lens = process.env.NOTEOS_PLAYWRIGHT_ROOT ?? `${root}/../ui-lens`;
+ const { chromium } = require(require.resolve('playwright', { paths: [lens] }));
+ const baseUrl = process.env.NOTEOS_TEST_URL ?? 'http://127.0.0.1:3000';
+@@ -44,7 +44,18 @@ async function readNote(page, id) {
+     };
+   }), id);
+ }
+-async function waitSaved(page) { await page.getByText(/^Saved /).waitFor({ timeout: 10000 }); }
++async function readAllNotes(page) {
++  return page.evaluate(() => new Promise((resolve, reject) => {
++    const request = indexedDB.open('noteos-mvp-01');
++    request.onerror = () => reject(request.error);
++    request.onsuccess = () => {
++      const db = request.result, tx = db.transaction('notes', 'readonly'), get = tx.objectStore('notes').getAll();
++      get.onsuccess = () => resolve(get.result); get.onerror = () => reject(get.error);
++      tx.oncomplete = () => db.close();
++    };
++  }));
++}
++async function waitSaved(page) { await page.waitForTimeout(750); await page.getByText(/^Saved /).waitFor({ timeout: 10000 }); }
+ try {
+   await scenario('checklist-tags-pin-search-backup', async (page) => {
+     const id = await openNew(page);
+@@ -78,11 +89,6 @@ try {
+     await page.getByRole('button', { name: 'Remove tag Tiếng Việt' }).click(); await waitSaved(page);
+     check(!(await readNote(page, id)).tags.includes('Tiếng Việt'), 'Tag removal did not persist.');
+     await page.locator('#note-tag-input').fill('Tiếng Việt'); await page.getByRole('button', { name: 'Add tag' }).click(); await waitSaved(page);
+-    const tasks = page.locator('.editor-content li[data-checked]');
+-    await tasks.nth(1).locator('p').click(); await page.keyboard.press('End'); await page.keyboard.press('Enter');
+-    await tasks.nth(2).locator('p').click(); await page.keyboard.press('Home'); await page.keyboard.press('Backspace');
+-    await waitSaved(page);
+-    check(await page.locator('.editor-content ul[data-type="taskList"] li[data-checked]').count() >= 2, 'Enter/Backspace damaged checklist keyboard behavior.');
+     await page.goto(baseUrl);
+     await page.getByRole('button', { name: 'Pin Checklist — ghi chú 東京 🌿' }).waitFor();
+     await page.getByLabel('Filter by Tiếng Việt').click();
+@@ -99,24 +105,125 @@ try {
+     await page.goto(`${baseUrl}/backup`);
+     const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download backup' }).click()]);
+     check(download.suggestedFilename().endsWith('.json'), 'Backup export did not create a JSON download.');
+-    const exported = await readNote(page, id); check(exported.pinned && exported.tags.length === 2, 'Backup export changed organization metadata in source storage.');
+-    const backup = { format: 'noteos.local-backup', version: 1, exportedAt: new Date().toISOString(), notes: [{ ...exported, id: `${id}-copy`, title: 'Imported checklist' }] };
+-    await page.locator('input[type="file"]').setInputFiles({ name: 'noteos-backup.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(backup)) });
++    const stream = await download.createReadStream();
++    check(stream, 'Browser did not expose the downloaded backup bytes.');
++    const chunks = []; for await (const chunk of stream) chunks.push(Buffer.from(chunk));
++    const downloadedBytes = Buffer.concat(chunks);
++    await writeFile(`${evidence}/actual-downloaded-backup.json`, downloadedBytes);
++    const backup = JSON.parse(downloadedBytes.toString('utf8'));
++    check(backup.format === 'noteos.local-backup' && backup.version === 1, 'Downloaded backup format/version is invalid.');
++    const exported = backup.notes.find((row) => row.id === id);
++    check(exported, 'The downloaded backup does not contain the note under test.');
++    check(exported.pinned === true && JSON.stringify([...exported.tags].sort()) === JSON.stringify(['Tiếng Việt', '東京'].sort()), `Real backup did not preserve pinned state and exact Unicode tags: ${JSON.stringify({ pinned: exported.pinned, tags: exported.tags })}`);
++    const exportedChecklist = exported.document.content.find((node) => node.type === 'taskList');
++    check(exportedChecklist?.content.length === 2 && exportedChecklist.content[0].attrs.checked === true && exportedChecklist.content[1].attrs.checked === false, `Real backup did not preserve checklist content and checked state: ${JSON.stringify(exportedChecklist)}`);
++    const originalBeforeImport = JSON.parse(JSON.stringify(await readNote(page, id)));
++    const copiedBundle = { ...backup, notes: backup.notes.map((row) => row.id === id ? { ...row, id: `${id}-copy` } : row) };
++    await page.locator('input[type="file"]').setInputFiles({ name: 'noteos-backup-copy.json', mimeType: 'application/json', buffer: downloadedBytes.constructor.from(JSON.stringify(copiedBundle)) });
+     await page.getByRole('button', { name: 'Validate and import' }).click();
+     await page.getByRole('status').filter({ hasText: 'Imported 1 notes' }).waitFor();
+-    check((await readNote(page, `${id}-copy`)).tags.includes('東京'), 'Backup v1 import lost organization metadata.');
++    const imported = await readNote(page, `${id}-copy`);
++    check(imported.pinned === true && JSON.stringify([...imported.tags].sort()) === JSON.stringify(['Tiếng Việt', '東京'].sort()), `Import from the actual downloaded bundle lost organization metadata: ${JSON.stringify({ pinned: imported.pinned, tags: imported.tags })}`);
++    check(JSON.stringify(imported.document) === JSON.stringify(exported.document), 'Imported copy canonical document differs from downloaded export.');
++    check(JSON.stringify(await readNote(page, id)) === JSON.stringify(originalBeforeImport), 'Importing the copy modified the original note.');
++    await page.goto(`${baseUrl}/notes/${id}`);
++    const tasks = page.locator('.editor-content li[data-checked]');
++    await tasks.nth(1).locator('p').click(); await page.keyboard.press('End'); await page.keyboard.press('Enter');
++    await tasks.nth(2).locator('p').click(); await page.keyboard.press('Home'); await page.keyboard.press('Backspace');
++    await waitSaved(page);
++    check(await page.locator('.editor-content ul[data-type="taskList"] li[data-checked]').count() >= 2, 'Enter/Backspace damaged checklist keyboard behavior.');
+   });
+   await scenario('stale-tab-organization-conflict', async (page, context) => {
+-    const id = await openNew(page); await page.locator('#note-title').fill('Two-tab draft'); await waitSaved(page);
++    const id = await openNew(page); await page.locator('#note-title').fill('Two-tab draft'); await page.locator('#note-tag-input').fill('origin'); await page.getByRole('button', { name: 'Add tag' }).click(); await waitSaved(page);
+     const other = await context.newPage(); await other.goto(page.url()); await other.locator('#note-title').waitFor({ state: 'visible' }); await other.waitForFunction(() => !document.querySelector('#note-title')?.disabled, null, { timeout: 5000 });
+-    await other.locator('#note-title').fill('Committed from second tab'); await waitSaved(other);
++    await other.locator('#note-title').fill('Committed from second tab'); await other.locator('#note-tag-input').fill('remote'); await other.getByRole('button', { name: 'Add tag' }).click(); await waitSaved(other);
+     await page.locator('.editor-content [contenteditable="true"]').click(); await page.keyboard.insertText('Local draft');
+     await page.locator('#note-tag-input').fill('race'); await page.getByRole('button', { name: 'Add tag' }).click();
+     await page.getByText('Not saved', { exact: true }).waitFor({ timeout: 5000 });
++    check(await page.locator('#note-tag-input').inputValue() === 'race', 'Failed stale tag action cleared the attempted tag input.');
++    check(await page.getByRole('alert').count() > 0, 'Stale tag action cleared its error banner.');
+     check((await page.locator('.editor-content').innerText()).includes('Local draft'), 'The local draft was not retained after a stale revision conflict.');
+     const saved = await readNote(page, id);
+-    check(saved.title === 'Committed from second tab' && !saved.tags.includes('race'), 'Stale metadata action overwrote newer tab data.');
++    check(saved.title === 'Committed from second tab' && saved.tags.includes('origin') && saved.tags.includes('remote') && !saved.tags.includes('race'), 'Stale metadata action overwrote newer tab data.');
+     await page.screenshot({ path: `${evidence}/stale-tab-conflict.png`, fullPage: true });
++    const originalPath = new URL(page.url()).pathname;
++    await Promise.all([page.waitForURL((url) => url.pathname !== originalPath), page.getByRole('button', { name: 'Save this draft as a new note' }).click()]);
++    await page.locator('#note-title').waitFor();
++    const copiedId = new URL(page.url()).pathname.split('/').pop();
++    const copy = await readNote(page, copiedId);
++    check(copy.pinned === false && JSON.stringify(copy.tags) === JSON.stringify(['origin']), `Draft copy did not keep only source-tab committed tags or default unpinned: ${JSON.stringify({ pinned: copy.pinned, tags: copy.tags })}`);
++    check((await readNote(page, id)).tags.includes('remote'), 'Saving draft as copy modified the source note.');
++  });
++  for (const errorName of ['SecurityError', 'QuotaExceededError']) {
++    await scenario(`home-preferences-${errorName}`, async (page, context) => {
++      await context.addInitScript((name) => {
++        const original = Storage.prototype.setItem;
++        Storage.prototype.setItem = function(key, value) {
++          if (key === 'noteos:mvp03:home-preferences') throw new DOMException('Synthetic preference write denial', name);
++          return original.call(this, key, value);
++        };
++      }, errorName);
++      const id = await openNew(page);
++      await page.locator('#note-title').fill(`Preference ${errorName}`);
++      await page.locator('#note-tag-input').fill('session tag'); await page.getByRole('button', { name: 'Add tag' }).click(); await waitSaved(page);
++      await page.goto(baseUrl); await page.getByRole('button', { name: /New note/ }).first().click();
++      await page.locator('#note-title').fill('A second note'); await waitSaved(page);
++      await page.goto(baseUrl);
++      const before = JSON.stringify(await readAllNotes(page));
++      await page.getByLabel('Sort notes').selectOption('title');
++      const orderedTitles = await page.locator('.note-card h2').allTextContents();
++      check(orderedTitles[0] === 'A second note' && orderedTitles[1] === `Preference ${errorName}`, `${errorName}: title sorting stopped working: ${JSON.stringify(orderedTitles)}`);
++      await page.getByLabel('Search notes').fill(errorName);
++      check(await page.locator('.note-card').count() === 1, `${errorName}: search stopped working.`);
++      await page.getByLabel('Filter by session tag').click();
++      check(await page.locator('.note-card').count() === 1, `${errorName}: tag filtering stopped working.`);
++      check(await page.getByRole('heading', { name: `Preference ${errorName}` }).count() === 1, `${errorName}: Home did not render the existing note.`);
++      check(JSON.stringify(await readAllNotes(page)) === before, `${errorName}: preference interactions changed IndexedDB notes.`);
++      check((await readNote(page, id)).tags.includes('session tag'), `${errorName}: existing note metadata changed.`);
++    });
++  }
++  await scenario('tag-write-failure-preserves-input-and-retry', async (page, context) => {
++    await context.addInitScript(() => {
++      const original = IDBObjectStore.prototype.put;
++      IDBObjectStore.prototype.put = function(value, ...args) {
++        if (this.name === 'notes' && sessionStorage.getItem('noteos:mvp031:fail-next-note-put') === 'yes') {
++          sessionStorage.removeItem('noteos:mvp031:fail-next-note-put');
++          throw new DOMException('Synthetic IndexedDB write failure', 'UnknownError');
++        }
++        return original.call(this, value, ...args);
++      };
++    });
++    const id = await openNew(page);
++    await page.evaluate(() => sessionStorage.setItem('noteos:mvp031:fail-next-note-put', 'yes'));
++    await page.locator('#note-tag-input').fill('retry-tag'); await page.getByRole('button', { name: 'Add tag' }).click();
++    await page.getByRole('alert').waitFor();
++    check(await page.locator('#note-tag-input').inputValue() === 'retry-tag', 'Storage failure cleared attempted tag input.');
++    const failedRecord = await readNote(page, id);
++    check(!failedRecord.tags.includes('retry-tag'), 'Failed IndexedDB tag write changed stored metadata.');
++    check((await page.locator('.notice.error[role="alert"]').innerText()).length > 0, 'Storage error banner was not retained.');
++    await page.getByRole('button', { name: 'Add tag' }).click(); await waitSaved(page);
++    check((await readNote(page, id)).tags.includes('retry-tag'), 'Successful retry did not persist the tag.');
++    check(await page.locator('#note-tag-suggestions option').evaluateAll((options) => options.some((option) => option.value === 'retry-tag')), 'Successful retry did not update available tag suggestions.');
++  });
++  await scenario('recovery-as-copy-preserves-safe-source-tags', async (page) => {
++    const id = await openNew(page);
++    await page.locator('#note-title').fill('Committed source');
++    await page.locator('#note-tag-input').fill('source-tag'); await page.getByRole('button', { name: 'Add tag' }).click(); await waitSaved(page);
++    await page.getByRole('button', { name: /Pin note/ }).click(); await waitSaved(page);
++    const original = JSON.parse(JSON.stringify(await readNote(page, id)));
++    await page.evaluate(({ noteId, document }) => {
++      const key = `noteos:mvp01:recovery:${encodeURIComponent(noteId)}:mvp031-copy-test`;
++      localStorage.setItem(key, JSON.stringify({ version: 2, writerId: 'mvp031-copy-test', generation: 1, baseRevision: 999, recordCreatedAt: document.createdAt, deletionEpoch: '', title: 'Recovered copy title', document: document.document, inFlight: null, updatedAt: Date.now() }));
++    }, { noteId: id, document: original });
++    await page.reload();
++    await page.getByRole('dialog', { name: 'A recovery draft was found' }).waitFor();
++    const originalPath = new URL(page.url()).pathname;
++    await Promise.all([page.waitForURL((url) => url.pathname !== originalPath), page.getByRole('button', { name: 'Recover as new note' }).click()]);
++    await page.locator('#note-title').waitFor();
++    const copiedId = new URL(page.url()).pathname.split('/').pop();
++    const copy = await readNote(page, copiedId);
++    check(copy.title === 'Recovered copy title (recovered)' && copy.pinned === false && JSON.stringify(copy.tags) === JSON.stringify(['source-tag']), `Recovery copy did not preserve the safe source tag and default unpinned: ${JSON.stringify({ title: copy.title, pinned: copy.pinned, tags: copy.tags })}`);
++    check(JSON.stringify(await readNote(page, id)) === JSON.stringify(original), 'Recover as copy modified the source note.');
+   });
+   await scenario('mobile-navigation-width', async (page) => {
+     await page.goto(baseUrl);
+diff --git a/spikes/phase-00/gate1/web/scripts/mvp-03-ui-lens.mjs b/spikes/phase-00/gate1/web/scripts/mvp-03-ui-lens.mjs
+index 677ca92..9e0b9db 100644
+--- a/spikes/phase-00/gate1/web/scripts/mvp-03-ui-lens.mjs
++++ b/spikes/phase-00/gate1/web/scripts/mvp-03-ui-lens.mjs
+@@ -10,14 +10,14 @@ const { configSchema } = await import(pathToFileURL(`${lens}/packages/contracts/
+ const baseUrl = process.env.NOTEOS_TEST_URL ?? 'http://127.0.0.1:3000';
+ const config = configSchema.parse({
+   version: 1,
+-  project: 'noteOS MVP-03 Organization',
++  project: 'noteOS MVP-03.1 Organization Hotfix',
+   baseUrl,
+-  outputDir: 'artifacts/review/noteOS-MVP-03-review/ui-lens',
++  outputDir: 'artifacts/review/noteOS-MVP-03.1-review/ui-lens',
+   viewports: { desktop: { width: 1440, height: 1000 }, mobile: { width: 390, height: 844 } },
+   targets: [
+-    { id: 'home-pinned', name: 'Notes Home with pinned and tagged notes', route: '/', viewports: ['desktop'], actions: [{ type: 'waitFor', selector: '.note-card' }] },
+-    { id: 'editor-checklist', name: 'Editor with Unicode checklist', route: '/notes/lens-checklist', viewports: ['desktop', 'mobile'], actions: [{ type: 'waitFor', selector: '.editor-content li[data-checked]' }] },
+-    { id: 'tags-filtered', name: 'Notes filtered by shared tag', route: '/', viewports: ['desktop'], actions: [{ type: 'waitFor', selector: '.tag-filter' }, { type: 'click', selector: '.tag-filter' }] },
++    { id: 'home-pinned', name: 'Notes Home with pinned and tagged notes', route: '/', viewports: ['desktop'], actions: [{ type: 'waitFor', selector: '.note-card:first-child' }] },
++    { id: 'editor-checklist', name: 'Editor with Unicode checklist', route: '/notes/lens-checklist', viewports: ['desktop', 'mobile'], actions: [{ type: 'waitFor', selector: '.editor-content li[data-checked]:first-child' }] },
++    { id: 'tags-filtered', name: 'Notes filtered by shared tag', route: '/', viewports: ['desktop'], actions: [{ type: 'waitFor', selector: '.tag-filter:first-of-type' }, { type: 'click', selector: '.tag-filter:first-of-type' }] },
+     { id: 'home-filtered-empty', name: 'Useful empty search state', route: '/', viewports: ['desktop'], actions: [{ type: 'fill', selector: '#note-search', value: 'no-match-mvp03' }, { type: 'waitFor', selector: 'text=No notes match these filters' }] },
+     { id: 'mobile-navigation', name: 'Mobile navigation at 390px', route: '/', viewports: ['mobile'], actions: [{ type: 'waitFor', selector: '.mobile-nav' }] },
+   ],
+@@ -33,6 +33,8 @@ chromium.launch = async (options = {}) => {
+     context.newPage = async () => {
+       const page = await newPage();
+       await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
++      await page.getByRole('button', { name: /New note/ }).first().click();
++      await page.locator('#note-title').waitFor({ timeout: 10000 });
+       await page.evaluate(async () => {
+         const now = Date.now();
+         const notes = [
+@@ -52,16 +54,29 @@ chromium.launch = async (options = {}) => {
+             schemaVersion: 1, createdAt: now - 1000, updatedAt: now - 1000, lifecycle: 'active', revision: 1, pinned: false, tags: ['Tiếng Việt'],
+           },
+         ];
+-        await new Promise((resolve, reject) => {
+-          const request = indexedDB.open('noteos-mvp-01', 2);
+-          request.onerror = () => reject(request.error);
+-          request.onsuccess = () => {
+-            const db = request.result, tx = db.transaction('notes', 'readwrite'), store = tx.objectStore('notes');
+-            for (const note of notes) store.put(note);
+-            tx.oncomplete = () => { db.close(); resolve(); };
+-            tx.onerror = () => reject(tx.error);
+-          };
+-        });
++        let timeout;
++        try {
++          await Promise.race([
++            new Promise((resolve, reject) => {
++              // The UI above lets the application create/upgrade its own database first.
++              const request = indexedDB.open('noteos-mvp-01');
++              request.onerror = () => reject(new Error(`Could not open app-initialized note database: ${request.error?.message ?? 'unknown error'}`));
++              request.onsuccess = () => {
++                const db = request.result;
++                const requiredStores = ['notes', 'recordings', 'recordingChunks'];
++                const missing = requiredStores.filter((name) => !db.objectStoreNames.contains(name));
++                if (missing.length) { db.close(); reject(new Error(`App storage bootstrap is missing required stores: ${missing.join(', ')}`)); return; }
++                let tx;
++                try { tx = db.transaction(['notes'], 'readwrite'); }
++                catch (error) { db.close(); reject(new Error(`Could not start note fixture transaction: ${error.message}`)); return; }
++                for (const note of notes) tx.objectStore('notes').put(note);
++                tx.oncomplete = () => { db.close(); resolve(); };
++                tx.onabort = tx.onerror = () => { const reason = tx.error?.message ?? 'unknown transaction error'; db.close(); reject(new Error(`Note fixture transaction failed: ${reason}`)); };
++              };
++            }),
++            new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('Timed out after 5000 ms initializing UI Lens IndexedDB fixtures.')), 5000); }),
++          ]);
++        } finally { clearTimeout(timeout); }
+       });
+       return page;
+     };
+@@ -71,9 +86,9 @@ chromium.launch = async (options = {}) => {
+ };
+ 
+ try {
+-  const run = newRun('noteos-mvp03');
++  const run = newRun('noteos-mvp031');
+   const targets = process.env.NOTEOS_UI_TARGETS?.split(',') ?? config.targets.map((target) => target.id);
+-  await capture({ id: 'noteos-mvp03', root, config }, { projectId: 'noteos-mvp03', targets, artifacts: { png: true, pdf: false, diagnostics: true } }, run);
++  await capture({ id: 'noteos-mvp031', root, config }, { projectId: 'noteos-mvp031', targets, artifacts: { png: true, pdf: false, diagnostics: true } }, run);
+   process.stdout.write(`${JSON.stringify({ state: run.state, outputPath: run.outputPath, summary: run.manifest.summary }, null, 2)}\n`);
+   if (run.manifest.summary.failed) process.exitCode = 1;
+ } finally { chromium.launch = launch; }
+
+========================================================================================
+SOURCE: EDITOR
+========================================================================================
+'use client';
+
+import { GuardedLink as Link, useNavigationGuard } from '../../ui/navigation-guard';
+import { useParams, useRouter } from 'next/navigation';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { createNotesRepository, NoteConflictError } from '../../lib/local-notes.js';
+import { createSaveCoordinator } from '../../lib/save-coordinator.mjs';
+import { createRecoveryJournal, recoveryCandidates, clearRecoveryEntry, recoveryStorage } from '../../lib/recovery-journal.mjs';
+import { formatSavedAt } from '../../lib/mvp-utils.mjs';
+import { normalizeTagLabel, safeTagsForNoteCopy, tagKey } from '../../lib/note-organization.mjs';
+import { canonicalToMarkdown, createTiptapEditor, validateCanonicalDocument, toTiptapJSON } from '../../../packages/document-engine/src/index.js';
+import { AudioRecorder } from '../../ui/audio-recorder';
+
+type Note = { id: string; title: string; document: any; schemaVersion: number; createdAt: number; updatedAt: number; lifecycle: 'active' | 'archived' | 'trashed'; revision: number; pinned?: boolean; tags?: string[] };
+
+export default function NoteEditorPage() {
+  const params = useParams<{ id: string }>(); const id = params.id; const router = useRouter();
+  const [note, setNote] = useState<Note | null>(null), [title, setTitle] = useState(''), [doc, setDoc] = useState<any>(null);
+  const [state, setState] = useState('Loading…'), [error, setError] = useState(''), [conflict, setConflict] = useState(false), [ready, setReady] = useState(false);
+  const [recovery, setRecovery] = useState<any>(null), [markdown, setMarkdown] = useState<any>(null), [busy, setBusy] = useState(false);
+  const [tagInput, setTagInput] = useState(''), [availableTags, setAvailableTags] = useState<string[]>([]);
+  const elementRef = useRef<HTMLDivElement>(null), editorRef = useRef<any>(null), timerRef = useRef<any>(null), coordinatorRef = useRef<any>(null);
+  const operationRef = useRef(false), recoveryRef = useRef<any>(null), aliveRef = useRef(false), recordingRef = useRef(false);
+  const validation = doc ? validateCanonicalDocument(doc) : null;
+  const recordSchemaSupported = note?.schemaVersion === 1;
+  const editable = recordSchemaSupported && validation?.status === 'supported' && note?.lifecycle === 'active';
+  const editableRef = useRef(false); editableRef.current = editable;
+  const selectRecovery = (next: any) => { recoveryRef.current = next; setRecovery(next); };
+
+  function showFailure(cause: any) {
+    const stale = cause instanceof NoteConflictError || cause?.name === 'NoteConflictError';
+    setConflict(stale);
+    setError(stale ? 'This note changed in another tab. Your draft is kept here. Save it as a new note before leaving.' : 'Could not save locally. Stay here and retry, or save your draft as a new note. Browser recovery is best effort.');
+  }
+
+  useEffect(() => {
+    let alive = true; aliveRef.current = true;
+    setReady(false);
+    const repo = createNotesRepository();
+    void (async () => {
+      try {
+        const loaded = await repo.get(id);
+        if (!loaded) throw new Error('This note no longer exists. Return to Notes or import a backup.');
+        if (!alive) return;
+        const allNotes = await repo.list();
+        if (!alive) return;
+        const tagMap = new Map<string, string>();
+        for (const row of allNotes) for (const tag of Array.isArray(row.tags) ? row.tags : []) if (!tagMap.has(tagKey(tag))) tagMap.set(tagKey(tag), tag);
+        setAvailableTags([...tagMap.values()].sort((left, right) => left.localeCompare(right, undefined, { sensitivity: 'base' })));
+        const coordinator = createSaveCoordinator({ note: loaded, repository: repo, journal: createRecoveryJournal(recoveryStorage(), loaded), onChange: (snapshot: any) => {
+          if (!alive) return;
+          setNote(snapshot.note);
+          setState(snapshot.error ? 'Not saved' : snapshot.inFlight ? 'Saving…' : snapshot.dirty ? 'Unsaved changes' : `Saved ${formatSavedAt(snapshot.note.updatedAt)}`);
+          if (snapshot.error) showFailure(snapshot.error); else { setError(''); setConflict(false); }
+        } });
+        coordinatorRef.current = coordinator;
+        setNote(loaded); setTitle(loaded.title); setDoc(loaded.document);
+        selectRecovery(recoveryCandidates(recoveryStorage(), loaded)[0] ?? null);
+        setState(`Saved ${formatSavedAt(loaded.updatedAt)}`); setReady(true);
+      } catch (cause) { if (alive) { setError(cause instanceof Error ? cause.message : 'Could not open this note.'); setReady(true); } }
+    })();
+    const beforeUnload = (event: BeforeUnloadEvent) => { const snapshot = coordinatorRef.current?.snapshot(); if (snapshot?.dirty || snapshot?.inFlight) { event.preventDefault(); event.returnValue = ''; } };
+    window.addEventListener('beforeunload', beforeUnload);
+    return () => { alive = false; aliveRef.current = false; clearTimeout(timerRef.current); window.removeEventListener('beforeunload', beforeUnload); editorRef.current?.destroy?.(); editorRef.current = null; coordinatorRef.current = null; };
+  }, [id]);
+
+  function scheduleSave() {
+    clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(async () => { const result = await coordinatorRef.current?.flush(); if (result?.pending && aliveRef.current) scheduleSave(); }, 650);
+  }
+  function changeDraft(next: any) {
+    if (operationRef.current || recoveryRef.current) return;
+    coordinatorRef.current?.edit(next); scheduleSave();
+  }
+  useEffect(() => {
+    if (!ready || !doc || !elementRef.current || !editable) return;
+    try {
+      editorRef.current = createTiptapEditor({ element: elementRef.current, document: doc, onUpdate: (next: any) => {
+        if (operationRef.current || recoveryRef.current) return;
+        setDoc(next); changeDraft({ ...coordinatorRef.current.snapshot().draft, document: next });
+      } });
+      editorRef.current.view.dom.setAttribute('aria-label', 'Note content');
+      editorRef.current.setEditable(!operationRef.current && !recoveryRef.current);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not open editor safely.'); }
+    return () => { editorRef.current?.destroy?.(); editorRef.current = null; elementRef.current?.replaceChildren(); };
+  // Content updates use the mounted instance; recovery calls setContent explicitly.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, editable, id]);
+
+  async function operation(action: () => Promise<boolean>) {
+    if (operationRef.current) return false;
+    operationRef.current = true; setBusy(true); editorRef.current?.setEditable(false); clearTimeout(timerRef.current);
+    try { return await action(); }
+    catch (cause) { showFailure(cause); return false; }
+    finally { operationRef.current = false; if (aliveRef.current) { setBusy(false); editorRef.current?.setEditable(editableRef.current && !recoveryRef.current); } }
+  }
+  const flushBeforeNavigation = useCallback(async () => {
+    if (recordingRef.current) { setError('Stop and save the audio recording before leaving this note. Background recording is not supported.'); return false; }
+    if (recoveryRef.current) { setError('Choose how to handle the recovery draft before leaving.'); return false; }
+    return operation(async () => { const result = await coordinatorRef.current?.flush(); return result?.ok ?? true; });
+  // Refs contain the current note operation and draft, independent of render timing.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+  useNavigationGuard(flushBeforeNavigation);
+
+  function updateTitle(value: string) {
+    if (operationRef.current || recoveryRef.current) return;
+    setTitle(value); changeDraft({ ...coordinatorRef.current.snapshot().draft, title: value });
+  }
+  async function saveDraftAsCopy() {
+    if (recordingRef.current) { setError('Stop and save the audio recording before opening another note.'); return; }
+    await operation(async () => {
+      const coordinator = coordinatorRef.current;
+      await coordinator.flush();
+      // A failed flush keeps the original safe; a separate ID preserves this draft.
+      const draft = coordinator.snapshot().draft;
+      const source = coordinator.snapshot().note;
+      const copy = { ...source, id: crypto.randomUUID(), title: `${draft.title || 'Untitled note'} (copy)`, document: draft.document, schemaVersion: draft.document.schemaVersion, createdAt: Date.now(), updatedAt: Date.now(), lifecycle: 'active', revision: 0, pinned: false, tags: safeTagsForNoteCopy(source) };
+      await createNotesRepository().create(copy); coordinator.clearJournal(); router.replace(`/notes/${copy.id}`); return true;
+    });
+  }
+  async function useRecovery(asCopy: boolean) {
+    const candidate = recoveryRef.current;
+    if (!candidate) return;
+    await operation(async () => {
+      const converted = toTiptapJSON(candidate.document);
+      if (!candidate.valid || converted.status !== 'ready' || !converted.json) { setError('Recovery document is not safe to edit. Its journal has been retained.'); return false; }
+      if (asCopy) {
+        const now = Date.now();
+        const source = coordinatorRef.current.snapshot().note;
+        const copy: any = { id: crypto.randomUUID(), title: `${candidate.title || 'Untitled note'} (recovered)`, document: candidate.document, schemaVersion: candidate.document.schemaVersion, createdAt: now, updatedAt: now, lifecycle: 'active', revision: 0, pinned: false, tags: safeTagsForNoteCopy(source) };
+        await createNotesRepository().create(copy); coordinatorRef.current.clearJournal(); clearRecoveryEntry(recoveryStorage(), candidate); router.replace(`/notes/${copy.id}`); return true;
+      }
+      try {
+        if (!editorRef.current || !editorRef.current.commands.setContent(converted.json, { emitUpdate: false, errorOnInvalidContent: true })) throw new Error('Recovery apply failed');
+      } catch { setError('Could not safely apply the recovery draft. Its journal has been retained.'); return false; }
+      setTitle(candidate.title); setDoc(candidate.document);
+      coordinatorRef.current.edit({ title: candidate.title, document: candidate.document });
+      const result = await coordinatorRef.current.flush();
+      if (!result.ok) { if (result.error?.name === 'NoteConflictError') selectRecovery({ ...candidate, sameRevision: false }); return false; }
+      clearRecoveryEntry(recoveryStorage(), candidate);
+      selectRecovery(recoveryCandidates(recoveryStorage(), result.note)[0] ?? null); return true;
+    });
+  }
+  async function discardRecovery() {
+    await operation(async () => {
+      const saved = coordinatorRef.current.snapshot().note;
+      const converted = toTiptapJSON(saved.document);
+      try {
+        if (editorRef.current && converted.json && !editorRef.current.commands.setContent(converted.json, { emitUpdate: false, errorOnInvalidContent: true })) throw new Error('Could not reset editor');
+      } catch { setError('Could not return to the saved content. The recovery journal has been retained.'); return false; }
+      coordinatorRef.current.edit({ title: saved.title, document: saved.document }); setTitle(saved.title); setDoc(saved.document);
+      clearRecoveryEntry(recoveryStorage(), recoveryRef.current);
+      selectRecovery(recoveryCandidates(recoveryStorage(), saved)[0] ?? null); return true;
+    });
+  }
+  async function changeLifecycle(next: 'active' | 'archived' | 'trashed') {
+    if (recordingRef.current) { setError('Stop and save the audio recording before changing this note. Background recording is not supported.'); return; }
+    if (recoveryRef.current) { setError('Handle the recovery draft before changing this note.'); return; }
+    await operation(async () => {
+      const result = await coordinatorRef.current.transition(next);
+      if (!result.ok) return false;
+      router.push(next === 'archived' ? '/archive' : next === 'trashed' ? '/trash' : '/'); return true;
+    });
+  }
+  function exportMarkdown() { if (doc && validation?.status === 'supported') setMarkdown(canonicalToMarkdown(doc)); }
+
+  async function updateOrganization(changes: { pinned?: boolean; tags?: string[] }): Promise<boolean> {
+    if (!editable || recoveryRef.current || !coordinatorRef.current) return false;
+    return operation(async () => {
+      const result = await coordinatorRef.current.updateMetadata(changes);
+      return result.ok;
+    });
+  }
+
+  async function addTag(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    try {
+      const label = normalizeTagLabel(tagInput);
+      const existing = availableTags.find((tag) => tagKey(tag) === tagKey(label));
+      const tags = Array.isArray(note?.tags) ? note.tags : [];
+      if (tags.some((tag) => tagKey(tag) === tagKey(label))) { setTagInput(''); setError('That tag is already on this note.'); return; }
+      const saved = await updateOrganization({ tags: [...tags, existing ?? label] });
+      if (!saved) return;
+      setAvailableTags((current) => {
+        if (current.some((tag) => tagKey(tag) === tagKey(existing ?? label))) return current;
+        return [...current, existing ?? label].sort((left, right) => left.localeCompare(right, undefined, { sensitivity: 'base' }));
+      });
+      setTagInput(''); setError('');
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not add this tag.'); }
+  }
+
+  function removeTag(tagToRemove: string) {
+    const tags = (Array.isArray(note?.tags) ? note.tags : []).filter((tag) => tagKey(tag) !== tagKey(tagToRemove));
+    void updateOrganization({ tags });
+  }
+
+  function toggleChecklist() {
+    const editor = editorRef.current;
+    if (!editor) return;
+    if (editor.isEmpty) {
+      editor.chain().focus().insertContent({ type: 'taskList', content: [{ type: 'taskItem', attrs: { checked: false }, content: [{ type: 'paragraph' }] }] }).run();
+      let firstItemCursor: number | null = null;
+      editor.state.doc.descendants((node: any, position: number) => {
+        if (firstItemCursor === null && node.type.name === 'taskItem') firstItemCursor = position + 2;
+      });
+      if (firstItemCursor !== null) editor.commands.focus(firstItemCursor);
+    } else editor.chain().focus().toggleTaskList().run();
+  }
+
+  if (!ready) return <div className="empty-state"><h2>Opening note…</h2><p>Reading from this device.</p></div>;
+  if (error && !note) return <div className="notice error" role="alert">{error}<p><Link href="/">Back to notes</Link></p></div>;
+  return <>
+    <div className="editor-top"><Link href={note?.lifecycle === 'archived' ? '/archive' : note?.lifecycle === 'trashed' ? '/trash' : '/'} className="back-link">← Back to notes</Link><div className="actions"><span className="save-state" aria-live="polite">{state}</span>{note?.lifecycle === 'active' ? <button className="btn" disabled={busy} onClick={() => void changeLifecycle('archived')}>Archive</button> : note?.lifecycle === 'archived' ? <button className="btn" disabled={busy} onClick={() => void changeLifecycle('active')}>Restore</button> : <button className="btn" disabled={busy} onClick={() => void changeLifecycle('active')}>Restore</button>}<button className="btn" disabled={busy} onClick={() => void changeLifecycle('trashed')}>Move to trash</button><button className="btn" onClick={exportMarkdown} disabled={!editable || busy || Boolean(recovery)}>Export Markdown</button></div></div>
+    {error && <div className="notice error" role="alert">{error}{editable && <p>{!conflict && <button className="btn" disabled={busy} onClick={() => void operation(async () => (await coordinatorRef.current.flush()).ok)}>Retry save</button>} <button className="btn" disabled={busy} onClick={() => void saveDraftAsCopy()}>Save this draft as a new note</button></p>}</div>}
+    {note?.lifecycle !== 'active' && <div className="notice">This note is in {note?.lifecycle}. Restore it before editing.</div>}
+    {note && !recordSchemaSupported && <div className="notice">This note record uses a newer schema. It is open read-only so this version will preserve its original data.</div>}
+    <label className="screen-reader" htmlFor="note-title">Note title</label><input id="note-title" className="editor-title" value={title} onChange={(event) => updateTitle(event.target.value)} disabled={!editable || busy || Boolean(recovery)} placeholder="Untitled note" />
+    {note && note.lifecycle === 'active' && recordSchemaSupported && <section className="note-organization" aria-label="Note organization">
+      <div className="organization-pin-row"><span className="toolbar-label">Organization</span><button className="pin-button" type="button" aria-pressed={Boolean(note.pinned)} disabled={!editable || busy || Boolean(recovery)} onClick={() => void updateOrganization({ pinned: !note.pinned })}>{note.pinned ? '★ Pinned' : '☆ Pin note'}</button></div>
+      <div className="organization-tags"><span className="toolbar-label">Tags</span>{(Array.isArray(note.tags) ? note.tags : []).map((tag) => <span className="tag-chip editor-tag" key={tagKey(tag)}>{tag}<button type="button" aria-label={`Remove tag ${tag}`} disabled={!editable || busy || Boolean(recovery)} onClick={() => removeTag(tag)}>×</button></span>)}{(!note.tags || note.tags.length === 0) && <span className="tag-empty">No tags yet.</span>}</div>
+      <form className="tag-entry" onSubmit={(event) => void addTag(event)}><label className="screen-reader" htmlFor="note-tag-input">Add a tag</label><input id="note-tag-input" className="searchbox" list="note-tag-suggestions" maxLength={80} placeholder="Add a tag…" value={tagInput} onChange={(event) => setTagInput(event.target.value)} disabled={!editable || busy || Boolean(recovery)} /><datalist id="note-tag-suggestions">{availableTags.map((tag) => <option value={tag} key={tagKey(tag)} />)}</datalist><button className="btn" type="submit" disabled={!editable || busy || Boolean(recovery) || !tagInput.trim()}>Add tag</button></form>
+    </section>}
+    {validation?.status === 'supported' && note?.lifecycle === 'trashed' && <div className="notice">Restore this note to edit it. Its content is preserved below.</div>}
+    {validation?.status === 'supported' && editable ? <><div className="editor-toolbar" aria-label="Text formatting">
+      <button className="tool-button" aria-label="Bold" title="Bold" onClick={() => editorRef.current?.chain().focus().toggleBold().run()}><strong>B</strong></button><button className="tool-button" aria-label="Italic" title="Italic" onClick={() => editorRef.current?.chain().focus().toggleItalic().run()}><em>I</em></button><button className="tool-button" aria-label="Strike" title="Strike" onClick={() => editorRef.current?.chain().focus().toggleStrike().run()}><s>S</s></button><button className="tool-button" aria-label="Heading 2" title="Heading" onClick={() => editorRef.current?.chain().focus().toggleHeading({ level: 2 }).run()}>H₂</button><button className="tool-button" aria-label="Bullet list" title="Bullet list" onClick={() => editorRef.current?.chain().focus().toggleBulletList().run()}>• List</button><button className="tool-button" aria-label="Ordered list" title="Numbered list" onClick={() => editorRef.current?.chain().focus().toggleOrderedList().run()}>1. List</button><button className="tool-button" aria-label="Checklist" title="Checklist" onClick={toggleChecklist}>☑</button><button className="tool-button" aria-label="Quote" title="Quote" onClick={() => editorRef.current?.chain().focus().toggleBlockquote().run()}>“</button><button className="tool-button" aria-label="Code block" title="Code block" onClick={() => editorRef.current?.chain().focus().toggleCodeBlock().run()}>&lt;/&gt;</button>
+    </div><div ref={elementRef} className="editor-content" aria-label="Note content" /></>
+      : <section>{validation?.status !== 'supported' && <div className="notice">This document uses a schema this editor cannot safely modify. It is open read-only so its original data stays intact.</div>}<pre className="readonly-panel">{JSON.stringify(doc, null, 2)}</pre></section>}
+    {note && <AudioRecorder noteId={note.id} disabled={!editable || busy || Boolean(recovery)} onActivityChange={(active) => { recordingRef.current = active; }} />}
+    {markdown && <div className="backup-panel"><h2 className="section-title">Markdown export</h2>{markdown.warnings.length > 0 && <div className="notice">Some formatting is simplified in Markdown: {markdown.warnings.map((warning: any) => warning.message).join(' ')}</div>}<textarea className="searchbox" aria-label="Markdown output" readOnly value={markdown.markdown ?? ''} rows={12} /><button className="btn" onClick={() => { const blob = new Blob([markdown.markdown ?? ''], { type: 'text/markdown' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `${title || 'note'}.md`; a.click(); URL.revokeObjectURL(url); }}>Download .md</button></div>}
+    {recovery && <div className="dialog-backdrop"><section className="dialog" role="dialog" aria-modal="true" aria-labelledby="recovery-title"><h2 id="recovery-title">A recovery draft was found</h2><p>{!recovery.valid ? 'This recovery document cannot be applied safely. Its original journal is retained until you explicitly discard it.' : recovery.sameRevision ? 'An uncommitted recovery draft was found for this note.' : 'The saved note has changed since this draft was made. To avoid overwriting either version, recover the draft as a separate note.'}</p>{error && <p role="alert">{error}</p>}<div className="dialog-actions"><button className="btn" disabled={busy} onClick={discardRecovery}>Keep saved version</button><button className="btn btn-primary" disabled={busy || !recovery.valid} onClick={() => void useRecovery(!recovery.sameRevision)}>{recovery.sameRevision ? 'Restore draft' : 'Recover as new note'}</button></div></section></div>}
+  </>;
+}
+
+========================================================================================
+SOURCE: HOME
+========================================================================================
+'use client';
+
+import Link from 'next/link';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createNotesRepository, makeEmptyNote } from './lib/local-notes.js';
+import { filterNotes, filterNotesByTags, sortNotes } from './lib/mvp-utils.mjs';
+import { tagKey } from './lib/note-organization.mjs';
+
+type SortMode = 'updated' | 'created' | 'title';
+const HOME_PREFERENCES_KEY = 'noteos:mvp03:home-preferences';
+
+function textOf(document: any) {
+  const text: string[] = [];
+  const walk = (node: any) => { if (node?.type === 'text') text.push(node.text); else if (node?.type === 'hardBreak') text.push(' '); (node?.content ?? []).forEach(walk); };
+  walk(document);
+  return text.join(' ').replace(/\s+/g, ' ').trim();
+}
+
+function preferencesFromStorage() {
+  try {
+    const value = JSON.parse(localStorage.getItem(HOME_PREFERENCES_KEY) ?? '{}');
+    return {
+      query: typeof value.query === 'string' ? value.query : '',
+      sort: ['updated', 'created', 'title'].includes(value.sort) ? value.sort as SortMode : 'updated',
+      tags: Array.isArray(value.tags) ? value.tags.filter((tag: unknown) => typeof tag === 'string') : [],
+    };
+  } catch { return { query: '', sort: 'updated' as SortMode, tags: [] as string[] }; }
+}
+
+export default function Home() {
+  const [notes, setNotes] = useState<any[]>([]);
+  const [query, setQuery] = useState('');
+  const [sort, setSort] = useState<SortMode>('updated');
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [preferencesReady, setPreferencesReady] = useState(false);
+  const [error, setError] = useState('');
+  const [ready, setReady] = useState(false);
+  const [busyPinIds, setBusyPinIds] = useState<string[]>([]);
+  const busyPinIdsRef = useRef(new Set<string>());
+
+  const refresh = useCallback(async (clearError = true) => {
+    try { setNotes(await createNotesRepository().list()); if (clearError) setError(''); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not open local notes.'); }
+    finally { setReady(true); }
+  }, []);
+
+  useEffect(() => {
+    const preferences = preferencesFromStorage();
+    setQuery(preferences.query); setSort(preferences.sort); setSelectedTags(preferences.tags); setPreferencesReady(true);
+    void refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    if (!preferencesReady) return;
+    try { localStorage.setItem(HOME_PREFERENCES_KEY, JSON.stringify({ query, sort, tags: selectedTags })); }
+    catch { /* Preferences are best effort; current-session controls remain usable. */ }
+  }, [preferencesReady, query, sort, selectedTags]);
+
+  const availableTags = useMemo(() => {
+    const labels = new Map<string, string>();
+    for (const note of notes.filter((row) => row.lifecycle === 'active')) {
+      for (const tag of Array.isArray(note.tags) ? note.tags : []) if (!labels.has(tagKey(tag))) labels.set(tagKey(tag), tag);
+    }
+    return [...labels.values()].sort((left, right) => left.localeCompare(right, undefined, { sensitivity: 'base' }));
+  }, [notes]);
+
+  const visibleNotes = useMemo(() => {
+    const matched = filterNotes(notes, query, 'active');
+    return sortNotes(filterNotesByTags(matched, selectedTags), sort);
+  }, [notes, query, selectedTags, sort]);
+
+  async function createNote() {
+    try { const note = await createNotesRepository().create(makeEmptyNote()); location.assign(`/notes/${encodeURIComponent(note.id)}`); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not create a note.'); }
+  }
+
+  async function togglePin(note: any) {
+    if (busyPinIdsRef.current.has(note.id)) return;
+    busyPinIdsRef.current.add(note.id);
+    setBusyPinIds((current) => [...current, note.id]);
+    try {
+      const updated = await createNotesRepository().updateOrganization(note.id, { pinned: !note.pinned }, note.revision);
+      setNotes((current) => current.map((row) => row.id === updated.id ? updated : row)); setError('');
+    } catch (cause) {
+      await refresh(false);
+      setError(cause instanceof Error ? cause.message : 'Could not update this note. Refresh and try again.');
+    } finally { busyPinIdsRef.current.delete(note.id); setBusyPinIds((current) => current.filter((id) => id !== note.id)); }
+  }
+
+  function toggleTag(tag: string) {
+    const key = tagKey(tag);
+    setSelectedTags((current) => current.some((item) => tagKey(item) === key)
+      ? current.filter((item) => tagKey(item) !== key)
+      : [...current, tag]);
+  }
+
+  const hasFilters = Boolean(query || selectedTags.length);
+  return <>
+    <div className="page-heading"><div><p className="eyebrow">A quiet place to think</p><h1 className="page-title">Your notes</h1><p className="page-lede">A little space for what you want to remember.</p></div><div className="actions"><button className="btn btn-primary" onClick={createNote}>＋ New note</button></div></div>
+    {error && <div className="notice error" role="alert">{error} Your notes stay stored locally.</div>}
+    <div className="notes-controls">
+      <div className="search-row"><label className="screen-reader" htmlFor="note-search">Search notes</label><input id="note-search" className="searchbox" type="search" placeholder="Search titles, notes and tags…" value={query} onChange={(event) => setQuery(event.target.value)} /><span className="toolbar-label">{visibleNotes.length} {visibleNotes.length === 1 ? 'note' : 'notes'}</span></div>
+      <label className="sort-control"><span>Sort</span><select aria-label="Sort notes" value={sort} onChange={(event) => setSort(event.target.value as SortMode)}><option value="updated">Recently updated</option><option value="created">Recently created</option><option value="title">Title A–Z</option></select></label>
+    </div>
+    {availableTags.length > 0 && <div className="tag-filter-row" aria-label="Filter notes by tag"><span className="toolbar-label">Tags</span>{availableTags.map((tag) => <button key={tagKey(tag)} type="button" className={`tag-chip tag-filter ${selectedTags.some((item) => tagKey(item) === tagKey(tag)) ? 'is-selected' : ''}`} aria-pressed={selectedTags.some((item) => tagKey(item) === tagKey(tag))} onClick={() => toggleTag(tag)}>{tag}</button>)}{selectedTags.length > 0 && <button className="text-button" onClick={() => setSelectedTags([])}>Clear tags</button>}</div>}
+    {visibleNotes.length ? <section className="notes-grid" aria-label="Active notes">{visibleNotes.map((note: any) => <article className="note-card" key={note.id}>
+      <div className="note-card-top"><span className="note-pin-state">{note.pinned ? 'Pinned' : ''}</span>{note.schemaVersion === 1 && <button className="pin-button" type="button" disabled={busyPinIds.includes(note.id)} aria-label={note.pinned ? `Unpin ${note.title || 'Untitled note'}` : `Pin ${note.title || 'Untitled note'}`} aria-pressed={Boolean(note.pinned)} onClick={() => void togglePin(note)}>{note.pinned ? '★ Pinned' : '☆ Pin'}</button>}</div>
+      <Link className="note-card-link" href={`/notes/${encodeURIComponent(note.id)}`}><h2>{note.title || 'Untitled note'}</h2><p className="note-preview">{textOf(note.document) || 'Start with a thought…'}</p><span className="note-open-label">Open note ↗</span></Link>
+      {Array.isArray(note.tags) && note.tags.length > 0 && <div className="note-card-tags" aria-label={`Tags for ${note.title || 'Untitled note'}`}>{note.tags.map((tag: string) => <button key={tagKey(tag)} type="button" className="tag-chip" aria-label={`Filter by ${tag}`} onClick={() => toggleTag(tag)}>{tag}</button>)}</div>}
+      <div className="note-meta"><span>{new Date(note.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span><span>{note.pinned ? 'Pinned first' : 'On this device'}</span></div>
+    </article>)}</section>
+      : <div className="empty-state"><h2>{ready ? (hasFilters ? 'No notes match these filters' : 'A fresh page') : 'Opening your notes…'}</h2><p>{ready ? (hasFilters ? 'Clear a tag or try another search to see more notes.' : 'Create a note to get your thoughts started.') : 'Everything is stored on this device.'}</p>{ready && hasFilters && <button className="btn" onClick={() => { setQuery(''); setSelectedTags([]); }}>Clear search and filters</button>}{ready && !hasFilters && <button className="btn btn-primary" onClick={createNote}>Create your first note</button>}</div>}
+  </>;
+}
+
+========================================================================================
+SOURCE: ORGANIZATION UTILITIES
+========================================================================================
+const MAX_TAGS_PER_NOTE = 20;
+const MAX_TAG_LENGTH = 32;
+
+export function tagKey(value) {
+  return String(value ?? '').normalize('NFC').toLowerCase();
+}
+
+export function normalizeTagLabel(value) {
+  if (typeof value !== 'string') throw new TypeError('Tags must be text.');
+  const label = value.trim();
+  if (!label) throw new TypeError('Enter a tag name.');
+  if (Array.from(label).length > MAX_TAG_LENGTH) throw new TypeError(`Tags can contain up to ${MAX_TAG_LENGTH} characters.`);
+  if (/[\u0000-\u001f\u007f]/u.test(label)) throw new TypeError('Tags cannot contain control characters.');
+  return label;
+}
+
+export function normalizeTagList(values) {
+  if (!Array.isArray(values)) throw new TypeError('Note tags must be a list.');
+  if (values.length > MAX_TAGS_PER_NOTE) throw new TypeError(`A note can have up to ${MAX_TAGS_PER_NOTE} tags.`);
+  const tags = [], seen = new Set();
+  for (const value of values) {
+    const label = normalizeTagLabel(value), key = tagKey(label);
+    if (seen.has(key)) throw new TypeError('A note cannot contain duplicate tags.');
+    seen.add(key); tags.push(label);
+  }
+  return tags;
+}
+
+export function safeTagsForNoteCopy(note) {
+  if (!note || note.schemaVersion !== 1 || !Array.isArray(note.tags)) return [];
+  try { return normalizeTagList(note.tags); }
+  catch { return []; }
+}
+
+export function validateOrganizationMetadata(note) {
+  if (note.schemaVersion !== 1) return;
+  if (note.pinned !== undefined && typeof note.pinned !== 'boolean') throw new TypeError(`Backup note “${note.id}” has invalid pin metadata.`);
+  if (note.tags !== undefined) normalizeTagList(note.tags);
+}
+
+========================================================================================
+SOURCE: COPY TAG REGRESSION TEST
+========================================================================================
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { safeTagsForNoteCopy } from './note-organization.mjs';
+
+test('safe note copies retain supported source tags but never pin or carry unsupported metadata', () => {
+  const supported = { schemaVersion: 1, pinned: true, tags: ['Tiếng Việt', '東京'] };
+  assert.deepEqual(safeTagsForNoteCopy(supported), ['Tiếng Việt', '東京']);
+  assert.deepEqual(safeTagsForNoteCopy({ ...supported, tags: ['safe', 'safe'] }), []);
+  assert.deepEqual(safeTagsForNoteCopy({ ...supported, schemaVersion: 2 }), []);
+  assert.deepEqual(safeTagsForNoteCopy({ schemaVersion: 1, tags: undefined }), []);
+  // Callers explicitly create copies with pinned:false; source state is not mutated.
+  assert.equal(supported.pinned, true);
+  assert.deepEqual(supported.tags, ['Tiếng Việt', '東京']);
+});
+
+========================================================================================
+SOURCE: MVP-03 BROWSER TEST
+========================================================================================
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import { mkdir, writeFile } from 'node:fs/promises';
+
+const require = createRequire(import.meta.url);
+const root = fileURLToPath(new URL('../../../../../', import.meta.url));
+const evidence = process.env.NOTEOS_MVP03_EVIDENCE ?? `${root}/artifacts/review/noteOS-MVP-03.1-review/evidence`;
+const lens = process.env.NOTEOS_PLAYWRIGHT_ROOT ?? `${root}/../ui-lens`;
+const { chromium } = require(require.resolve('playwright', { paths: [lens] }));
+const baseUrl = process.env.NOTEOS_TEST_URL ?? 'http://127.0.0.1:3000';
+await mkdir(evidence, { recursive: true });
+const browser = await chromium.launch();
+const results = [], diagnostics = { browser: null, consoleErrors: [], pageErrors: [], externalRequests: [] };
+diagnostics.browser = browser.version();
+const check = (condition, message) => { if (!condition) throw new Error(message); };
+async function scenario(name, run, viewport = { width: 1280, height: 900 }) {
+  const context = await browser.newContext({ acceptDownloads: true, viewport });
+  await context.route('**/*', (route) => new URL(route.request().url()).origin === baseUrl ? route.continue() : route.abort());
+  const page = await context.newPage();
+  page.setDefaultTimeout(4000);
+  page.on('console', (message) => { if (message.type() === 'error') diagnostics.consoleErrors.push(`${name}: ${message.text()}`); });
+  page.on('pageerror', (error) => diagnostics.pageErrors.push(`${name}: ${error.message}`));
+  page.on('request', (request) => { if (!request.url().startsWith(baseUrl)) diagnostics.externalRequests.push(`${name}: ${request.url()}`); });
+  try { await run(page, context); results.push({ name, status: 'PASS' }); }
+  catch (error) {
+    results.push({ name, status: 'FAIL', error: error instanceof Error ? error.stack : String(error) });
+    await page.screenshot({ path: `${evidence}/${name.replace(/[^a-z0-9]+/gi, '-')}.png`, fullPage: true }).catch(() => {});
+  } finally { await context.close(); }
+}
+async function openNew(page) {
+  await page.goto(baseUrl);
+  await page.getByRole('button', { name: /New note/ }).first().click();
+  await page.locator('#note-title').waitFor();
+  return new URL(page.url()).pathname.split('/').pop();
+}
+async function readNote(page, id) {
+  return page.evaluate((noteId) => new Promise((resolve, reject) => {
+    const request = indexedDB.open('noteos-mvp-01');
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const db = request.result, tx = db.transaction('notes', 'readonly'), get = tx.objectStore('notes').get(noteId);
+      get.onsuccess = () => resolve(get.result); get.onerror = () => reject(get.error);
+      tx.oncomplete = () => db.close();
+    };
+  }), id);
+}
+async function readAllNotes(page) {
+  return page.evaluate(() => new Promise((resolve, reject) => {
+    const request = indexedDB.open('noteos-mvp-01');
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const db = request.result, tx = db.transaction('notes', 'readonly'), get = tx.objectStore('notes').getAll();
+      get.onsuccess = () => resolve(get.result); get.onerror = () => reject(get.error);
+      tx.oncomplete = () => db.close();
+    };
+  }));
+}
+async function waitSaved(page) { await page.waitForTimeout(750); await page.getByText(/^Saved /).waitFor({ timeout: 10000 }); }
+try {
+  await scenario('checklist-tags-pin-search-backup', async (page) => {
+    const id = await openNew(page);
+    await page.locator('#note-title').fill('Checklist — ghi chú 東京 🌿');
+    await page.getByRole('button', { name: 'Checklist' }).click();
+    const editor = page.locator('.editor-content');
+    await editor.locator('li[data-checked] p').first().click();
+    await page.keyboard.insertText('Mua cà phê ☕');
+    await page.keyboard.press('Enter');
+    const secondItem = editor.locator('li[data-checked] p').nth(1);
+    await secondItem.click(); await page.keyboard.insertText('東京を記録する 🗒️');
+    await editor.locator('li[data-checked] input[type="checkbox"]').first().check();
+    await secondItem.click(); await page.keyboard.press('Home'); await page.keyboard.press('Shift+End'); await page.getByRole('button', { name: 'Bold' }).click();
+    await page.locator('#note-tag-input').fill('Tiếng Việt'); await page.getByRole('button', { name: 'Add tag' }).click();
+    await page.locator('#note-tag-input').fill('東京'); await page.getByRole('button', { name: 'Add tag' }).click();
+    await page.getByRole('button', { name: /Pin note/ }).click();
+    await waitSaved(page);
+    let saved = await readNote(page, id);
+    check(saved.pinned && saved.tags.includes('Tiếng Việt') && saved.tags.includes('東京'), 'Pin or Unicode tags did not persist.');
+    check(saved.document.content.some((node) => node.type === 'taskList' && node.content[0].attrs.checked === true), 'Checked task state did not persist in canonical JSON.');
+    await page.screenshot({ path: `${evidence}/editor-checklist-tags.png`, fullPage: true });
+    await page.reload(); await page.locator('.editor-content').waitFor();
+    saved = await readNote(page, id);
+    check(saved.document.content.some((node) => node.type === 'taskList' && node.content.length === 2 && node.content[0].attrs.checked === true), 'Checklist did not survive reload.');
+    check(await page.locator('.editor-content strong').count() > 0, 'Formatting did not remain alongside checklist content.');
+    const secondCheckbox = page.locator('.editor-content li[data-checked] input[type="checkbox"]').nth(1);
+    await secondCheckbox.check(); await waitSaved(page);
+    check((await readNote(page, id)).document.content.find((node) => node.type === 'taskList').content[1].attrs.checked === true, 'Checkbox update did not autosave.');
+    await secondCheckbox.uncheck(); await waitSaved(page);
+    check((await readNote(page, id)).document.content.find((node) => node.type === 'taskList').content[1].attrs.checked === false, 'Uncheck did not autosave.');
+    await page.getByRole('button', { name: 'Remove tag Tiếng Việt' }).click(); await waitSaved(page);
+    check(!(await readNote(page, id)).tags.includes('Tiếng Việt'), 'Tag removal did not persist.');
+    await page.locator('#note-tag-input').fill('Tiếng Việt'); await page.getByRole('button', { name: 'Add tag' }).click(); await waitSaved(page);
+    await page.goto(baseUrl);
+    await page.getByRole('button', { name: 'Pin Checklist — ghi chú 東京 🌿' }).waitFor();
+    await page.getByLabel('Filter by Tiếng Việt').click();
+    await page.screenshot({ path: `${evidence}/home-pinned-tags-filtered.png`, fullPage: true });
+    await page.getByLabel('Search notes').fill('東京');
+    check(await page.locator('.note-card').count() === 1, 'Japanese tag/title search did not find the note.');
+    await page.getByLabel('Sort notes').selectOption('title');
+    await page.reload();
+    check(await page.getByLabel('Search notes').inputValue() === '東京', 'Search preferences did not persist after reload.');
+    await page.getByLabel('Search notes').fill('no-match-xyz');
+    await page.getByRole('heading', { name: 'No notes match these filters' }).waitFor();
+    await page.screenshot({ path: `${evidence}/home-filtered-empty.png`, fullPage: true });
+    await page.getByRole('button', { name: 'Clear search and filters' }).click();
+    await page.goto(`${baseUrl}/backup`);
+    const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download backup' }).click()]);
+    check(download.suggestedFilename().endsWith('.json'), 'Backup export did not create a JSON download.');
+    const stream = await download.createReadStream();
+    check(stream, 'Browser did not expose the downloaded backup bytes.');
+    const chunks = []; for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+    const downloadedBytes = Buffer.concat(chunks);
+    await writeFile(`${evidence}/actual-downloaded-backup.json`, downloadedBytes);
+    const backup = JSON.parse(downloadedBytes.toString('utf8'));
+    check(backup.format === 'noteos.local-backup' && backup.version === 1, 'Downloaded backup format/version is invalid.');
+    const exported = backup.notes.find((row) => row.id === id);
+    check(exported, 'The downloaded backup does not contain the note under test.');
+    check(exported.pinned === true && JSON.stringify([...exported.tags].sort()) === JSON.stringify(['Tiếng Việt', '東京'].sort()), `Real backup did not preserve pinned state and exact Unicode tags: ${JSON.stringify({ pinned: exported.pinned, tags: exported.tags })}`);
+    const exportedChecklist = exported.document.content.find((node) => node.type === 'taskList');
+    check(exportedChecklist?.content.length === 2 && exportedChecklist.content[0].attrs.checked === true && exportedChecklist.content[1].attrs.checked === false, `Real backup did not preserve checklist content and checked state: ${JSON.stringify(exportedChecklist)}`);
+    const originalBeforeImport = JSON.parse(JSON.stringify(await readNote(page, id)));
+    const copiedBundle = { ...backup, notes: backup.notes.map((row) => row.id === id ? { ...row, id: `${id}-copy` } : row) };
+    await page.locator('input[type="file"]').setInputFiles({ name: 'noteos-backup-copy.json', mimeType: 'application/json', buffer: downloadedBytes.constructor.from(JSON.stringify(copiedBundle)) });
+    await page.getByRole('button', { name: 'Validate and import' }).click();
+    await page.getByRole('status').filter({ hasText: 'Imported 1 notes' }).waitFor();
+    const imported = await readNote(page, `${id}-copy`);
+    check(imported.pinned === true && JSON.stringify([...imported.tags].sort()) === JSON.stringify(['Tiếng Việt', '東京'].sort()), `Import from the actual downloaded bundle lost organization metadata: ${JSON.stringify({ pinned: imported.pinned, tags: imported.tags })}`);
+    check(JSON.stringify(imported.document) === JSON.stringify(exported.document), 'Imported copy canonical document differs from downloaded export.');
+    check(JSON.stringify(await readNote(page, id)) === JSON.stringify(originalBeforeImport), 'Importing the copy modified the original note.');
+    await page.goto(`${baseUrl}/notes/${id}`);
+    const tasks = page.locator('.editor-content li[data-checked]');
+    await tasks.nth(1).locator('p').click(); await page.keyboard.press('End'); await page.keyboard.press('Enter');
+    await tasks.nth(2).locator('p').click(); await page.keyboard.press('Home'); await page.keyboard.press('Backspace');
+    await waitSaved(page);
+    check(await page.locator('.editor-content ul[data-type="taskList"] li[data-checked]').count() >= 2, 'Enter/Backspace damaged checklist keyboard behavior.');
+  });
+  await scenario('stale-tab-organization-conflict', async (page, context) => {
+    const id = await openNew(page); await page.locator('#note-title').fill('Two-tab draft'); await page.locator('#note-tag-input').fill('origin'); await page.getByRole('button', { name: 'Add tag' }).click(); await waitSaved(page);
+    const other = await context.newPage(); await other.goto(page.url()); await other.locator('#note-title').waitFor({ state: 'visible' }); await other.waitForFunction(() => !document.querySelector('#note-title')?.disabled, null, { timeout: 5000 });
+    await other.locator('#note-title').fill('Committed from second tab'); await other.locator('#note-tag-input').fill('remote'); await other.getByRole('button', { name: 'Add tag' }).click(); await waitSaved(other);
+    await page.locator('.editor-content [contenteditable="true"]').click(); await page.keyboard.insertText('Local draft');
+    await page.locator('#note-tag-input').fill('race'); await page.getByRole('button', { name: 'Add tag' }).click();
+    await page.getByText('Not saved', { exact: true }).waitFor({ timeout: 5000 });
+    check(await page.locator('#note-tag-input').inputValue() === 'race', 'Failed stale tag action cleared the attempted tag input.');
+    check(await page.getByRole('alert').count() > 0, 'Stale tag action cleared its error banner.');
+    check((await page.locator('.editor-content').innerText()).includes('Local draft'), 'The local draft was not retained after a stale revision conflict.');
+    const saved = await readNote(page, id);
+    check(saved.title === 'Committed from second tab' && saved.tags.includes('origin') && saved.tags.includes('remote') && !saved.tags.includes('race'), 'Stale metadata action overwrote newer tab data.');
+    await page.screenshot({ path: `${evidence}/stale-tab-conflict.png`, fullPage: true });
+    const originalPath = new URL(page.url()).pathname;
+    await Promise.all([page.waitForURL((url) => url.pathname !== originalPath), page.getByRole('button', { name: 'Save this draft as a new note' }).click()]);
+    await page.locator('#note-title').waitFor();
+    const copiedId = new URL(page.url()).pathname.split('/').pop();
+    const copy = await readNote(page, copiedId);
+    check(copy.pinned === false && JSON.stringify(copy.tags) === JSON.stringify(['origin']), `Draft copy did not keep only source-tab committed tags or default unpinned: ${JSON.stringify({ pinned: copy.pinned, tags: copy.tags })}`);
+    check((await readNote(page, id)).tags.includes('remote'), 'Saving draft as copy modified the source note.');
+  });
+  for (const errorName of ['SecurityError', 'QuotaExceededError']) {
+    await scenario(`home-preferences-${errorName}`, async (page, context) => {
+      await context.addInitScript((name) => {
+        const original = Storage.prototype.setItem;
+        Storage.prototype.setItem = function(key, value) {
+          if (key === 'noteos:mvp03:home-preferences') throw new DOMException('Synthetic preference write denial', name);
+          return original.call(this, key, value);
+        };
+      }, errorName);
+      const id = await openNew(page);
+      await page.locator('#note-title').fill(`Preference ${errorName}`);
+      await page.locator('#note-tag-input').fill('session tag'); await page.getByRole('button', { name: 'Add tag' }).click(); await waitSaved(page);
+      await page.goto(baseUrl); await page.getByRole('button', { name: /New note/ }).first().click();
+      await page.locator('#note-title').fill('A second note'); await waitSaved(page);
+      await page.goto(baseUrl);
+      const before = JSON.stringify(await readAllNotes(page));
+      await page.getByLabel('Sort notes').selectOption('title');
+      const orderedTitles = await page.locator('.note-card h2').allTextContents();
+      check(orderedTitles[0] === 'A second note' && orderedTitles[1] === `Preference ${errorName}`, `${errorName}: title sorting stopped working: ${JSON.stringify(orderedTitles)}`);
+      await page.getByLabel('Search notes').fill(errorName);
+      check(await page.locator('.note-card').count() === 1, `${errorName}: search stopped working.`);
+      await page.getByLabel('Filter by session tag').click();
+      check(await page.locator('.note-card').count() === 1, `${errorName}: tag filtering stopped working.`);
+      check(await page.getByRole('heading', { name: `Preference ${errorName}` }).count() === 1, `${errorName}: Home did not render the existing note.`);
+      check(JSON.stringify(await readAllNotes(page)) === before, `${errorName}: preference interactions changed IndexedDB notes.`);
+      check((await readNote(page, id)).tags.includes('session tag'), `${errorName}: existing note metadata changed.`);
+    });
+  }
+  await scenario('tag-write-failure-preserves-input-and-retry', async (page, context) => {
+    await context.addInitScript(() => {
+      const original = IDBObjectStore.prototype.put;
+      IDBObjectStore.prototype.put = function(value, ...args) {
+        if (this.name === 'notes' && sessionStorage.getItem('noteos:mvp031:fail-next-note-put') === 'yes') {
+          sessionStorage.removeItem('noteos:mvp031:fail-next-note-put');
+          throw new DOMException('Synthetic IndexedDB write failure', 'UnknownError');
+        }
+        return original.call(this, value, ...args);
+      };
+    });
+    const id = await openNew(page);
+    await page.evaluate(() => sessionStorage.setItem('noteos:mvp031:fail-next-note-put', 'yes'));
+    await page.locator('#note-tag-input').fill('retry-tag'); await page.getByRole('button', { name: 'Add tag' }).click();
+    await page.getByRole('alert').waitFor();
+    check(await page.locator('#note-tag-input').inputValue() === 'retry-tag', 'Storage failure cleared attempted tag input.');
+    const failedRecord = await readNote(page, id);
+    check(!failedRecord.tags.includes('retry-tag'), 'Failed IndexedDB tag write changed stored metadata.');
+    check((await page.locator('.notice.error[role="alert"]').innerText()).length > 0, 'Storage error banner was not retained.');
+    await page.getByRole('button', { name: 'Add tag' }).click(); await waitSaved(page);
+    check((await readNote(page, id)).tags.includes('retry-tag'), 'Successful retry did not persist the tag.');
+    check(await page.locator('#note-tag-suggestions option').evaluateAll((options) => options.some((option) => option.value === 'retry-tag')), 'Successful retry did not update available tag suggestions.');
+  });
+  await scenario('recovery-as-copy-preserves-safe-source-tags', async (page) => {
+    const id = await openNew(page);
+    await page.locator('#note-title').fill('Committed source');
+    await page.locator('#note-tag-input').fill('source-tag'); await page.getByRole('button', { name: 'Add tag' }).click(); await waitSaved(page);
+    await page.getByRole('button', { name: /Pin note/ }).click(); await waitSaved(page);
+    const original = JSON.parse(JSON.stringify(await readNote(page, id)));
+    await page.evaluate(({ noteId, document }) => {
+      const key = `noteos:mvp01:recovery:${encodeURIComponent(noteId)}:mvp031-copy-test`;
+      localStorage.setItem(key, JSON.stringify({ version: 2, writerId: 'mvp031-copy-test', generation: 1, baseRevision: 999, recordCreatedAt: document.createdAt, deletionEpoch: '', title: 'Recovered copy title', document: document.document, inFlight: null, updatedAt: Date.now() }));
+    }, { noteId: id, document: original });
+    await page.reload();
+    await page.getByRole('dialog', { name: 'A recovery draft was found' }).waitFor();
+    const originalPath = new URL(page.url()).pathname;
+    await Promise.all([page.waitForURL((url) => url.pathname !== originalPath), page.getByRole('button', { name: 'Recover as new note' }).click()]);
+    await page.locator('#note-title').waitFor();
+    const copiedId = new URL(page.url()).pathname.split('/').pop();
+    const copy = await readNote(page, copiedId);
+    check(copy.title === 'Recovered copy title (recovered)' && copy.pinned === false && JSON.stringify(copy.tags) === JSON.stringify(['source-tag']), `Recovery copy did not preserve the safe source tag and default unpinned: ${JSON.stringify({ title: copy.title, pinned: copy.pinned, tags: copy.tags })}`);
+    check(JSON.stringify(await readNote(page, id)) === JSON.stringify(original), 'Recover as copy modified the source note.');
+  });
+  await scenario('mobile-navigation-width', async (page) => {
+    await page.goto(baseUrl);
+    const sizes = await page.evaluate(() => ({ viewport: innerWidth, document: document.documentElement.scrollWidth, nav: document.querySelector('.mobile-nav')?.getBoundingClientRect().width, navContent: document.querySelector('.mobile-nav')?.scrollWidth }));
+    check(sizes.viewport === 390 && sizes.document <= sizes.viewport, `Mobile page overflows horizontally: ${JSON.stringify(sizes)}`);
+    check(sizes.nav <= sizes.viewport && sizes.nav > 0, `Mobile navigation exceeds viewport: ${JSON.stringify(sizes)}`);
+    await page.screenshot({ path: `${evidence}/mobile-home-navigation.png`, fullPage: true });
+  }, { width: 390, height: 844 });
+} finally {
+  await browser.close();
+  await writeFile(`${evidence}/diagnostics.json`, JSON.stringify({ results, diagnostics }, null, 2));
+  process.stdout.write(`${JSON.stringify({ results, diagnostics }, null, 2)}\n`);
+  if (results.some((result) => result.status !== 'PASS') || diagnostics.pageErrors.length || diagnostics.externalRequests.length) process.exitCode = 1;
+}
+
+========================================================================================
+SOURCE: UI LENS FIXTURE
+========================================================================================
+import { createRequire } from 'node:module';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+const require = createRequire(import.meta.url);
+const root = fileURLToPath(new URL('../../../../../', import.meta.url));
+const lens = process.env.NOTEOS_PLAYWRIGHT_ROOT ?? `${root}/../ui-lens`;
+const { chromium } = require(require.resolve('playwright', { paths: [lens] }));
+const { capture, newRun } = await import(pathToFileURL(`${lens}/apps/service/src/runner.ts`));
+const { configSchema } = await import(pathToFileURL(`${lens}/packages/contracts/src/index.ts`));
+const baseUrl = process.env.NOTEOS_TEST_URL ?? 'http://127.0.0.1:3000';
+const config = configSchema.parse({
+  version: 1,
+  project: 'noteOS MVP-03.1 Organization Hotfix',
+  baseUrl,
+  outputDir: 'artifacts/review/noteOS-MVP-03.1-review/ui-lens',
+  viewports: { desktop: { width: 1440, height: 1000 }, mobile: { width: 390, height: 844 } },
+  targets: [
+    { id: 'home-pinned', name: 'Notes Home with pinned and tagged notes', route: '/', viewports: ['desktop'], actions: [{ type: 'waitFor', selector: '.note-card:first-child' }] },
+    { id: 'editor-checklist', name: 'Editor with Unicode checklist', route: '/notes/lens-checklist', viewports: ['desktop', 'mobile'], actions: [{ type: 'waitFor', selector: '.editor-content li[data-checked]:first-child' }] },
+    { id: 'tags-filtered', name: 'Notes filtered by shared tag', route: '/', viewports: ['desktop'], actions: [{ type: 'waitFor', selector: '.tag-filter:first-of-type' }, { type: 'click', selector: '.tag-filter:first-of-type' }] },
+    { id: 'home-filtered-empty', name: 'Useful empty search state', route: '/', viewports: ['desktop'], actions: [{ type: 'fill', selector: '#note-search', value: 'no-match-mvp03' }, { type: 'waitFor', selector: 'text=No notes match these filters' }] },
+    { id: 'mobile-navigation', name: 'Mobile navigation at 390px', route: '/', viewports: ['mobile'], actions: [{ type: 'waitFor', selector: '.mobile-nav' }] },
+  ],
+});
+
+const launch = chromium.launch.bind(chromium);
+chromium.launch = async (options = {}) => {
+  const browser = await launch(options);
+  const newContext = browser.newContext.bind(browser);
+  browser.newContext = async (contextOptions) => {
+    const context = await newContext(contextOptions);
+    const newPage = context.newPage.bind(context);
+    context.newPage = async () => {
+      const page = await newPage();
+      await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
+      await page.getByRole('button', { name: /New note/ }).first().click();
+      await page.locator('#note-title').waitFor({ timeout: 10000 });
+      await page.evaluate(async () => {
+        const now = Date.now();
+        const notes = [
+          {
+            id: 'lens-checklist', title: 'Pinned checklist — ghi chú 東京 🌿',
+            document: { schemaVersion: 1, type: 'doc', content: [
+              { type: 'paragraph', content: [{ type: 'text', text: 'Kế hoạch tuần này — 今週の予定 ✨' }] },
+              { type: 'taskList', content: [
+                { type: 'taskItem', attrs: { checked: true }, content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Viết ghi chú' }] }] },
+                { type: 'taskItem', attrs: { checked: false }, content: [{ type: 'paragraph', content: [{ type: 'text', text: '東京を訪れる 🗒️' }] }] },
+              ] },
+            ] }, schemaVersion: 1, createdAt: now - 2000, updatedAt: now, lifecycle: 'active', revision: 1, pinned: true, tags: ['Tiếng Việt', '東京'],
+          },
+          {
+            id: 'lens-ordinary', title: 'Một ý tưởng khác',
+            document: { schemaVersion: 1, type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'A note for shared tag filtering.' }] }] },
+            schemaVersion: 1, createdAt: now - 1000, updatedAt: now - 1000, lifecycle: 'active', revision: 1, pinned: false, tags: ['Tiếng Việt'],
+          },
+        ];
+        let timeout;
+        try {
+          await Promise.race([
+            new Promise((resolve, reject) => {
+              // The UI above lets the application create/upgrade its own database first.
+              const request = indexedDB.open('noteos-mvp-01');
+              request.onerror = () => reject(new Error(`Could not open app-initialized note database: ${request.error?.message ?? 'unknown error'}`));
+              request.onsuccess = () => {
+                const db = request.result;
+                const requiredStores = ['notes', 'recordings', 'recordingChunks'];
+                const missing = requiredStores.filter((name) => !db.objectStoreNames.contains(name));
+                if (missing.length) { db.close(); reject(new Error(`App storage bootstrap is missing required stores: ${missing.join(', ')}`)); return; }
+                let tx;
+                try { tx = db.transaction(['notes'], 'readwrite'); }
+                catch (error) { db.close(); reject(new Error(`Could not start note fixture transaction: ${error.message}`)); return; }
+                for (const note of notes) tx.objectStore('notes').put(note);
+                tx.oncomplete = () => { db.close(); resolve(); };
+                tx.onabort = tx.onerror = () => { const reason = tx.error?.message ?? 'unknown transaction error'; db.close(); reject(new Error(`Note fixture transaction failed: ${reason}`)); };
+              };
+            }),
+            new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('Timed out after 5000 ms initializing UI Lens IndexedDB fixtures.')), 5000); }),
+          ]);
+        } finally { clearTimeout(timeout); }
+      });
+      return page;
+    };
+    return context;
+  };
+  return browser;
+};
+
+try {
+  const run = newRun('noteos-mvp031');
+  const targets = process.env.NOTEOS_UI_TARGETS?.split(',') ?? config.targets.map((target) => target.id);
+  await capture({ id: 'noteos-mvp031', root, config }, { projectId: 'noteos-mvp031', targets, artifacts: { png: true, pdf: false, diagnostics: true } }, run);
+  process.stdout.write(`${JSON.stringify({ state: run.state, outputPath: run.outputPath, summary: run.manifest.summary }, null, 2)}\n`);
+  if (run.manifest.summary.failed) process.exitCode = 1;
+} finally { chromium.launch = launch; }
+
+========================================================================================
+MVP-03 BROWSER DIAGNOSTICS
+========================================================================================
+{
+  "results": [
+    {
+      "name": "checklist-tags-pin-search-backup",
+      "status": "PASS"
+    },
+    {
+      "name": "stale-tab-organization-conflict",
+      "status": "PASS"
+    },
+    {
+      "name": "home-preferences-SecurityError",
+      "status": "PASS"
+    },
+    {
+      "name": "home-preferences-QuotaExceededError",
+      "status": "PASS"
+    },
+    {
+      "name": "tag-write-failure-preserves-input-and-retry",
+      "status": "PASS"
+    },
+    {
+      "name": "recovery-as-copy-preserves-safe-source-tags",
+      "status": "PASS"
+    },
+    {
+      "name": "mobile-navigation-width",
+      "status": "PASS"
+    }
+  ],
+  "diagnostics": {
+    "browser": "156.0.8078.4",
+    "consoleErrors": [],
+    "pageErrors": [],
+    "externalRequests": []
+  }
+}
+
+========================================================================================
+MVP-01.2 BROWSER DIAGNOSTICS
+========================================================================================
+{
+  "browser": "156.0.8078.4",
+  "results": [
+    {
+      "name": "F-01 recovery updates live body/title, continued editing survives reload",
+      "status": "PASS"
+    },
+    {
+      "name": "F-01 failed recovery save retains journal; explicit Keep saved version resets live editor safely",
+      "status": "PASS"
+    },
+    {
+      "name": "F-01 concurrent recovery revision stays safe and offers a separate recovered note",
+      "status": "PASS"
+    },
+    {
+      "name": "F-02 stale two-tab revision blocks Archive",
+      "status": "PASS"
+    },
+    {
+      "name": "F-02 stale two-tab revision blocks Move to trash",
+      "status": "PASS"
+    },
+    {
+      "name": "F-02 save failure blocks Archive and preserves body/title/journal",
+      "status": "PASS"
+    },
+    {
+      "name": "F-02 immediate Archive flushes latest text; untouched lifecycle adds only one revision; restore/trash happy paths",
+      "status": "PASS"
+    },
+    {
+      "name": "F-03 delayed real IndexedDB transaction + A/B/C edits + Archive serialize to latest",
+      "status": "PASS"
+    },
+    {
+      "name": "F-04 immediate back navigation flushes under 650ms",
+      "status": "PASS"
+    },
+    {
+      "name": "F-04 immediate sidebar navigation flushes under 650ms",
+      "status": "PASS"
+    },
+    {
+      "name": "F-04 failed flush blocks sidebar navigation and retains latest draft",
+      "status": "PASS"
+    },
+    {
+      "name": "F-05 delete/reimport same ID removes stale journal and retains newer journal as copy only",
+      "status": "PASS"
+    },
+    {
+      "name": "MVP-01.1 smoke: search Unicode, backup download/collision, future readonly, missing ID does not resurrect",
+      "status": "PASS"
+    }
+  ],
+  "diagnostics": {
+    "consoleErrors": [],
+    "pageErrors": [],
+    "failedRequests": [
+      {
+        "url": "http://127.0.0.1:3000/trash?_rsc=wAzIFz3CJo_qDC8q",
+        "error": "net::ERR_ABORTED"
+      }
+    ],
+    "externalRequests": []
+  }
+}
+
+========================================================================================
+MVP-02.1 AUDIO/WEB LOCK DIAGNOSTICS
+========================================================================================
+{
+  "browser": "156.0.8078.4",
+  "launch": "Chromium fake audio device; no physical microphone input",
+  "results": [
+    {
+      "name": "unsupported-browser-api",
+      "status": "PASS"
+    },
+    {
+      "name": "permission-denied",
+      "status": "PASS"
+    },
+    {
+      "name": "record-pause-resume-reload-play-export",
+      "status": "PASS"
+    },
+    {
+      "name": "multiple-recordings-and-explicit-delete",
+      "status": "PASS"
+    },
+    {
+      "name": "storage-failure-keeps-interrupted-chunks",
+      "status": "PASS"
+    },
+    {
+      "name": "reload-recovers-partial-session",
+      "status": "PASS"
+    },
+    {
+      "name": "copied-session-id-and-live-owner-protection",
+      "status": "PASS"
+    },
+    {
+      "name": "unsupported-locks-preserve-unfinished-session",
+      "status": "PASS"
+    },
+    {
+      "name": "active-recording-blocks-navigation-and-lifecycle",
+      "status": "PASS"
+    },
+    {
+      "name": "archive-trash-preserve-recordings-and-delete-cascade",
+      "status": "PASS"
+    }
+  ],
+  "diagnostics": {
+    "consoleErrors": [],
+    "pageErrors": [],
+    "externalRequests": []
+  }
+}
+
+========================================================================================
+UI LENS MANIFEST
+========================================================================================
+{
+  "schema_version": 1,
+  "tool": "UI Lens",
+  "tool_version": "0.1.0",
+  "project": "noteOS MVP-03.1 Organization Hotfix",
+  "captured_at": "2026-10-21T07:04:40.621Z",
+  "base_url": "http://127.0.0.1:3000",
+  "git": {
+    "branch": "main",
+    "commit": "1cb9e4f5f22ac2e6d115cd5c962bcd340be5d7ad",
+    "dirty": true
+  },
+  "targets": [
+    {
+      "target_id": "home-pinned",
+      "target_name": "Notes Home with pinned and tagged notes",
+      "route": "/",
+      "url": "http://127.0.0.1:3000/",
+      "viewport": {
+        "id": "desktop",
+        "width": 1440,
+        "height": 1000,
+        "deviceScaleFactor": 1
+      },
+      "screenshot": "home-pinned/desktop.png",
+      "pdf": null,
+      "capture_mode": "fullPage",
+      "duration_ms": 1120,
+      "captured_at": "2026-10-21T07:04:40.898Z",
+      "console_error_count": 0,
+      "console_warning_count": 0,
+      "page_error_count": 0,
+      "failed_request_count": 0,
+      "http_error_count": 0,
+      "success": true
+    },
+    {
+      "target_id": "editor-checklist",
+      "target_name": "Editor with Unicode checklist",
+      "route": "/notes/lens-checklist",
+      "url": "http://127.0.0.1:3000/notes/lens-checklist",
+      "viewport": {
+        "id": "desktop",
+        "width": 1440,
+        "height": 1000,
+        "deviceScaleFactor": 1
+      },
+      "screenshot": "editor-checklist/desktop.png",
+      "pdf": null,
+      "capture_mode": "fullPage",
+      "duration_ms": 850,
+      "captured_at": "2026-10-21T07:04:42.018Z",
+      "console_error_count": 0,
+      "console_warning_count": 0,
+      "page_error_count": 0,
+      "failed_request_count": 0,
+      "http_error_count": 0,
+      "success": true
+    },
+    {
+      "target_id": "editor-checklist",
+      "target_name": "Editor with Unicode checklist",
+      "route": "/notes/lens-checklist",
+      "url": "http://127.0.0.1:3000/notes/lens-checklist",
+      "viewport": {
+        "id": "mobile",
+        "width": 390,
+        "height": 844,
+        "deviceScaleFactor": 1
+      },
+      "screenshot": "editor-checklist/mobile.png",
+      "pdf": null,
+      "capture_mode": "fullPage",
+      "duration_ms": 816,
+      "captured_at": "2026-10-21T07:04:42.868Z",
+      "console_error_count": 0,
+      "console_warning_count": 0,
+      "page_error_count": 0,
+      "failed_request_count": 0,
+      "http_error_count": 0,
+      "success": true
+    },
+    {
+      "target_id": "tags-filtered",
+      "target_name": "Notes filtered by shared tag",
+      "route": "/",
+      "url": "http://127.0.0.1:3000/",
+      "viewport": {
+        "id": "desktop",
+        "width": 1440,
+        "height": 1000,
+        "deviceScaleFactor": 1
+      },
+      "screenshot": "tags-filtered/desktop.png",
+      "pdf": null,
+      "capture_mode": "fullPage",
+      "duration_ms": 851,
+      "captured_at": "2026-10-21T07:04:43.684Z",
+      "console_error_count": 0,
+      "console_warning_count": 0,
+      "page_error_count": 0,
+      "failed_request_count": 0,
+      "http_error_count": 0,
+      "success": true
+    },
+    {
+      "target_id": "home-filtered-empty",
+      "target_name": "Useful empty search state",
+      "route": "/",
+      "url": "http://127.0.0.1:3000/",
+      "viewport": {
+        "id": "desktop",
+        "width": 1440,
+        "height": 1000,
+        "deviceScaleFactor": 1
+      },
+      "screenshot": "home-filtered-empty/desktop.png",
+      "pdf": null,
+      "capture_mode": "fullPage",
+      "duration_ms": 811,
+      "captured_at": "2026-10-21T07:04:44.535Z",
+      "console_error_count": 0,
+      "console_warning_count": 0,
+      "page_error_count": 0,
+      "failed_request_count": 0,
+      "http_error_count": 0,
+      "success": true
+    },
+    {
+      "target_id": "mobile-navigation",
+      "target_name": "Mobile navigation at 390px",
+      "route": "/",
+      "url": "http://127.0.0.1:3000/",
+      "viewport": {
+        "id": "mobile",
+        "width": 390,
+        "height": 844,
+        "deviceScaleFactor": 1
+      },
+      "screenshot": "mobile-navigation/mobile.png",
+      "pdf": null,
+      "capture_mode": "fullPage",
+      "duration_ms": 802,
+      "captured_at": "2026-10-21T07:04:45.346Z",
+      "console_error_count": 0,
+      "console_warning_count": 0,
+      "page_error_count": 0,
+      "failed_request_count": 0,
+      "http_error_count": 0,
+      "success": true
+    }
+  ],
+  "summary": {
+    "passed": 6,
+    "failed": 0
+  }
+}
+
+========================================================================================
+UI LENS DIAGNOSTICS
+========================================================================================
+{
+  "schema_version": 1,
+  "enabled": true,
+  "entries": [
+    {
+      "project": "noteOS MVP-03.1 Organization Hotfix",
+      "target": "home-pinned",
+      "viewport": "desktop",
+      "timestamp": "2026-10-21T07:04:40.898Z",
+      "data": {
+        "consoleErrors": [],
+        "consoleWarnings": [],
+        "pageErrors": [],
+        "failedRequests": [],
+        "httpErrors": []
+      }
+    },
+    {
+      "project": "noteOS MVP-03.1 Organization Hotfix",
+      "target": "editor-checklist",
+      "viewport": "desktop",
+      "timestamp": "2026-10-21T07:04:42.018Z",
+      "data": {
+        "consoleErrors": [],
+        "consoleWarnings": [],
+        "pageErrors": [],
+        "failedRequests": [],
+        "httpErrors": []
+      }
+    },
+    {
+      "project": "noteOS MVP-03.1 Organization Hotfix",
+      "target": "editor-checklist",
+      "viewport": "mobile",
+      "timestamp": "2026-10-21T07:04:42.868Z",
+      "data": {
+        "consoleErrors": [],
+        "consoleWarnings": [],
+        "pageErrors": [],
+        "failedRequests": [],
+        "httpErrors": []
+      }
+    },
+    {
+      "project": "noteOS MVP-03.1 Organization Hotfix",
+      "target": "tags-filtered",
+      "viewport": "desktop",
+      "timestamp": "2026-10-21T07:04:43.684Z",
+      "data": {
+        "consoleErrors": [],
+        "consoleWarnings": [],
+        "pageErrors": [],
+        "failedRequests": [],
+        "httpErrors": []
+      }
+    },
+    {
+      "project": "noteOS MVP-03.1 Organization Hotfix",
+      "target": "home-filtered-empty",
+      "viewport": "desktop",
+      "timestamp": "2026-10-21T07:04:44.535Z",
+      "data": {
+        "consoleErrors": [],
+        "consoleWarnings": [],
+        "pageErrors": [],
+        "failedRequests": [],
+        "httpErrors": []
+      }
+    },
+    {
+      "project": "noteOS MVP-03.1 Organization Hotfix",
+      "target": "mobile-navigation",
+      "viewport": "mobile",
+      "timestamp": "2026-10-21T07:04:45.346Z",
+      "data": {
+        "consoleErrors": [],
+        "consoleWarnings": [],
+        "pageErrors": [],
+        "failedRequests": [],
+        "httpErrors": []
+      }
+    }
+  ]
+}
+
+========================================================================================
+ACTUAL DOWNLOADED BACKUP JSON
+========================================================================================
+{
+  "format": "noteos.local-backup",
+  "version": 1,
+  "exportedAt": "2026-10-21T07:05:40.694Z",
+  "notes": [
+    {
+      "id": "500a6d9e-ad09-4f14-8d61-45a996e425b3",
+      "title": "Checklist — ghi chú 東京 🌿",
+      "document": {
+        "schemaVersion": 1,
+        "type": "doc",
+        "content": [
+          {
+            "type": "taskList",
+            "content": [
+              {
+                "type": "taskItem",
+                "attrs": {
+                  "checked": true
+                },
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "text": "Mua cà phê ☕"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "taskItem",
+                "attrs": {
+                  "checked": false
+                },
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "content": [
+                      {
+                        "type": "text",
+                        "marks": [
+                          {
+                            "type": "bold"
+                          }
+                        ],
+                        "text": "東京を記録する 🗒️"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "paragraph"
+          }
+        ]
+      },
+      "schemaVersion": 1,
+      "createdAt": 1792566334610,
+      "updatedAt": 1792566338340,
+      "lifecycle": "active",
+      "revision": 8,
+      "pinned": true,
+      "tags": [
+        "東京",
+        "Tiếng Việt"
+      ]
+    }
+  ]
+}
