@@ -1,3 +1,17 @@
+docs/phase-00/GEMINI-REVIEW-BRIEF.md               |   14 +
+ docs/phase-00/mvp04-native-prototype-report.md     |   65 +
+ spikes/phase-00/gate1/mobile/App.tsx               |  249 +-
+ spikes/phase-00/gate1/mobile/README.md             |   34 +
+ spikes/phase-00/gate1/mobile/app.json              |   17 +-
+ spikes/phase-00/gate1/mobile/document-subset.ts    |   58 +
+ spikes/phase-00/gate1/mobile/metro.config.js       |    7 +
+ spikes/phase-00/gate1/mobile/package-lock.json     | 7181 ++++++++++++++++++++
+ spikes/phase-00/gate1/mobile/package.json          |   41 +-
+ spikes/phase-00/gate1/mobile/store.ts              |  112 +
+ .../gate1/mobile/tests/document-subset.test.mjs    |   42 +
+ spikes/phase-00/gate1/mobile/tsconfig.json         |   11 +
+ 12 files changed, 7772 insertions(+), 59 deletions(-)
+
 diff --git a/docs/phase-00/GEMINI-REVIEW-BRIEF.md b/docs/phase-00/GEMINI-REVIEW-BRIEF.md
 new file mode 100644
 index 0000000..c56077f
@@ -20,7 +34,7 @@ index 0000000..c56077f
 +Please classify each finding with severity and state whether this Phase 00 prototype is safe to advance to an Xcode/device validation session. Do not treat the BLOCKED gates as PASS.
 diff --git a/docs/phase-00/mvp04-native-prototype-report.md b/docs/phase-00/mvp04-native-prototype-report.md
 new file mode 100644
-index 0000000..69208a7
+index 0000000..65a4b91
 --- /dev/null
 +++ b/docs/phase-00/mvp04-native-prototype-report.md
 @@ -0,0 +1,65 @@
@@ -88,7 +102,7 @@ index 0000000..69208a7
 +
 +## Git delivery
 +
-+Commit and push identifiers are recorded in the audit handoff after repository delivery. Existing unrelated Phase 00 working-tree changes and previous review artifacts are preserved and excluded from the MVP-04 commit.
++Implementation commit: `adf9bb946eb54f27f1653d1f0ac63572989156c5` (`feat(mvp04): add native iPhone prototype spike`). The review bundle is prepared as a separate handoff artifact. Existing unrelated Phase 00 working-tree changes and previous review artifacts are preserved and excluded from the implementation commit.
 diff --git a/spikes/phase-00/gate1/mobile/App.tsx b/spikes/phase-00/gate1/mobile/App.tsx
 index 7da2313..e745345 100644
 --- a/spikes/phase-00/gate1/mobile/App.tsx
@@ -350,7 +364,7 @@ index 7da2313..e745345 100644
 +});
 diff --git a/spikes/phase-00/gate1/mobile/README.md b/spikes/phase-00/gate1/mobile/README.md
 new file mode 100644
-index 0000000..8ebe0f2
+index 0000000..7c56bce
 --- /dev/null
 +++ b/spikes/phase-00/gate1/mobile/README.md
 @@ -0,0 +1,34 @@
@@ -368,7 +382,7 @@ index 0000000..8ebe0f2
 +npm run start
 +```
 +
-+For a simulator or attached iPhone, use a local Xcode Personal Team if available. Generate the native project with `npx expo prebuild --platform ios`, open `ios/noteOS.xcodeproj` in Xcode, select the Personal Team for the app target, and follow Xcode's local signing, device trust, and Developer Mode prompts. Then use `npm run ios`. No Apple credentials belong in this repository. Microphone access is requested only when Record is tapped.
++For a simulator or attached iPhone, use a local Xcode Personal Team if available. Generate the native project with `npx expo prebuild --platform ios`, open the generated `.xcodeproj` under `ios/` in Xcode, select the Personal Team for the app target, and follow Xcode's local signing, device trust, and Developer Mode prompts. Then use `npm run ios`. No Apple credentials belong in this repository. Microphone access is requested only when Record is tapped.
 +
 +## Prototype boundaries
 +
@@ -7914,3 +7928,519 @@ index 0000000..1b726e3
 +  },
 +  "include": ["**/*.ts", "**/*.tsx", "**/*.d.ts"]
 +}
+
+--- Changes ---
+
+docs/phase-00/GEMINI-REVIEW-BRIEF.md
+  @@ -0,0 +1,14 @@
+  +# Gemini review brief — noteOS MVP-04 iPhone prototype
+  +
+  +Review the isolated prototype in `spikes/phase-00/gate1/mobile/` against the approved MVP-04 brief and Phase 00 repository constraints. Please focus on these risks:
+  +
+  +1. **SQLite integrity:** review `store.ts` schema initialization, `user_version`, transaction boundaries, revision compare-and-swap, import collision behavior, note deletion and what happens if the app terminates during a write. No native SQLite runtime evidence exists yet.
+  +2. **Canonical preservation:** the app imports Web `validateCanonicalDocument`, `assertNoteRecord` and `parseBackup`; audit read-only decisions in `document-subset.ts`, lifecycle updates of future-schema notes and whether native edits preserve exact canonical semantics for the supported subset. The editor supports only plain paragraphs and a flat task list.
+  +3. **Editor safety:** review draft retention and navigation confirmation, stale-revision behavior, title/tag/pin edits, checklist toggling and empty paragraph handling. Richer structures must remain read-only.
+  +4. **Audio lifecycle:** inspect permission request timing, document-directory recording, stop/finalize/file verification before `complete`, interrupted recording handling, playback after restart, export/rename/delete ordering and orphan-file recovery. Expo audio behavior is unverified on device.
+  +5. **Interruption and privacy:** verify app background handling, local-only storage, no network/cloud/STT, no background recording and no audio in notes backup. Filesystem and SQLite writes cannot be one atomic operation.
+  +6. **Backup compatibility:** confirm `noteos.local-backup` v1 round-trip shape matches the Web parser, duplicate IDs fail without overwriting, future/invalid notes fail closed, and tags/pin/checklist state survive. Synthetic parser tests pass; native Files workflow does not yet.
+  +7. **Evidence truthfulness:** all native UI/runtime gates are BLOCKED because the host has command line tools only, `simctl`/`devicectl` are missing and no physical iPhone is attached. The 3.1 MB Hermes export is JavaScript bundling evidence only. No screenshots, native install, SQLite restart, microphone or p50/p95 result is claimed.
+  +8. **Dependency advisories:** `npm audit --omit=dev --audit-level=high` reports 23 advisories (8 moderate, 15 high) in the Expo/Metro/config dependency graph: `braces@3.0.3`, `node-forge@1.4.0`, `uuid@7.0.3`. The installed `braces` and `node-forge` GitHub advisories show no patched version; npm suggests a breaking Expo 44.0.6 downgrade, which was not applied. Assess reachability in the local development/build toolchain and the next safe upstream remediation.
+  +
+  +Please classify each finding with severity and state whether this Phase 00 prototype is safe to advance to an Xcode/device validation session. Do not treat the BLOCKED gates as PASS.
+  +14 -0
+
+docs/phase-00/mvp04-native-prototype-report.md
+  @@ -0,0 +1,65 @@
+  +# noteOS MVP-04 Native iPhone Prototype — Phase 00 Evidence
+  +
+  +**Date:** 2026-10-21 (Asia/Ho_Chi_Minh)  
+  +**Scope:** MVP-04 approved prototype, constrained by repository Phase 00 instructions. No production UI or MVP-05 work was started.
+  +
+  +## Delivery summary
+  +
+  +An isolated Expo iOS prototype now lives in `spikes/phase-00/gate1/mobile/`. It does not replace or write to the Web application's IndexedDB. The app source includes a notes home, editor navigation, create/open, title/body edit for the native subset, checklist edits, tags, pin, search, archive, trash, restore, permanent-delete confirmation, manual notes backup import/export and a local audio panel with record/stop/save/play/rename/delete/export flows.
+  +
+  +SQLite stores the complete Web-shaped note record JSON along with indexed revision, lifecycle and update columns. Each save is a revision-checked SQL `UPDATE`, and note backup import uses a transaction with an all-or-nothing duplicate ID check. Lifecycle changes use the same revision compare-and-swap while preserving future-schema document JSON. Database initialization creates schema version 1 and does not clear existing data.
+  +
+  +The prototype imports the existing Web canonical document validator and backup parser. The native editor is deliberately restricted to plain paragraph blocks and one top-level, single-level task list whose item contains one plain paragraph. It does not flatten headings, marks, links, code, nested lists, attachments or unknown nodes. Those documents display read-only. Future schema documents remain byte-preserved as JSON values and cannot be content-edited.
+  +
+  +Audio uses `expo-audio` and requests microphone access only after the user taps Record. The recorder is configured to store in the app document directory. Stop verifies the finalized path and non-zero size before inserting `complete` metadata. Leaving the foreground triggers a best-effort stop and an `interrupted` recording row. Audio bytes and SQLite metadata are separate writes, so an abrupt OS termination between them can leave a recoverable file or metadata that needs inspection. Audio is excluded from notes backup and shared individually.
+  +
+  +## Versions and environment
+  +
+  +- Host: macOS 15.7.7 (24G720), Node.js 24.21.0, npm 11.19.0.
+  +- Expo SDK 58.0.16; React Native 0.88.0; React 19.3.0; Expo development client 58.0.14.
+  +- Native modules: `expo-sqlite` 58.0.13, `expo-audio` 58.0.9, `expo-file-system` 58.0.10, `expo-document-picker` 58.0.4, `expo-sharing` 58.0.19.
+  +- iOS, simulator and physical device OS: **not run**. `xcode-select -p` resolves to `/Library/Developer/CommandLineTools`; `xcodebuild` reports that full Xcode is required. `xcrun simctl` and `xcrun devicectl` are unavailable. No iPhone appeared as an attached device during preflight.
+  +- Signing: no local Xcode project/device signing was possible. No Apple credential was requested, entered, stored or uploaded.
+  +
+  +## Gate status
+  +
+  +| Gate | Status | Evidence and outstanding requirement |
+  +| --- | --- | --- |
+  +| A — Native notes | **BLOCKED** | TypeScript and iOS JS export pass; four synthetic contract/editor tests pass. SQLite restart persistence, real note editing, lifecycle UI, duplicate import UX and actual app launch remain unverified because no simulator/iPhone native runtime is available. |
+  +| B — Native audio | **BLOCKED** | `expo-audio` and file/metadata lifecycle are implemented and JS bundle resolves. Permission denial, microphone recording, interrupted recording, playback after relaunch, file export and deletion have not been exercised on iOS. |
+  +| C — Actual iPhone | **BLOCKED** | No Xcode, `devicectl` or attached iPhone. Vietnamese/Japanese hardware keyboard, microphone, installed offline operation, diagnostics and device screenshots are not available. |
+  +
+  +No iOS-native screenshots or diagnostics are included; producing them without a native runtime would misrepresent the evidence. Simulator and physical-iPhone results are not claimed.
+  +
+  +## Verification performed
+  +
+  +All commands ran from the mobile package using synthetic fixtures only:
+  +
+  +| Check | Result |
+  +| --- | --- |
+  +| `npm run expo-check` | PASS — Expo reports dependencies up to date for SDK 58.0.16. |
+  +| `npm run typecheck` | PASS — `tsc --noEmit`. |
+  +| `npm test` | PASS — 4 tests, 4 passed, 0 failed. Tests cover plain paragraph/checklist round-trip, rich/future-schema read-only behavior, Web backup v1 shape/checklist state, malformed/future backup rejection. |
+  +| `npm run export:ios` | PASS — Metro bundled 977 modules and emitted a 3.1 MB Hermes iOS JS bundle. This is a JS export, not an iOS native build or launch. |
+  +| `npm audit --omit=dev --audit-level=high` | FAIL — 23 dependency advisories (8 moderate, 15 high) are present in the Expo/Metro build and config toolchain. Installed vulnerable paths include `braces@3.0.3`, `node-forge@1.4.0` and `uuid@7.0.3`. The `braces` and `node-forge` advisories currently list no patched versions; npm's forced suggestion would downgrade Expo to 44.0.6, so no unsafe bulk downgrade or override was applied. This is a toolchain finding, not evidence that the app itself is remotely exploitable. |
+  +| Web regression suite | NOT RUN — no shared Web files were modified; this spike consumes the existing validator/parser. The shared backup parser is exercised by the mobile synthetic tests. |
+  +| SQLite/native microphone/runtime performance, p50/p95, memory/disk use | NOT MEASURED — no simulator or device/native runtime is installed. |
+  +
+  +The test fixture contains synthetic Vietnamese and Japanese text, note metadata, tags, a pinned note and checked/unchecked checklist items. No user notes or recordings were copied into artifacts.
+  +
+  +## Reproduction and next evidence
+  +
+  +From `spikes/phase-00/gate1/mobile/`, run `npm install`, `npm run expo-check`, `npm run typecheck`, `npm test`, and `npm run export:ios`. To complete blocked checks, install full Xcode with an iOS simulator, or attach an authorized iPhone and use local Xcode Personal Team signing; then follow `mobile/README.md` for prebuild/signing and run the Gate A/B/C flows with synthetic content. Capture genuine simulator/device screenshots and diagnostics at that point.
+  +
+  +## Remaining limits / lead-architect review
+  +
+  +- The native text editor supports plain paragraphs and simple checklist items only; richer schema-v1 notes are safely read-only.
+  +- Gate A, Gate B and Gate C all remain BLOCKED pending native runtime evidence. UI behavior and actual SQLite migrations have not been observed on device.
+  +- An OS kill during audio finalization may leave an orphan recording file; metadata/file operations are not atomic. Background and lock-screen recording are disabled and out of scope.
+  +- Dependency audit needs review before any production/build-service use. The current alerts are in local Expo/Metro/config tooling. The upstream advisories list no patched release for [`braces <= 3.0.3`](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm) and [`node-forge <= 1.4.0`](https://github.com/advisories/GHSA-86w9-cpqp-85rv); the moderate [`uuid@7.0.3`](https://github.com/advisories/GHSA-w5hq-g745-h8pq) path is through `xcode` config tooling. Recheck upstream and Expo's dependency tree during the Xcode validation session.
+  +- There are no iOS screenshots in this handoff. Do not infer visual or hardware behavior from the JS bundle.
+  +- Expo SDK 58.0.16 is pinned. The host lacks Xcode, so native dependency compilation and Personal Team signing still need validation on an Xcode-equipped Mac.
+  +
+  +## Git delivery
+  +
+  +Implementation commit: `adf9bb946eb54f27f1653d1f0ac63572989156c5` (`feat(mvp04): add native iPhone prototype spike`). The review bundle is prepared as a separate handoff artifact. Existing unrelated Phase 00 working-tree changes and previous review artifacts are preserved and excluded from the implementation commit.
+  +65 -0
+
+spikes/phase-00/gate1/mobile/App.tsx
+  @@ -1,48 +1,211 @@
+  -import React, { useEffect, useState } from 'react';
+  -import { Button, SafeAreaView, Text, View } from 'react-native';
+  -import { column, PowerSyncDatabase, Schema, Table } from '@powersync/react-native';
+  -import { Database, Model, appSchema, tableSchema } from '@nozbe/watermelondb';
+  -import SQLiteAdapter from '@nozbe/watermelondb/adapters/sqlite';
+  -import { field } from '@nozbe/watermelondb/decorators';
+  +import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+  +import { Alert, AppState, Button, FlatList, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+  +import { NavigationContainer } from '@react-navigation/native';
+  +import { createNativeStackNavigator } from '@react-navigation/native-stack';
+  +import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+  +import { AudioModule, RecordingPresets, setAudioModeAsync, useAudioPlayer, useAudioRecorder, useAudioRecorderState } from 'expo-audio';
+  +import { File, Paths } from 'expo-file-system';
+  +import * as DocumentPicker from 'expo-document-picker';
+  +import * as Sharing from 'expo-sharing';
+  +import { makeBackup, parseBackup, filterNotes } from '../web/app/lib/mvp-utils.mjs';
+  +import { createEmptyCanonicalDocument } from '../web/packages/document-engine/src/plain-text.js';
+  +import { documentToNativeModel, nativeModelToDocument } from './document-subset';
+  +import { createNote, exportNotes, getNote, importNotes, listNotes, listRecordings, Note, permanentlyDeleteNote, Recording, removeRecording, renameRecording, RevisionConflictError, saveNote, saveRecording, setLifecycle } from './store';
+   
+  -const localOnly = new Schema({ notes: new Table({ title: column.text, body: column.text, privacy: column.text, dataset_id: column.text }, { localOnly: true }) });
+  -const wmSchema = appSchema({ version: 1, tables: [tableSchema({ name: 'notes', columns: [
+  -  { name: 'title', type: 'string' }, { name: 'body', type: 'string' }, { name: 'privacy', type: 'string' }, { name: 'dataset_id', type: 'string' },
+  -] })] });
+  -class Note extends Model { static table = 'notes'; @field('title') title!: string; @field('body') body!: string; @field('privacy') privacy!: string; @field('dataset_id') datasetId!: string; }
+  +type RootStack = { Home: undefined; Editor: { id: string } };
+  +const Stack = createNativeStackNavigator<RootStack>();
+  +const makeId = () => `note-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+  +const timeNow = () => Date.now();
+   
+  -export default function App() {
+  -  const [candidate, setCandidate] = useState<'powersync' | 'watermelon'>('powersync');
+  -  const [instance, setInstance] = useState<PowerSyncDatabase | Database | null>(null);
+  -  const [row, setRow] = useState<any>(null); const [status, setStatus] = useState('starting');
+  -  async function open() {
+  -    if (candidate === 'powersync') {
+  -      const db = new PowerSyncDatabase({ schema: localOnly, database: { dbFilename: 'noteos-gate1-powersync.db' } });
+  -      await db.init(); setInstance(db); setStatus('PowerSync native SQLite open');
+  -      const rows = await db.getAll('SELECT * FROM notes'); setRow(rows[0] ?? null); return;
+  -    }
+  -    const adapter = new SQLiteAdapter({ schema: wmSchema, dbName: 'noteos-gate1-watermelon', jsi: false });
+  -    const db = new Database({ adapter, modelClasses: [Note] }); setInstance(db); setStatus('Watermelon native SQLite open');
+  -    const rows = await db.get<Note>('notes').query().fetch(); setRow(rows[0]?._raw ?? null);
+  -  }
+  -  useEffect(() => { void open().catch(error => setStatus(`BLOCKED: ${String(error)}`)); }, [candidate]);
+  +function HomeScreen({ navigation }: any) {
+  +  const [notes, setNotes] = useState<Note[]>([]); const [query, setQuery] = useState('');
+  +  const [lifecycle, setLifecycleFilter] = useState<'active' | 'archived' | 'trashed'>('active'); const [status, setStatus] = useState('');
+  +  const refresh = useCallback(async () => { setNotes(await listNotes()); }, []);
+  +  useEffect(() => { void refresh().catch(error => setStatus(String(error))); }, [refresh]);
+  +  useEffect(() => { const unsubscribe = navigation.addListener('focus', () => { void refresh(); }); return unsubscribe; }, [navigation, refresh]);
+  +  const visible = useMemo(() => filterNotes(notes, query, lifecycle) as Note[], [notes, query, lifecycle]);
+     async function create() {
+  -    if (!instance) return;
+  -    const id = `gate1-${Date.now()}`; const title = `Native persistence ${candidate}`;
+  -    const body = JSON.stringify({ schemaVersion: 1, type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Offline native smoke note.' }] }] });
+  -    if (candidate === 'powersync') {
+  -      const db = instance as PowerSyncDatabase;
+  -      await db.execute('INSERT INTO notes (id,title,body,privacy,dataset_id) VALUES (?,?,?,?,?)', [id, title, body, 'DEVICE_ONLY', 'phase00-gate1-v1']);
+  -      setRow((await db.getAll('SELECT * FROM notes WHERE id=?', [id]))[0]);
+  -    } else {
+  -      const db = instance as Database;
+  -      await db.write(async () => db.get<Note>('notes').create(note => { note._raw.id = id; note.title = title; note.body = body; note.privacy = 'DEVICE_ONLY'; note.datasetId = 'phase00-gate1-v1'; }));
+  -      setRow((await db.get<Note>('notes').find(id))._raw);
+  -    }
+  -    setStatus('created in candidate native adapter; restart the app to verify persistence');
+  -  }
+  -  return <SafeAreaView style={{ padding: 24, gap: 12 }}><Text style={{ fontSize: 22 }}>noteOS Gate 1 native adapter smoke test</Text>
+  -    <View style={{ flexDirection: 'row', gap: 8 }}><Button title="PowerSync" onPress={() => { setCandidate('powersync'); setInstance(null); }} /><Button title="WatermelonDB" onPress={() => { setCandidate('watermelon'); setInstance(null); }} /></View>
+  -    <Text>{status}</Text><Button title="Create DEVICE_ONLY note" onPress={() => void create()} /><Text selectable>{row ? JSON.stringify(row) : 'No local note loaded'}</Text>
+  +    const now = timeNow();
+  +    const note: Note = { id: makeId(), title: 'Untitled note', document: createEmptyCanonicalDocument(), schemaVersion: 1, createdAt: now, updatedAt: now, lifecycle: 'active', revision: 0, pinned: false, tags: [] };
+  +    try { await createNote(note); navigation.navigate('Editor', { id: note.id }); } catch (error) { setStatus(String(error)); }
+  +  }
+  +  async function backupExport() {
+  +    try {
+  +      const data = makeBackup(await exportNotes());
+  +      const file = new File(Paths.cache, `noteos-backup-${new Date().toISOString().slice(0, 10)}.json`);
+  +      if (file.exists) file.delete(); file.create(); await file.write(JSON.stringify(data, null, 2));
+  +      if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(file.uri, { mimeType: 'application/json', dialogTitle: 'Export noteOS notes backup' });
+  +      else setStatus(`Backup prepared at ${file.uri}; sharing is unavailable on this device.`);
+  +    } catch (error) { setStatus(error instanceof Error ? error.message : 'Could not export notes.'); }
+  +  }
+  +  async function backupImport() {
+  +    try {
+  +      const picked = await DocumentPicker.getDocumentAsync({ type: ['application/json', 'text/json'], copyToCacheDirectory: true });
+  +      if (picked.canceled) return;
+  +      const text = new File(picked.assets[0].uri).textSync();
+  +      const bundle = parseBackup(text);
+  +      await importNotes(bundle.notes as Note[]); await refresh(); setStatus(`Imported ${bundle.notes.length} notes. Audio is not part of this backup.`);
+  +    } catch (error) { setStatus(error instanceof Error ? error.message : 'Could not import this backup.'); }
+  +  }
+  +  async function changeLifecycle(note: Note, next: 'active' | 'archived' | 'trashed') {
+  +    try { await setLifecycle(note.id, next, note.revision); await refresh(); }
+  +    catch (error) { setStatus(error instanceof Error ? error.message : 'Could not update note.'); }
+  +  }
+  +  function deleteForever(note: Note) {
+  +    Alert.alert('Delete permanently?', `“${note.title || 'Untitled note'}” and its local recordings will be removed from this device. Notes backup does not include audio.`, [
+  +      { text: 'Cancel', style: 'cancel' },
+  +      { text: 'Delete', style: 'destructive', onPress: () => { void (async () => {
+  ... (152 lines truncated)
+  +206 -43
+
+spikes/phase-00/gate1/mobile/README.md
+  @@ -0,0 +1,34 @@
+  +# noteOS MVP-04 iPhone prototype (Phase 00 spike)
+  +
+  +This is an isolated Expo application under the Phase 00 validation spike. It is not the production noteOS app and does not modify the Web database.
+  +
+  +## Local setup
+  +
+  +Requirements: Node.js 24, npm, full Xcode with iOS platform support, and an iPhone or iOS Simulator. SDK 58 currently uses a development build; Expo Go support is not assumed.
+  +
+  +```sh
+  +npm install
+  +npm run expo-check
+  +npm run start
+  +```
+  +
+  +For a simulator or attached iPhone, use a local Xcode Personal Team if available. Generate the native project with `npx expo prebuild --platform ios`, open the generated `.xcodeproj` under `ios/` in Xcode, select the Personal Team for the app target, and follow Xcode's local signing, device trust, and Developer Mode prompts. Then use `npm run ios`. No Apple credentials belong in this repository. Microphone access is requested only when Record is tapped.
+  +
+  +## Prototype boundaries
+  +
+  +- SQLite stores the complete note record and canonical document JSON. Writes compare the expected revision in one SQL `UPDATE`; imports are all-or-nothing on duplicate IDs.
+  +- Shared Web canonical validation and `noteos.local-backup` v1 parser are imported from `../web`. Unknown/future documents remain readable and read-only.
+  +- Native editing is limited to plain paragraphs and a single-level task list with plain text. Other valid schema-v1 rich-text structures stay read-only.
+  +- Audio uses `expo-audio` with the app document directory selected, then verifies the finalized file before inserting `complete` metadata. If the app backgrounds while recording, it tries to stop and records an `interrupted` item. SQLite metadata and audio bytes are separate writes; abrupt termination can still require recovery.
+  +- Notes backup contains no audio. Audio is shared separately.
+  +
+  +## Available checks
+  +
+  +```sh
+  +npm run expo-check
+  +npm run typecheck
+  +npm test
+  +npm run export:ios
+  +```
+  +
+  +The JS export does not build or launch iOS native code. Mark app installation, persistence across app restart, microphone behavior, device screenshots and hardware flows BLOCKED until Xcode and a simulator or physical iPhone are available.
+  +34 -0
+
+spikes/phase-00/gate1/mobile/app.json
+  @@ -1,11 +1,16 @@
+  -    "name": "noteOS Gate 1",
+  -    "slug": "noteos-gate1",
+  -    "scheme": "noteos-gate1",
+  -    "version": "0.0.1",
+  +    "name": "noteOS MVP-04 Prototype",
+  +    "slug": "noteos-mvp04-prototype",
+  +    "scheme": "noteos",
+  +    "version": "0.4.0",
+       "newArchEnabled": true,
+  -    "ios": { "bundleIdentifier": "local.noteos.gate1", "supportsTablet": true },
+  -    "plugins": ["expo-dev-client", "@morrowdigital/watermelondb-expo-plugin"]
+  +    "platforms": ["ios"],
+  +    "ios": { "bundleIdentifier": "local.noteos.mvp04", "supportsTablet": false },
+  +    "plugins": [
+  +      "expo-dev-client",
+  +      ["expo-audio", { "microphonePermission": "Allow noteOS to record audio for notes stored on this device.", "enableBackgroundRecording": false, "enableBackgroundPlayback": false }],
+  +      ["expo-file-system", { "enableFileSharing": true, "supportsOpeningDocumentsInPlace": false }]
+  +    ]
+     }
+   }
+  +11 -6
+
+spikes/phase-00/gate1/mobile/document-subset.ts
+  @@ -0,0 +1,58 @@
+  +import { validateCanonicalDocument } from '../web/packages/document-engine/src/index.js';
+  +
+  +export type CanonicalDocument = { schemaVersion: number; type: 'doc'; content: any[]; [key: string]: any };
+  +
+  +function plainText(node: any): string | null {
+  +  if (!node || typeof node !== 'object') return null;
+  +  if (node.type === 'text' && typeof node.text === 'string' && !/[\r\n]/u.test(node.text) && !node.marks && Object.keys(node).every(k => ['type', 'text'].includes(k))) return node.text;
+  +  return null;
+  +}
+  +
+  +function paragraphText(node: any): string | null {
+  +  if (!node || node.type !== 'paragraph' || (node.attrs && Object.keys(node.attrs).length) || Object.keys(node).some(k => !['type', 'content'].includes(k))) return null;
+  +  if (!Array.isArray(node.content)) return '';
+  +  let output = '';
+  +  for (const item of node.content) {
+  +    const text = plainText(item);
+  +    if (text === null) return null;
+  +    output += text;
+  +  }
+  +  return output;
+  +}
+  +
+  +export function documentToNativeModel(document: CanonicalDocument): { editable: boolean; reason?: string; paragraphs: string[]; tasks: { text: string; checked: boolean }[] } {
+  +  const validation = validateCanonicalDocument(document);
+  +  if (validation.status !== 'supported') return { editable: false, reason: validation.issues?.[0]?.message ?? 'Unknown schema; preserved read-only.', paragraphs: [], tasks: [] };
+  +  if (document.schemaVersion !== 1 || document.type !== 'doc' || Object.keys(document).some(k => !['schemaVersion', 'type', 'content'].includes(k))) return { editable: false, reason: 'Document wrapper is outside the native editor subset.', paragraphs: [], tasks: [] };
+  +  const paragraphs: string[] = [], tasks: { text: string; checked: boolean }[] = [];
+  +  let seenTasks = false;
+  +  for (const block of document.content) {
+  +    if (block.type === 'paragraph' && !seenTasks) {
+  +      const text = paragraphText(block);
+  +      if (text === null) return { editable: false, reason: 'Rich text or paragraph attributes are preserved read-only.', paragraphs: [], tasks: [] };
+  +      paragraphs.push(text);
+  +      continue;
+  +    }
+  +    if (block.type === 'taskList' && !seenTasks && Object.keys(block).every(k => ['type', 'content'].includes(k)) && Array.isArray(block.content)) {
+  +      seenTasks = true;
+  +      for (const item of block.content) {
+  +        if (item.type !== 'taskItem' || typeof item.attrs?.checked !== 'boolean' || Object.keys(item).some(k => !['type', 'attrs', 'content'].includes(k)) || Object.keys(item.attrs).some(k => k !== 'checked') || !Array.isArray(item.content) || item.content.length !== 1) return { editable: false, reason: 'Nested or decorated checklist content is preserved read-only.', paragraphs: [], tasks: [] };
+  +        const text = paragraphText(item.content[0]);
+  +        if (text === null) return { editable: false, reason: 'Rich checklist content is preserved read-only.', paragraphs: [], tasks: [] };
+  +        tasks.push({ text, checked: item.attrs.checked });
+  +      }
+  +      continue;
+  +    }
+  +    return { editable: false, reason: 'This canonical structure is outside the native editor subset and is preserved read-only.', paragraphs: [], tasks: [] };
+  +  }
+  +  return { editable: true, paragraphs, tasks };
+  +}
+  +
+  +export function nativeModelToDocument(paragraphs: string[], tasks: { text: string; checked: boolean }[]): CanonicalDocument {
+  +  const content: any[] = paragraphs.map(text => ({ type: 'paragraph', ...(text.length ? { content: [{ type: 'text', text }] } : {}) }));
+  +  if (tasks.length) content.push({ type: 'taskList', content: tasks.map(task => ({ type: 'taskItem', attrs: { checked: task.checked }, content: [{ type: 'paragraph', ...(task.text.length ? { content: [{ type: 'text', text: task.text }] } : {}) }] })) });
+  +  const document = { schemaVersion: 1, type: 'doc' as const, content };
+  +  const validation = validateCanonicalDocument(document);
+  +  if (validation.status !== 'supported') throw new Error(validation.issues?.[0]?.message ?? 'The edited document failed canonical validation.');
+  +  return document;
+  +}
+  +58 -0
+
+spikes/phase-00/gate1/mobile/metro.config.js
+  @@ -0,0 +1,7 @@
+  +const path = require('node:path');
+  +const { getDefaultConfig } = require('expo/metro-config');
+  +
+  +const config = getDefaultConfig(__dirname);
+  +config.watchFolders = [path.resolve(__dirname, '..')];
+  +config.resolver.sourceExts = [...new Set([...config.resolver.sourceExts, 'mjs'])];
+  +module.exports = config;
+  +7 -0
+
+spikes/phase-00/gate1/mobile/package-lock.json
+  @@ -0,0 +1,7181 @@
+  +{
+  +  "name": "noteos-mvp04-ios-prototype",
+  +  "lockfileVersion": 3,
+  +  "requires": true,
+  +  "packages": {
+  +    "": {
+  +      "name": "noteos-mvp04-ios-prototype",
+  +      "dependencies": {
+  +        "@react-navigation/native": "^7.1.28",
+  +        "@react-navigation/native-stack": "^7.11.0",
+  +        "@tiptap/core": "3.32.0",
+  +        "@tiptap/extension-document": "3.32.0",
+  +        "@tiptap/extension-list": "3.32.0",
+  +        "@tiptap/starter-kit": "3.32.0",
+  +        "expo": "~58.0.16",
+  +        "expo-audio": "~58.0.9",
+  +        "expo-dev-client": "~58.0.14",
+  +        "expo-document-picker": "~58.0.4",
+  +        "expo-file-system": "~58.0.10",
+  +        "expo-sharing": "~58.0.19",
+  +        "expo-sqlite": "~58.0.13",
+  +        "react": "19.3.0",
+  +        "react-native": "0.88.0",
+  +        "react-native-safe-area-context": "~5.10.1",
+  +        "react-native-screens": "~4.30.0"
+  +      },
+  +      "devDependencies": {
+  +        "@types/react": "~19.3.0",
+  +        "typescript": "~6.0.3"
+  +      }
+  +    },
+  +    "node_modules/@babel/code-frame": {
+  +      "version": "7.29.7",
+  +      "resolved": "https://registry.npmjs.org/@babel/code-frame/-/code-frame-7.29.7.tgz",
+  +      "integrity": "sha512-Aup7aUOfpbAUg2ROOJN6Iw5f9DMBlzu0mIkm/malLQFN/YQgO48wCj0Kxa3sEHJvPVFg7siR+qRInwXd2qhQKw==",
+  +      "license": "MIT",
+  +      "dependencies": {
+  +        "@babel/helper-validator-identifier": "^7.29.7",
+  +        "js-tokens": "^4.0.0",
+  +        "picocolors": "^1.1.1"
+  +      },
+  +      "engines": {
+  +        "node": ">=6.9.0"
+  +      }
+  +    },
+  +    "node_modules/@babel/compat-data": {
+  +      "version": "7.29.7",
+  +      "resolved": "https://registry.npmjs.org/@babel/compat-data/-/compat-data-7.29.7.tgz",
+  +      "integrity": "sha512-locTkQyKvwIEgBzVrn8693ebc97F2U8ZHjbXwDXJ5Fn2TCpNwTlKcaKLkdHop5c/icOFE7qt7Q9JC5hnKNa6Gg==",
+  +      "license": "MIT",
+  +      "engines": {
+  +        "node": ">=6.9.0"
+  +      }
+  +    },
+  +    "node_modules/@babel/core": {
+  +      "version": "7.29.7",
+  +      "resolved": "https://registry.npmjs.org/@babel/core/-/core-7.29.7.tgz",
+  +      "integrity": "sha512-RgHBCvtjbOK2gXSNBNIkNoEc9qoVEtau3hj8gEqKQuL3HZAibKarWFEI3Lfm6EYKkLalOh8eSrj9b+ch9H/VBA==",
+  +      "license": "MIT",
+  +      "dependencies": {
+  +        "@babel/code-frame": "^7.29.7",
+  +        "@babel/generator": "^7.29.7",
+  +        "@babel/helper-compilation-targets": "^7.29.7",
+  +        "@babel/helper-module-transforms": "^7.29.7",
+  +        "@babel/helpers": "^7.29.7",
+  +        "@babel/parser": "^7.29.7",
+  +        "@babel/template": "^7.29.7",
+  +        "@babel/traverse": "^7.29.7",
+  +        "@babel/types": "^7.29.7",
+  +        "@jridgewell/remapping": "^2.3.5",
+  +        "convert-source-map": "^2.0.0",
+  +        "debug": "^4.1.0",
+  +        "gensync": "^1.0.0-beta.2",
+  +        "json5": "^2.2.3",
+  +        "semver": "^6.3.1"
+  +      },
+  +      "engines": {
+  +        "node": ">=6.9.0"
+  +      },
+  +      "funding": {
+  +        "type": "opencollective",
+  +        "url": "https://opencollective.com/babel"
+  +      }
+  +    },
+  +    "node_modules/@babel/core/node_modules/semver": {
+  +      "version": "6.3.1",
+  +      "resolved": "https://registry.npmjs.org/semver/-/semver-6.3.1.tgz",
+  +      "integrity": "sha512-BR7VvDCVHO+q2xBEWskxS6DJE1qRnb7DxzUrogb71CWoSficBxYsiAGd+Kl0mmq/MprG9yArRkyrQxTO6XjMzA==",
+  +      "license": "ISC",
+  +      "bin": {
+  +        "semver": "bin/semver.js"
+  +      }
+  +    },
+  +    "node_modules/@babel/generator": {
+  +      "version": "7.29.8",
+  +      "resolved": "https://registry.npmjs.org/@babel/generator/-/generator-7.29.8.tgz",
+  +      "integrity": "sha512-gZbepsdh3WDtgZKWL+vTPh71LSBrm/Y4/QDZBVCcYfmeTEEuoOYwlSy+G1StfJg+/Zy550u/3TATbm7qDbbMtg==",
+  +      "license": "MIT",
+  +      "dependencies": {
+  +        "@babel/parser": "^7.29.8",
+  ... (7081 lines truncated)
+  +7181 -0
+
+spikes/phase-00/gate1/mobile/package.json
+  @@ -1,16 +1,37 @@
+  -  "name": "noteos-gate1-ios",
+  +  "name": "noteos-mvp04-ios-prototype",
+     "private": true,
+     "main": "node_modules/expo/AppEntry.js",
+  -  "scripts": { "start": "expo start", "prebuild:ios": "expo prebuild --platform ios" },
+  +  "scripts": {
+  +    "start": "expo start --dev-client",
+  +    "ios": "expo run:ios",
+  +    "export:ios": "expo export --platform ios",
+  +    "expo-check": "expo install --check",
+  +    "expo-fix": "expo install --fix",
+  +    "test": "node --experimental-strip-types --test tests/*.test.mjs",
+  +    "typecheck": "tsc --noEmit"
+  +  },
+     "dependencies": {
+  -    "@morrowdigital/watermelondb-expo-plugin": "2.3.3",
+  -    "@nozbe/watermelondb": "0.28.0",
+  -    "@op-engineering/op-sqlite": "18.2.5",
+  -    "@powersync/react-native": "2.3.3",
+  -    "expo": "57.0.30",
+  -    "expo-dev-client": "7.0.20",
+  -    "react": "19.2.3",
+  -    "react-native": "0.86.0"
+  +    "@react-navigation/native": "^7.1.28",
+  +    "@react-navigation/native-stack": "^7.11.0",
+  +    "@tiptap/core": "3.32.0",
+  +    "@tiptap/extension-document": "3.32.0",
+  +    "@tiptap/extension-list": "3.32.0",
+  +    "@tiptap/starter-kit": "3.32.0",
+  +    "expo": "~58.0.16",
+  +    "expo-audio": "~58.0.9",
+  +    "expo-dev-client": "~58.0.14",
+  +    "expo-document-picker": "~58.0.4",
+  +    "expo-file-system": "~58.0.10",
+  +    "expo-sharing": "~58.0.19",
+  +    "expo-sqlite": "~58.0.13",
+  +    "react": "19.3.0",
+  +    "react-native": "0.88.0",
+  +    "react-native-safe-area-context": "~5.10.1",
+  +    "react-native-screens": "~4.30.0"
+  +  },
+  +  "devDependencies": {
+  +    "@types/react": "~19.3.0",
+  +    "typescript": "~6.0.3"
+     }
+   }
+  +31 -10
+
+spikes/phase-00/gate1/mobile/store.ts
+  @@ -0,0 +1,112 @@
+  +import * as SQLite from 'expo-sqlite';
+  +import { assertNoteRecord } from '../web/app/lib/note-validation.mjs';
+  +
+  +export type Lifecycle = 'active' | 'archived' | 'trashed';
+  +export type Note = {
+  +  id: string; title: string; document: any; schemaVersion: number; createdAt: number; updatedAt: number;
+  +  lifecycle: Lifecycle; revision: number; pinned: boolean; tags: string[];
+  +};
+  +
+  +let databasePromise: Promise<SQLite.SQLiteDatabase> | undefined;
+  +export function database() {
+  +  databasePromise ??= SQLite.openDatabaseAsync('noteos-mvp04.db').then(async db => {
+  +    await db.execAsync('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;');
+  +    const version = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
+  +    if ((version?.user_version ?? 0) < 1) {
+  +      await db.withTransactionAsync(async () => {
+  +        await db.execAsync(`CREATE TABLE IF NOT EXISTS notes (
+  +          id TEXT PRIMARY KEY NOT NULL,
+  +          record_json TEXT NOT NULL,
+  +          revision INTEGER NOT NULL,
+  +          lifecycle TEXT NOT NULL CHECK(lifecycle IN ('active','archived','trashed')),
+  +          updated_at INTEGER NOT NULL
+  +        );
+  +        CREATE INDEX IF NOT EXISTS notes_lifecycle_updated ON notes(lifecycle, updated_at DESC);
+  +        CREATE TABLE IF NOT EXISTS recordings (
+
+... (more changes truncated)
+  +25 -0
+[full diff: rtk git diff --no-compact]

@@ -430,7 +430,7 @@ npm run expo-check
 npm run start
 ```
 
-For a simulator or attached iPhone, use a local Xcode Personal Team if available. Generate the native project with `npx expo prebuild --platform ios`, open `ios/noteOS.xcodeproj` in Xcode, select the Personal Team for the app target, and follow Xcode's local signing, device trust, and Developer Mode prompts. Then use `npm run ios`. No Apple credentials belong in this repository. Microphone access is requested only when Record is tapped.
+For a simulator or attached iPhone, use a local Xcode Personal Team if available. Generate the native project with `npx expo prebuild --platform ios`, open the generated `.xcodeproj` under `ios/` in Xcode, select the Personal Team for the app target, and follow Xcode's local signing, device trust, and Developer Mode prompts. Then use `npm run ios`. No Apple credentials belong in this repository. Microphone access is requested only when Record is tapped.
 
 ## Prototype boundaries
 
