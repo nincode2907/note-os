@@ -17,7 +17,8 @@ SQLite and the filesystem do not share an atomic transaction. Note/audio metadat
 | Note permanent deletion | Requires expected revision and `trashed`; exclusive transaction collects URIs, enqueues cleanup, removes recordings and revision-guarded note row. | Source review + TypeScript PASS. Native SQLite rollback, stale revision, non-trashed, cascade and crash-in-between tests BLOCKED. |
 | Individual audio deletion | Removes recording metadata and queues URI in exclusive SQLite transaction before touching file. | Source review + TypeScript PASS. Native failure/interruption test BLOCKED. |
 | SQLite transaction safety | Import and multi-step mutations use `withExclusiveTransactionAsync`; all transactional reads/writes use callback `txn`; schema v2 adds journal/cleanup tables without dropping existing tables. | TypeScript PASS, Expo SDK check PASS. Expo SQLite native concurrency, duplicate rollback, concurrent import/save and `SQLITE_BUSY` tests BLOCKED. Migration execution against an existing device database BLOCKED. |
-| Recovery draft journal | Version 1 draft stores base revision, title, canonical body/checklist, tags text and pin; 500 ms debounce, latest-wins serialized writer and best-effort AppState flush. Restore is offered only for the same active schema-v1 revision; stale draft is preserved until explicit discard. Successful save clears the matching journal in the same SQLite transaction. | Pure helper tests PASS. Native remount, actual journal persistence, DB save failure and clear-after-commit tests BLOCKED. A keystroke within the debounce window, a terminated process, or an unresolved async write can still be lost; background flush is best effort. |
+| Recovery draft journal | Version 1 draft stores base revision, title, canonical body/checklist, tags text and pin; 500 ms debounce, latest-wins serialized writer and best-effort AppState flush. Restore is offered only for the same active schema-v1 revision; stale draft is preserved until explicit discard. A successful note commit is followed by a matching-revision journal clear in a second transaction. Explicit Discard cancels the debounce, settles the writer, then deletes only the current note/revision journal; failures keep the editor open and surface an error. | Pure helper tests PASS, including discard/write races and commit-before-clear ordering. Expo SQLite transaction behavior remains BLOCKED. A keystroke within the debounce window, a terminated process, or an unresolved async write can still be lost; background flush is best effort. |
+| Native note editability | Native body editing is limited to active schema-v1 notes with supported native content. Archived and trashed notes show a Restore instruction and remain read-only. `saveNote()` repeats schema/lifecycle checks and revision CAS inside an exclusive SQLite transaction. | Pure policy tests PASS for active/archive/trash. Native SQLite enforcement, restore UI, and future-schema preservation through real DB operations remain BLOCKED. |
 | Pin/tag/search parity | Shared `sortNotes`, `filterNotes` and `normalizeTagList`; synchronous pending-pin lock; pin increments metadata revision but leaves `updatedAt` unchanged; pin supports valid schema-v1 rich-text documents. Invalid duplicate tags fail save while the recovery draft preserves the unsaved editor state. | Helper tests PASS; no native UI validation. |
 | Legacy Web v1 backup defaults | View model supplies `pinned=false` and `tags=[]`; storage read does not update the imported raw record. | Regression test PASS for view defaults and unchanged input object. Native import/render not exercised. |
 | Lifecycle/audio hardening | Rejects trashed→archived; lifecycle updates retain canonical document data; rename rejection is caught; player mounts only for selected audio; missing/empty audio is checked before play/share. | Source review + TypeScript PASS. Native lifecycle/player/file behavior BLOCKED. |
@@ -31,7 +32,7 @@ Environment: macOS 15.7.7 (24G720), Node 24.21.0, npm 11.19.0, Expo 58.0.16, exp
 |---|---|
 | `npm run expo-check` | PASS — dependencies up to date |
 | `npm run typecheck` | PASS — `tsc --noEmit` |
-| `npm test` | PASS — 11 tests, 0 failures |
+| `npm test` | PASS — 17 tests, 0 failures |
 | `npm run export:ios` | PASS — JS export only; 978 modules, 3.1 MB iOS bundle |
 | `git diff --check` | PASS |
 | `npm audit` | FAIL — 23 findings: 15 high, 8 moderate, 0 critical |
@@ -53,6 +54,8 @@ The count is package-graph based; the advisories above are not evidence that the
 Advisories: [braces GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm), [node-forge GHSA-86w9-cpqp-85rv](https://github.com/advisories/GHSA-86w9-cpqp-85rv), [uuid GHSA-w5hq-g745-h8pq](https://github.com/advisories/GHSA-w5hq-g745-h8pq).
 
 ## Native validation checklist — BLOCKED
+
+See [MVP-04.1 final corrections and readiness](mvp04.1-final-corrections-readiness.md) for the F-04.1-A/B regression evidence and read-only Mac/Xcode/backup preflight. The additional source-only tests do not change native Gate A/B/C status.
 
 Run on an Xcode simulator and a real iPhone before treating MVP-04.1 native behavior as validated:
 

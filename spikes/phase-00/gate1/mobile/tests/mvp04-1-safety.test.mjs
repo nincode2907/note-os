@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { canTransitionLifecycle, LatestDraftWriter, normalizeNoteView, recoveryDecision, RecordingSessionGate } from '../mobile-safety.mjs';
+import { canEditNativeNote, canTransitionLifecycle, commitThenClearDraft, discardDraftSafely, LatestDraftWriter, normalizeNoteView, recoveryDecision, RecordingSessionGate } from '../mobile-safety.mjs';
 import { normalizeTagList, sortNotes } from '../../web/app/lib/mvp-utils.mjs';
 
 test('recording gate locks double start/stop and navigation until verified persistence finishes', () => {
@@ -63,6 +63,65 @@ test('draft writer serializes overlapping edits and leaves the newest snapshot l
   release();
   await first;
   assert.deepEqual(writes, ['first', 'latest']);
+});
+
+test('normal edit then explicit discard leaves no journal when the editor is reopened', async () => {
+  const journal = new Map();
+  const writer = new LatestDraftWriter(async entry => journal.set(entry.noteId, entry));
+  await discardDraftSafely({ cancelDebounce() {}, writer, noteId: 'n1', expectedRevision: 2, deleteJournal: async (id, revision) => { if (journal.get(id)?.baseRevision === revision) journal.delete(id); } });
+  assert.equal(journal.has('n1'), false);
+  assert.equal(journal.get('n1') ?? null, null);
+});
+
+test('discard waits for an in-flight journal write, deletes it, and cannot recreate it', async () => {
+  const journal = new Map(); const order = [];
+  let started; const startedPromise = new Promise(resolve => { started = resolve; });
+  let release; const gate = new Promise(resolve => { release = resolve; });
+  const writer = new LatestDraftWriter(async entry => { started(); await gate; journal.set(entry.noteId, entry); order.push('write-settled'); });
+  writer.enqueue({ noteId: 'n2', baseRevision: 4 });
+  const pendingWrite = writer.flush(); await startedPromise;
+  const discard = discardDraftSafely({ cancelDebounce() { order.push('debounce-cancelled'); }, writer, noteId: 'n2', expectedRevision: 4, deleteJournal: async (id, revision) => { order.push('delete'); if (journal.get(id)?.baseRevision === revision) journal.delete(id); } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(order.includes('delete'), false);
+  release(); await Promise.all([pendingWrite, discard]);
+  assert.deepEqual(order, ['debounce-cancelled', 'write-settled', 'delete']);
+  await writer.flush();
+  assert.equal(journal.has('n2'), false);
+});
+
+test('discard does not delete a journal from another revision and reopens the writer on failure', async () => {
+  const journal = new Map([['n3', { noteId: 'n3', baseRevision: 8 }]]);
+  const writer = new LatestDraftWriter(async entry => journal.set(entry.noteId, entry));
+  await assert.rejects(discardDraftSafely({ cancelDebounce() {}, writer, noteId: 'n3', expectedRevision: 9, deleteJournal: async (id, revision) => { if (journal.get(id)?.baseRevision !== revision) throw new Error('revision mismatch'); journal.delete(id); } }), /revision mismatch/);
+  assert.equal(journal.get('n3').baseRevision, 8);
+  writer.enqueue({ noteId: 'n3', baseRevision: 9 });
+  await writer.flush();
+  assert.equal(journal.get('n3').baseRevision, 9);
+});
+
+test('Keep Editing leaves unsaved text in the journal', async () => {
+  const journal = new Map();
+  const writer = new LatestDraftWriter(async entry => journal.set(entry.noteId, entry));
+  writer.enqueue({ noteId: 'n4', baseRevision: 1, text: 'still editing' });
+  await writer.flush();
+  assert.equal(journal.get('n4').text, 'still editing');
+});
+
+test('journal clear runs only after note commit succeeds', async () => {
+  const events = [];
+  await assert.rejects(commitThenClearDraft(async () => { events.push('commit'); throw new Error('commit failed'); }, async () => events.push('clear')), /commit failed/);
+  assert.deepEqual(events, ['commit']);
+  const result = await commitThenClearDraft(async () => { events.push('commit-ok'); return 'saved'; }, async () => { events.push('clear-after-commit'); });
+  assert.equal(result.result, 'saved');
+  assert.deepEqual(events.slice(1), ['commit-ok', 'clear-after-commit']);
+});
+
+test('native editing policy permits only active schema-v1 notes with supported native content', () => {
+  assert.equal(canEditNativeNote({ lifecycle: 'active', schemaVersion: 1 }, true), true);
+  assert.equal(canEditNativeNote({ lifecycle: 'archived', schemaVersion: 1 }, true), false);
+  assert.equal(canEditNativeNote({ lifecycle: 'trashed', schemaVersion: 1 }, true), false);
+  assert.equal(canEditNativeNote({ lifecycle: 'active', schemaVersion: 2 }, true), false);
+  assert.equal(canEditNativeNote({ lifecycle: 'active', schemaVersion: 1 }, false), false);
 });
 
 test('shared tag normalization rejects duplicates instead of silently dropping one', () => {

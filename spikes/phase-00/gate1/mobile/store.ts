@@ -1,7 +1,7 @@
 import * as SQLite from 'expo-sqlite';
 import { assertNoteRecord, validateNoteDocument } from '../web/app/lib/note-validation.mjs';
 import { normalizeTagList } from '../web/app/lib/note-organization.mjs';
-import { canTransitionLifecycle } from './mobile-safety.mjs';
+import { canTransitionLifecycle, commitThenClearDraft } from './mobile-safety.mjs';
 
 export type Lifecycle = 'active' | 'archived' | 'trashed';
 export type Note = { id: string; title: string; document: any; schemaVersion: number; createdAt: number; updatedAt: number; lifecycle: Lifecycle; revision: number; pinned: boolean; tags: string[]; [key: string]: any };
@@ -48,10 +48,33 @@ export async function exportNotes(): Promise<Note[]> { return listNotes(); }
 export async function listRecordings(noteId: string): Promise<Recording[]> { const database = await db(); return database.getAllAsync<Recording>('SELECT id,note_id,title,file_uri,status,created_at FROM recordings WHERE note_id = ? ORDER BY created_at DESC', noteId); }
 
 export async function createNote(note: Note) { requireWriteableDocument(note); const database = await db(); await database.withExclusiveTransactionAsync(async txn => { await txn.runAsync('INSERT INTO notes(id,record_json,revision,lifecycle,updated_at) VALUES(?,?,?,?,?)', note.id, rawRecord(note), note.revision, note.lifecycle, note.updatedAt); }); }
-export async function saveNote(note: Note, expectedRevision: number): Promise<Note> {
+export async function saveNote(note: Note, expectedRevision: number): Promise<{ note: Note; recoveryJournalCleared: boolean; recoveryJournalError?: string }> {
+  if (note.schemaVersion !== 1) throw new Error('Only active schema-v1 notes can be edited in this prototype.');
   requireWriteableDocument(note); const database = await db(); const updated = { ...note, tags: normalizeTagList(note.tags ?? []), revision: expectedRevision + 1, updatedAt: Date.now() };
-  await database.withExclusiveTransactionAsync(async txn => { const result = await txn.runAsync('UPDATE notes SET record_json=?,revision=?,lifecycle=?,updated_at=? WHERE id=? AND revision=?', rawRecord(updated), updated.revision, updated.lifecycle, updated.updatedAt, updated.id, expectedRevision); if (result.changes !== 1) throw new RevisionConflictError(); await txn.runAsync('DELETE FROM recovery_drafts WHERE note_id=? AND base_revision=?', note.id, expectedRevision); });
-  return updated;
+  const outcome = await commitThenClearDraft(
+    async () => {
+      await database.withExclusiveTransactionAsync(async txn => {
+        const current = await getRaw(txn, note.id);
+        if (!current || current.revision !== expectedRevision) throw new RevisionConflictError();
+        const currentNote = decode(current);
+        if (currentNote.schemaVersion !== 1) throw new Error('Only schema-v1 notes can be edited in this prototype.');
+        requireWriteableDocument(currentNote);
+        if (current.lifecycle !== 'active' || currentNote.lifecycle !== 'active' || note.lifecycle !== 'active') throw new Error('Only active notes can be edited. Restore this note first.');
+        const result = await txn.runAsync('UPDATE notes SET record_json=?,revision=?,lifecycle=?,updated_at=? WHERE id=? AND revision=? AND lifecycle=?', rawRecord(updated), updated.revision, updated.lifecycle, updated.updatedAt, updated.id, expectedRevision, 'active');
+        if (result.changes !== 1) throw new RevisionConflictError();
+      });
+      return updated;
+    },
+    async () => {
+      await database.withExclusiveTransactionAsync(async txn => {
+        const row = await txn.getFirstAsync<{base_revision:number}>('SELECT base_revision FROM recovery_drafts WHERE note_id=?', note.id);
+        if (!row) return;
+        if (row.base_revision !== expectedRevision) throw new RecoveryConflictError();
+        await txn.runAsync('DELETE FROM recovery_drafts WHERE note_id=? AND base_revision=?', note.id, expectedRevision);
+      });
+    }
+  );
+  return { note: updated, recoveryJournalCleared: outcome.cleared, ...(outcome.error ? { recoveryJournalError: String(outcome.error) } : {}) };
 }
 export async function setPinned(id: string, pinned: boolean, expectedRevision: number): Promise<Note> {
   const database = await db(); let updated!: Note;
