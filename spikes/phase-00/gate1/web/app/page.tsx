@@ -96,7 +96,7 @@ export default function Home() {
 
   const hasFilters = Boolean(query || selectedTags.length);
   return <>
-    <div className="page-heading"><div><p className="eyebrow">A quiet place to think</p><h1 className="page-title">Your notes</h1><p className="page-lede">A little space for what you want to remember.</p></div><div className="actions"><button className="btn btn-primary" onClick={createNote}>＋ New note</button></div></div>
+    <div className={`page-heading home-heading ${notes.some((note) => note.lifecycle === 'active') ? 'home-has-notes' : ''}`}><div className="home-intro"><p className="eyebrow">A quiet place to think</p><h1 className="page-title">Your notes</h1><p className="page-lede">A little space for what you want to remember.</p></div><div className="actions"><button className="btn btn-primary new-note-button" onClick={createNote}>＋ New note</button></div></div>
     {error && <div className="notice error" role="alert">{error} Your notes stay stored locally.</div>}
     <div className="notes-controls">
       <div className="search-row"><label className="screen-reader" htmlFor="note-search">Search notes</label><input id="note-search" className="searchbox" type="search" placeholder="Search titles, notes and tags…" value={query} onChange={(event) => setQuery(event.target.value)} /><span className="toolbar-label">{visibleNotes.length} {visibleNotes.length === 1 ? 'note' : 'notes'}</span></div>

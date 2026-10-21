@@ -11,6 +11,7 @@ await mkdir(output, { recursive: true });
 const browser = await chromium.launch({ headless: true });
 const results = [], diagnostics = { consoleErrors: [], pageErrors: [], failedRequests: [], externalRequests: [] };
 const check = (ok, message) => { if (!ok) throw new Error(message); };
+async function noteAction(page, action) { await page.getByRole('button', { name: 'More note actions' }).click(); await page.getByRole('menuitem', { name: action, exact: true }).click(); }
 const textDocument = text => ({ schemaVersion: 1, type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] });
 const bodyOf = note => note.document.content.flatMap(p => (p.content ?? []).map(n => n.text ?? '')).join('');
 async function fresh(action) {
@@ -107,14 +108,14 @@ try {
   for (const action of ['Archive', 'Move to trash']) await scenario(`F-02 stale two-tab revision blocks ${action}`, async (page, context) => {
     const id = await create(page), url = page.url(), second = await context.newPage(); await second.goto(url); await second.locator('[contenteditable=true]').waitFor();
     await page.locator('[contenteditable=true]').fill('Other tab committed'); await committed(page, id, 'Old title', 'Other tab committed'); const before = await read(page, id);
-    await second.locator('[contenteditable=true]').fill('Stale draft'); await second.getByRole('button', { name: action, exact: true }).click();
+    await second.locator('[contenteditable=true]').fill('Stale draft'); await noteAction(second, action);
     await second.getByRole('alert').filter({ hasText: 'changed in another tab' }).waitFor();
     const after = await read(page, id); check(second.url() === url, 'unsafe navigation'); check(after.lifecycle === 'active' && after.revision === before.revision, 'DB transition or revision bypassed conflict');
     check(await second.locator('[contenteditable=true]').innerText() === 'Stale draft', 'draft lost'); check((await journals(second, id)).some(x => JSON.stringify(x.document).includes('Stale draft')), 'journal missing');
   });
   await scenario('F-02 save failure blocks Archive and preserves body/title/journal', async page => {
     const id = await create(page), url = page.url(), before = await read(page, id); await page.evaluate(() => sessionStorage.setItem('noteos:test-fail', 'yes'));
-    await page.locator('#note-title').fill('Unsaved title'); await page.locator('[contenteditable=true]').fill('Unsaved body'); await page.getByRole('button', { name: 'Archive', exact: true }).click();
+    await page.locator('#note-title').fill('Unsaved title'); await page.locator('[contenteditable=true]').fill('Unsaved body'); await noteAction(page, 'Archive');
     await page.getByText('Not saved', { exact: true }).waitFor(); const after = await read(page, id);
     check(page.url() === url && after.lifecycle === 'active' && after.revision === before.revision, 'failed-save lifecycle bypass');
     check(await page.locator('[contenteditable=true]').innerText() === 'Unsaved body', 'body lost'); check((await journals(page, id)).some(x => x.title === 'Unsaved title'), 'title journal lost');
@@ -122,10 +123,10 @@ try {
   });
   await scenario('F-02 immediate Archive flushes latest text; untouched lifecycle adds only one revision; restore/trash happy paths', async page => {
     const id = await create(page), before = await read(page, id);
-    await page.locator('[contenteditable=true]').fill('Immediate Archive body'); await page.getByRole('button', { name: 'Archive', exact: true }).click(); await page.waitForURL('**/archive');
+    await page.locator('[contenteditable=true]').fill('Immediate Archive body'); await noteAction(page, 'Archive'); await page.waitForURL('**/archive');
     let saved = await read(page, id); check(saved.lifecycle === 'archived' && bodyOf(saved) === 'Immediate Archive body' && saved.revision === before.revision + 2, 'immediate archive failed');
     await page.getByRole('button', { name: 'Restore', exact: true }).click(); await page.getByText('Nothing in the archive').waitFor(); await page.goto(`${root}/notes/${id}`);
-    const restored = await read(page, id); await page.getByRole('button', { name: 'Move to trash', exact: true }).click(); await page.waitForURL('**/trash');
+    const restored = await read(page, id); await noteAction(page, 'Move to trash'); await page.waitForURL('**/trash');
     saved = await read(page, id); check(saved.revision === restored.revision + 1 && saved.lifecycle === 'trashed', 'untouched trash performed an extra save');
     await page.getByRole('button', { name: 'Restore', exact: true }).click(); await page.getByText('Trash is empty').waitFor(); check((await read(page, id)).lifecycle === 'active', 'restore failed');
   });
@@ -137,7 +138,7 @@ try {
     await page.locator('[contenteditable=true]').fill('A'); await page.getByText('Saving…', { exact: true }).waitFor();
     await page.locator('[contenteditable=true]').fill('B'); await page.locator('[contenteditable=true]').fill('C latest');
     check((await journals(page, id)).some(x => JSON.stringify(x.document).includes('C latest')), 'newest journal absent');
-    const click = page.getByRole('button', { name: 'Archive', exact: true }).click();
+    const click = noteAction(page, 'Archive');
     await page.evaluate(() => { window.__noteosHold = false; }); await click; await page.waitForURL('**/archive');
     const saved = await read(page, id); check(saved.lifecycle === 'archived' && bodyOf(saved) === 'C latest', 'latest draft lost or self-conflicted');
     check((await journals(page, id)).length === 0, 'committed journal not cleaned');
@@ -156,7 +157,7 @@ try {
     check(page.url() === url, 'failure navigated away'); check((await journals(page, id)).some(x => JSON.stringify(x.document).includes('Navigation failure draft')), 'navigation failure lost journal');
   });
   await scenario('F-05 delete/reimport same ID removes stale journal and retains newer journal as copy only', async page => {
-    const id = await create(page), original = await read(page, id); await page.getByRole('button', { name: 'Move to trash', exact: true }).click(); await page.waitForURL('**/trash'); const trashed = await read(page, id);
+    const id = await create(page), original = await read(page, id); await noteAction(page, 'Move to trash'); await page.waitForURL('**/trash'); const trashed = await read(page, id);
     await page.evaluate(({ id, note, doc }) => {
       localStorage.setItem(`noteos:mvp01:recovery:${id}:stale-test`, JSON.stringify({ title: note.title, document: note.document, baseRevision: note.revision }));
       localStorage.setItem(`noteos:mvp01:recovery:${id}:newer-test`, JSON.stringify({ title: 'Retained draft', document: doc, baseRevision: 0 }));

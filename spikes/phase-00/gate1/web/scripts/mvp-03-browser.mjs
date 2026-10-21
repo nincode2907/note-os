@@ -225,11 +225,30 @@ try {
     check(copy.title === 'Recovered copy title (recovered)' && copy.pinned === false && JSON.stringify(copy.tags) === JSON.stringify(['source-tag']), `Recovery copy did not preserve the safe source tag and default unpinned: ${JSON.stringify({ title: copy.title, pinned: copy.pinned, tags: copy.tags })}`);
     check(JSON.stringify(await readNote(page, id)) === JSON.stringify(original), 'Recover as copy modified the source note.');
   });
+  await scenario('editor-actions-menu-keyboard-and-outside-dismissal', async (page) => {
+    await openNew(page);
+    const trigger = page.getByRole('button', { name: 'More note actions' });
+    await trigger.click();
+    const menu = page.getByRole('menu', { name: 'Note actions' });
+    await menu.getByRole('menuitem', { name: 'Archive', exact: true }).waitFor();
+    await page.keyboard.press('Escape');
+    await menu.waitFor({ state: 'detached' });
+    check(await trigger.evaluate(element => document.activeElement === element), 'Escape did not return focus to the menu trigger.');
+    await trigger.click();
+    await page.keyboard.press('ArrowDown');
+    check(await page.evaluate(() => document.activeElement?.textContent?.trim()) === 'Move to trash', 'ArrowDown did not move focus through the actions menu.');
+    await page.locator('#note-title').click();
+    await menu.waitFor({ state: 'detached' });
+  });
   await scenario('mobile-navigation-width', async (page) => {
     await page.goto(baseUrl);
-    const sizes = await page.evaluate(() => ({ viewport: innerWidth, document: document.documentElement.scrollWidth, nav: document.querySelector('.mobile-nav')?.getBoundingClientRect().width, navContent: document.querySelector('.mobile-nav')?.scrollWidth }));
-    check(sizes.viewport === 390 && sizes.document <= sizes.viewport, `Mobile page overflows horizontally: ${JSON.stringify(sizes)}`);
-    check(sizes.nav <= sizes.viewport && sizes.nav > 0, `Mobile navigation exceeds viewport: ${JSON.stringify(sizes)}`);
+    for (const width of [320, 360, 375, 390, 768, 1440]) {
+      await page.setViewportSize({ width, height: width <= 720 ? 844 : 1024 });
+      const sizes = await page.evaluate(() => ({ viewport: innerWidth, document: document.documentElement.scrollWidth, nav: document.querySelector('.mobile-nav')?.getBoundingClientRect().width }));
+      check(sizes.viewport === width && sizes.document <= sizes.viewport, `Page overflows horizontally at ${width}px: ${JSON.stringify(sizes)}`);
+      if (width <= 720) check(sizes.nav <= sizes.viewport && sizes.nav > 0, `Mobile navigation exceeds viewport at ${width}px: ${JSON.stringify(sizes)}`);
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
     await page.screenshot({ path: `${evidence}/mobile-home-navigation.png`, fullPage: true });
   }, { width: 390, height: 844 });
 } finally {

@@ -10,6 +10,7 @@ import { formatSavedAt } from '../../lib/mvp-utils.mjs';
 import { normalizeTagLabel, safeTagsForNoteCopy, tagKey } from '../../lib/note-organization.mjs';
 import { canonicalToMarkdown, createTiptapEditor, validateCanonicalDocument, toTiptapJSON } from '../../../packages/document-engine/src/index.js';
 import { AudioRecorder } from '../../ui/audio-recorder';
+import { NoteIcon } from '../../ui/note-icon';
 
 type Note = { id: string; title: string; document: any; schemaVersion: number; createdAt: number; updatedAt: number; lifecycle: 'active' | 'archived' | 'trashed'; revision: number; pinned?: boolean; tags?: string[] };
 
@@ -19,13 +20,34 @@ export default function NoteEditorPage() {
   const [state, setState] = useState('Loading…'), [error, setError] = useState(''), [conflict, setConflict] = useState(false), [ready, setReady] = useState(false);
   const [recovery, setRecovery] = useState<any>(null), [markdown, setMarkdown] = useState<any>(null), [busy, setBusy] = useState(false);
   const [tagInput, setTagInput] = useState(''), [availableTags, setAvailableTags] = useState<string[]>([]);
+  const [actionsOpen, setActionsOpen] = useState(false), [audioOpenSignal, setAudioOpenSignal] = useState(0);
   const elementRef = useRef<HTMLDivElement>(null), editorRef = useRef<any>(null), timerRef = useRef<any>(null), coordinatorRef = useRef<any>(null);
+  const actionsRef = useRef<HTMLDivElement>(null), actionsTriggerRef = useRef<HTMLButtonElement>(null), audioPanelRef = useRef<HTMLDivElement>(null);
   const operationRef = useRef(false), recoveryRef = useRef<any>(null), aliveRef = useRef(false), recordingRef = useRef(false);
   const validation = doc ? validateCanonicalDocument(doc) : null;
   const recordSchemaSupported = note?.schemaVersion === 1;
   const editable = recordSchemaSupported && validation?.status === 'supported' && note?.lifecycle === 'active';
   const editableRef = useRef(false); editableRef.current = editable;
   const selectRecovery = (next: any) => { recoveryRef.current = next; setRecovery(next); };
+
+  useEffect(() => {
+    if (!actionsOpen) return;
+    const closeOutside = (event: PointerEvent) => { if (!actionsRef.current?.contains(event.target as Node)) setActionsOpen(false); };
+    const handleKeys = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { setActionsOpen(false); actionsTriggerRef.current?.focus(); return; }
+      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+      const items = [...(actionsRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [])];
+      if (!items.length) return;
+      event.preventDefault();
+      const current = items.indexOf(document.activeElement as HTMLButtonElement);
+      const next = event.key === 'ArrowDown' ? (current + 1) % items.length : (current <= 0 ? items.length - 1 : current - 1);
+      items[next].focus();
+    };
+    document.addEventListener('pointerdown', closeOutside);
+    document.addEventListener('keydown', handleKeys);
+    actionsRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
+    return () => { document.removeEventListener('pointerdown', closeOutside); document.removeEventListener('keydown', handleKeys); };
+  }, [actionsOpen]);
 
   function showFailure(cause: any) {
     const stale = cause instanceof NoteConflictError || cause?.name === 'NoteConflictError';
@@ -211,23 +233,40 @@ export default function NoteEditorPage() {
   if (!ready) return <div className="empty-state"><h2>Opening note…</h2><p>Reading from this device.</p></div>;
   if (error && !note) return <div className="notice error" role="alert">{error}<p><Link href="/">Back to notes</Link></p></div>;
   return <>
-    <div className="editor-top"><Link href={note?.lifecycle === 'archived' ? '/archive' : note?.lifecycle === 'trashed' ? '/trash' : '/'} className="back-link">← Back to notes</Link><div className="actions"><span className="save-state" aria-live="polite">{state}</span>{note?.lifecycle === 'active' ? <button className="btn" disabled={busy} onClick={() => void changeLifecycle('archived')}>Archive</button> : note?.lifecycle === 'archived' ? <button className="btn" disabled={busy} onClick={() => void changeLifecycle('active')}>Restore</button> : <button className="btn" disabled={busy} onClick={() => void changeLifecycle('active')}>Restore</button>}<button className="btn" disabled={busy} onClick={() => void changeLifecycle('trashed')}>Move to trash</button><button className="btn" onClick={exportMarkdown} disabled={!editable || busy || Boolean(recovery)}>Export Markdown</button></div></div>
+    <section className="note-editor">
+    <header className="editor-top">
+      <Link href={note?.lifecycle === 'archived' ? '/archive' : note?.lifecycle === 'trashed' ? '/trash' : '/'} className="back-link">← <span>Back to notes</span></Link>
+      <div className="editor-header-actions">
+        <span className={`save-state ${error ? 'is-error' : ''}`} aria-live="polite">{state}</span>
+        {note?.lifecycle === 'active' && <button className="icon-button editor-pin" type="button" aria-label={note.pinned ? 'Unpin note' : 'Pin note'} aria-pressed={Boolean(note.pinned)} disabled={!editable || busy || Boolean(recovery)} onClick={() => void updateOrganization({ pinned: !note.pinned })}><NoteIcon name="pin" size={17} /><span>{note.pinned ? 'Pinned' : 'Pin'}</span></button>}
+        {note?.lifecycle !== 'active' && <button className="btn btn-quiet" disabled={busy} onClick={() => void changeLifecycle('active')}>Restore</button>}
+        <div className="editor-actions-menu" ref={actionsRef}>
+          <button ref={actionsTriggerRef} className="icon-button" type="button" aria-label="More note actions" aria-haspopup="menu" aria-expanded={actionsOpen} onClick={() => setActionsOpen((open) => !open)}><NoteIcon name="more" /></button>
+          {actionsOpen && <div className="actions-popover" role="menu" aria-label="Note actions">
+            {note?.lifecycle === 'active' && <button role="menuitem" type="button" disabled={busy} onClick={() => { setActionsOpen(false); void changeLifecycle('archived'); }}>Archive</button>}
+            {note?.lifecycle !== 'trashed' && <button role="menuitem" type="button" className="menu-danger" disabled={busy} onClick={() => { setActionsOpen(false); void changeLifecycle('trashed'); }}>Move to trash</button>}
+            <button role="menuitem" type="button" disabled={!editable || busy || Boolean(recovery)} onClick={() => { setActionsOpen(false); exportMarkdown(); }}>Export Markdown</button>
+          </div>}
+        </div>
+      </div>
+    </header>
     {error && <div className="notice error" role="alert">{error}{editable && <p>{!conflict && <button className="btn" disabled={busy} onClick={() => void operation(async () => (await coordinatorRef.current.flush()).ok)}>Retry save</button>} <button className="btn" disabled={busy} onClick={() => void saveDraftAsCopy()}>Save this draft as a new note</button></p>}</div>}
     {note?.lifecycle !== 'active' && <div className="notice">This note is in {note?.lifecycle}. Restore it before editing.</div>}
     {note && !recordSchemaSupported && <div className="notice">This note record uses a newer schema. It is open read-only so this version will preserve its original data.</div>}
     <label className="screen-reader" htmlFor="note-title">Note title</label><input id="note-title" className="editor-title" value={title} onChange={(event) => updateTitle(event.target.value)} disabled={!editable || busy || Boolean(recovery)} placeholder="Untitled note" />
     {note && note.lifecycle === 'active' && recordSchemaSupported && <section className="note-organization" aria-label="Note organization">
-      <div className="organization-pin-row"><span className="toolbar-label">Organization</span><button className="pin-button" type="button" aria-pressed={Boolean(note.pinned)} disabled={!editable || busy || Boolean(recovery)} onClick={() => void updateOrganization({ pinned: !note.pinned })}>{note.pinned ? '★ Pinned' : '☆ Pin note'}</button></div>
-      <div className="organization-tags"><span className="toolbar-label">Tags</span>{(Array.isArray(note.tags) ? note.tags : []).map((tag) => <span className="tag-chip editor-tag" key={tagKey(tag)}>{tag}<button type="button" aria-label={`Remove tag ${tag}`} disabled={!editable || busy || Boolean(recovery)} onClick={() => removeTag(tag)}>×</button></span>)}{(!note.tags || note.tags.length === 0) && <span className="tag-empty">No tags yet.</span>}</div>
-      <form className="tag-entry" onSubmit={(event) => void addTag(event)}><label className="screen-reader" htmlFor="note-tag-input">Add a tag</label><input id="note-tag-input" className="searchbox" list="note-tag-suggestions" maxLength={80} placeholder="Add a tag…" value={tagInput} onChange={(event) => setTagInput(event.target.value)} disabled={!editable || busy || Boolean(recovery)} /><datalist id="note-tag-suggestions">{availableTags.map((tag) => <option value={tag} key={tagKey(tag)} />)}</datalist><button className="btn" type="submit" disabled={!editable || busy || Boolean(recovery) || !tagInput.trim()}>Add tag</button></form>
+      <div className="organization-tags"><span className="toolbar-label">Tags</span>{(Array.isArray(note.tags) ? note.tags : []).map((tag) => <span className="tag-chip editor-tag" key={tagKey(tag)}>{tag}<button type="button" aria-label={`Remove tag ${tag}`} disabled={!editable || busy || Boolean(recovery)} onClick={() => removeTag(tag)}>×</button></span>)}{(!note.tags || note.tags.length === 0) && <span className="tag-empty">No tags yet.</span>}
+        <form className="tag-entry" onSubmit={(event) => void addTag(event)}><label className="screen-reader" htmlFor="note-tag-input">Add a tag</label><input id="note-tag-input" className="searchbox" list="note-tag-suggestions" maxLength={80} placeholder="Add a tag…" value={tagInput} onChange={(event) => setTagInput(event.target.value)} disabled={!editable || busy || Boolean(recovery)} /><datalist id="note-tag-suggestions">{availableTags.map((tag) => <option value={tag} key={tagKey(tag)} />)}</datalist><button className="btn btn-quiet" type="submit" disabled={!editable || busy || Boolean(recovery) || !tagInput.trim()}>Add tag</button></form>
+      </div>
     </section>}
     {validation?.status === 'supported' && note?.lifecycle === 'trashed' && <div className="notice">Restore this note to edit it. Its content is preserved below.</div>}
-    {validation?.status === 'supported' && editable ? <><div className="editor-toolbar" aria-label="Text formatting">
-      <button className="tool-button" aria-label="Bold" title="Bold" onClick={() => editorRef.current?.chain().focus().toggleBold().run()}><strong>B</strong></button><button className="tool-button" aria-label="Italic" title="Italic" onClick={() => editorRef.current?.chain().focus().toggleItalic().run()}><em>I</em></button><button className="tool-button" aria-label="Strike" title="Strike" onClick={() => editorRef.current?.chain().focus().toggleStrike().run()}><s>S</s></button><button className="tool-button" aria-label="Heading 2" title="Heading" onClick={() => editorRef.current?.chain().focus().toggleHeading({ level: 2 }).run()}>H₂</button><button className="tool-button" aria-label="Bullet list" title="Bullet list" onClick={() => editorRef.current?.chain().focus().toggleBulletList().run()}>• List</button><button className="tool-button" aria-label="Ordered list" title="Numbered list" onClick={() => editorRef.current?.chain().focus().toggleOrderedList().run()}>1. List</button><button className="tool-button" aria-label="Checklist" title="Checklist" onClick={toggleChecklist}>☑</button><button className="tool-button" aria-label="Quote" title="Quote" onClick={() => editorRef.current?.chain().focus().toggleBlockquote().run()}>“</button><button className="tool-button" aria-label="Code block" title="Code block" onClick={() => editorRef.current?.chain().focus().toggleCodeBlock().run()}>&lt;/&gt;</button>
+    {validation?.status === 'supported' && editable ? <><div className="editor-toolbar" role="toolbar" aria-label="Text formatting">
+      <button className="tool-button mic-trigger" aria-label="Open audio recordings" title="Audio recordings" onClick={() => { setAudioOpenSignal((value) => value + 1); audioPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }); }}><NoteIcon name="mic" /></button><button className="tool-button" aria-label="Bold" title="Bold" onClick={() => editorRef.current?.chain().focus().toggleBold().run()}><NoteIcon name="bold" /></button><button className="tool-button" aria-label="Italic" title="Italic" onClick={() => editorRef.current?.chain().focus().toggleItalic().run()}><NoteIcon name="italic" /></button><button className="tool-button" aria-label="Strike" title="Strike" onClick={() => editorRef.current?.chain().focus().toggleStrike().run()}><NoteIcon name="strike" /></button><button className="tool-button" aria-label="Heading 2" title="Heading 2" onClick={() => editorRef.current?.chain().focus().toggleHeading({ level: 2 }).run()}><NoteIcon name="heading" /></button><button className="tool-button" aria-label="Bullet list" title="Bullet list" onClick={() => editorRef.current?.chain().focus().toggleBulletList().run()}><NoteIcon name="bullets" /></button><button className="tool-button" aria-label="Ordered list" title="Numbered list" onClick={() => editorRef.current?.chain().focus().toggleOrderedList().run()}><NoteIcon name="numbered" /></button><button className="tool-button" aria-label="Checklist" title="Checklist" onClick={toggleChecklist}><NoteIcon name="checklist" /></button><button className="tool-button" aria-label="Quote" title="Quote" onClick={() => editorRef.current?.chain().focus().toggleBlockquote().run()}><NoteIcon name="quote" /></button><button className="tool-button" aria-label="Code block" title="Code block" onClick={() => editorRef.current?.chain().focus().toggleCodeBlock().run()}><NoteIcon name="code" /></button>
     </div><div ref={elementRef} className="editor-content" aria-label="Note content" /></>
       : <section>{validation?.status !== 'supported' && <div className="notice">This document uses a schema this editor cannot safely modify. It is open read-only so its original data stays intact.</div>}<pre className="readonly-panel">{JSON.stringify(doc, null, 2)}</pre></section>}
-    {note && <AudioRecorder noteId={note.id} disabled={!editable || busy || Boolean(recovery)} onActivityChange={(active) => { recordingRef.current = active; }} />}
+    {note && <div ref={audioPanelRef}><AudioRecorder noteId={note.id} disabled={!editable || busy || Boolean(recovery)} openSignal={audioOpenSignal} onActivityChange={(active) => { recordingRef.current = active; }} /></div>}
     {markdown && <div className="backup-panel"><h2 className="section-title">Markdown export</h2>{markdown.warnings.length > 0 && <div className="notice">Some formatting is simplified in Markdown: {markdown.warnings.map((warning: any) => warning.message).join(' ')}</div>}<textarea className="searchbox" aria-label="Markdown output" readOnly value={markdown.markdown ?? ''} rows={12} /><button className="btn" onClick={() => { const blob = new Blob([markdown.markdown ?? ''], { type: 'text/markdown' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `${title || 'note'}.md`; a.click(); URL.revokeObjectURL(url); }}>Download .md</button></div>}
     {recovery && <div className="dialog-backdrop"><section className="dialog" role="dialog" aria-modal="true" aria-labelledby="recovery-title"><h2 id="recovery-title">A recovery draft was found</h2><p>{!recovery.valid ? 'This recovery document cannot be applied safely. Its original journal is retained until you explicitly discard it.' : recovery.sameRevision ? 'An uncommitted recovery draft was found for this note.' : 'The saved note has changed since this draft was made. To avoid overwriting either version, recover the draft as a separate note.'}</p>{error && <p role="alert">{error}</p>}<div className="dialog-actions"><button className="btn" disabled={busy} onClick={discardRecovery}>Keep saved version</button><button className="btn btn-primary" disabled={busy || !recovery.valid} onClick={() => void useRecovery(!recovery.sameRevision)}>{recovery.sameRevision ? 'Restore draft' : 'Recover as new note'}</button></div></section></div>}
+    </section>
   </>;
 }

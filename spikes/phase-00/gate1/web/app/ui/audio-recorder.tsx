@@ -26,15 +26,18 @@ function extension(mimeType: string) {
   return 'webm';
 }
 
-export function AudioRecorder({ noteId, disabled = false, onActivityChange }: { noteId: string; disabled?: boolean; onActivityChange?: (active: boolean) => void }) {
+export function AudioRecorder({ noteId, disabled = false, openSignal = 0, onActivityChange }: { noteId: string; disabled?: boolean; openSignal?: number; onActivityChange?: (active: boolean) => void }) {
   const [recordings, setRecordings] = useState<Recording[]>([]), [active, setActive] = useState<Recording | null>(null);
   const [statusText, setStatusText] = useState('Ready to record on this device.'), [error, setError] = useState(''), [starting, setStarting] = useState(false), [audioReady, setAudioReady] = useState(false), [pauseSupported, setPauseSupported] = useState(true);
-  const [elapsed, setElapsed] = useState(0), [editId, setEditId] = useState(''), [editTitle, setEditTitle] = useState('');
+  const [elapsed, setElapsed] = useState(0), [editId, setEditId] = useState(''), [editTitle, setEditTitle] = useState(''), [expanded, setExpanded] = useState(true);
   const [players, setPlayers] = useState<Record<string, string>>({});
   const recorderRef = useRef<MediaRecorder | null>(null), streamRef = useRef<MediaStream | null>(null), sessionRef = useRef<Recording | null>(null);
   const lockReleaseRef = useRef<(() => Promise<void>) | null>(null), writerRef = useRef<Promise<unknown>>(Promise.resolve()), sequenceRef = useRef(0), elapsedBeforeRef = useRef(0), segmentStartedRef = useRef(0);
   const stopReasonRef = useRef<'complete' | 'interrupted' | 'failed'>('complete'), writeFailedRef = useRef(false), startingRef = useRef(false), mountedRef = useRef(true), objectUrlsRef = useRef(new Set<string>());
   const refresh = useCallback(async () => { try { const next = await repo.list(noteId); if (mountedRef.current) setRecordings(next); } catch (cause) { if (mountedRef.current) setError(cause instanceof Error ? cause.message : 'Could not read local recordings.'); } }, [noteId]);
+
+  useEffect(() => { if (openSignal > 0) setExpanded(true); }, [openSignal]);
+  useEffect(() => { if (active || starting) setExpanded(true); }, [active, starting]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -118,7 +121,7 @@ export function AudioRecorder({ noteId, disabled = false, onActivityChange }: { 
       setPauseSupported(typeof recorder.pause === 'function' && typeof recorder.resume === 'function');
       streamRef.current = stream; recorderRef.current = recorder; sessionRef.current = createdSession;
       sequenceRef.current = 0; elapsedBeforeRef.current = 0; segmentStartedRef.current = Date.now(); writeFailedRef.current = false; stopReasonRef.current = 'complete'; writerRef.current = Promise.resolve();
-      setElapsed(0); setActive(createdSession); onActivityChange?.(true); setStatusText('Recording — audio chunks are being saved on this device.');
+      setElapsed(0); setActive(createdSession); onActivityChange?.(true); setStatusText('Recording — audio chunks are being saved on this device.'); void refresh();
       recorder.ondataavailable = (event) => {
         if (!event.data.size || writeFailedRef.current) return;
         const sequence = sequenceRef.current++, duration = elapsedBeforeRef.current + (recorder.state === 'paused' ? 0 : Math.max(0, Date.now() - segmentStartedRef.current));
@@ -228,8 +231,10 @@ export function AudioRecorder({ noteId, disabled = false, onActivityChange }: { 
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not recover the partial recording.'); }
   }
 
-  return <section className="audio-panel" aria-labelledby="audio-title">
-    <div className="audio-heading"><div><p className="eyebrow">On this device</p><h2 id="audio-title" className="section-title">Audio recordings</h2><p className="audio-copy">Private local audio. Recordings are separate from note backups and are never uploaded.</p></div></div>
+  return <section className={`audio-panel ${active ? 'is-recording' : ''}`} aria-labelledby="audio-title">
+    <header className="audio-heading"><div className="audio-title-row"><div><p className="eyebrow">On this device</p><h2 id="audio-title" className="section-title">Audio</h2></div><span className="audio-count">{recordings.length} {recordings.length === 1 ? 'recording' : 'recordings'}</span></div><button className="audio-toggle" type="button" aria-expanded={expanded || Boolean(active)} aria-controls="audio-panel-content" disabled={Boolean(active) || starting} onClick={() => setExpanded((value) => !value)}>{expanded ? 'Hide' : 'Show'} recordings <span aria-hidden="true">{expanded ? '−' : '+'}</span></button></header>
+    <div id="audio-panel-content" className="audio-panel-content" hidden={!expanded && !active}>
+    <p className="audio-copy">Private local audio. Recordings are separate from note backups and are never uploaded.</p>
     <div className="audio-controls">
       {!active ? <button className="btn btn-primary" disabled={disabled || starting || !audioReady} onClick={() => void startRecording()}>{starting ? 'Starting…' : '● Record audio'}</button> : <><span className="recording-indicator" aria-live="polite">● {active.status === 'paused' ? 'Paused' : 'Recording'} · {formatDuration(elapsed)}</span>{pauseSupported && <button className="btn" onClick={() => void pauseRecording()}>{active.status === 'paused' ? 'Resume' : 'Pause'}</button>}<button className="btn btn-danger" onClick={stopRecording}>Stop and save</button></>}
       <span className="save-state" aria-live="polite">{statusText}</span>
@@ -243,5 +248,6 @@ export function AudioRecorder({ noteId, disabled = false, onActivityChange }: { 
       </div>
       <div className="recording-actions">{['recording', 'paused'].includes(recording.status) && <button className="tool-button" onClick={() => void recoverRecording(recording)}>Recover partial</button>}{recording.chunkCount > 0 && <><button className="tool-button" onClick={() => void playRecording(recording)}>{players[recording.id] ? 'Reload audio' : 'Play'}</button><button className="tool-button" onClick={() => void downloadRecording(recording)}>Export</button></>}<button className="tool-button" onClick={() => { setEditId(recording.id); setEditTitle(recording.title); }}>Rename</button><button className="tool-button" onClick={() => void removeRecording(recording)}>Delete</button></div>
     </li>)}</ul>}
+    </div>
   </section>;
 }

@@ -12,6 +12,7 @@ await mkdir(evidence, { recursive: true });
 const browser = await chromium.launch({ args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'] });
 const results = [], diagnostics = { consoleErrors: [], pageErrors: [], externalRequests: [] };
 function check(ok, message) { if (!ok) throw new Error(message); }
+async function noteAction(page, action) { await page.getByRole('button', { name: 'More note actions' }).click(); await page.getByRole('menuitem', { name: action, exact: true }).click(); }
 async function scenario(name, run, setup = {}) {
   const context = await browser.newContext({ acceptDownloads: true });
   await context.route('**/*', (route) => new URL(route.request().url()).origin === baseUrl ? route.continue() : route.abort());
@@ -63,7 +64,7 @@ async function waitForNewRecordingChunk(page, noteId, existingCount) {
   }
   throw new Error('Timed out waiting for a chunk from the new recording session.');
 }
-async function start(page) { await page.getByRole('button', { name: /Record audio/ }).click(); await page.getByText('Recording — audio chunks are being saved on this device.').waitFor(); }
+async function start(page) { const current = await page.locator('.audio-count').textContent(); const before = Number(current?.match(/\d+/)?.[0] ?? 0); await page.getByRole('button', { name: /Record audio/ }).click(); await page.getByText('Recording — audio chunks are being saved on this device.').waitFor(); await page.locator('.audio-count').filter({ hasText: new RegExp(`^${before + 1} recordings?$`) }).waitFor(); }
 async function stop(page) { await page.getByRole('button', { name: 'Stop and save' }).click(); try { await page.getByText('Recording saved on this device.').waitFor({ timeout: 15000 }); } catch (error) { const body = await page.locator('body').innerText().catch(() => ''); throw new Error(`Stop did not complete: ${body}\n${error instanceof Error ? error.message : String(error)}`); } }
 
 try {
@@ -154,7 +155,7 @@ try {
   });
   await scenario('active-recording-blocks-navigation-and-lifecycle', async (page, context) => {
     await context.grantPermissions(['microphone'], { origin: baseUrl }); const { id, url } = await openNote(page); await start(page); await waitForChunks(page, id);
-    await page.getByRole('button', { name: 'Archive', exact: true }).click();
+    await noteAction(page, 'Archive');
     await page.getByRole('alert').filter({ hasText: 'Stop and save the audio recording' }).waitFor(); check(page.url() === url, 'Lifecycle navigation left while recording was active.');
     await page.locator('aside').getByRole('link', { name: 'Backup', exact: true }).click();
     await page.getByRole('alert').filter({ hasText: 'Background recording is not supported' }).waitFor(); check(page.url() === url, 'App navigation left while recording was active.');
@@ -162,11 +163,11 @@ try {
   });
   await scenario('archive-trash-preserve-recordings-and-delete-cascade', async (page, context) => {
     await context.grantPermissions(['microphone'], { origin: baseUrl }); const { id } = await openNote(page); await start(page); await waitForChunks(page, id); await stop(page);
-    await page.getByRole('button', { name: 'Archive' }).click(); await page.waitForURL('**/archive');
+    await noteAction(page, 'Archive'); await page.waitForURL('**/archive');
     await page.getByRole('link', { name: /Untitled note/ }).click(); await page.getByRole('button', { name: 'Play', exact: true }).waitFor();
     check((await records(page, id)).length === 1, 'Archive removed associated media.');
     await page.getByRole('button', { name: 'Restore' }).click(); await page.waitForURL('**/'); await page.goto(`${baseUrl}/notes/${id}`);
-    await page.getByRole('button', { name: 'Move to trash' }).click(); await page.waitForURL('**/trash');
+    await noteAction(page, 'Move to trash'); await page.waitForURL('**/trash');
     await page.getByRole('button', { name: 'Delete forever', exact: true }).click();
     const dialog = page.getByRole('dialog'); const [backup] = await Promise.all([page.waitForEvent('download'), dialog.getByRole('button', { name: 'Request notes backup download' }).click()]);
     check(backup.suggestedFilename().includes('noteos-backup'), 'The note-only backup step did not download.');
