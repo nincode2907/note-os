@@ -1,11 +1,13 @@
-noteOS MVP-04.1 source-only review bundle
+noteOS MVP-04.1 final corrections and native readiness bundle
 
 Contents
-- approved-brief.txt: approved task and hard-stop constraints
-- report.md: source resolution table, test evidence, audit and limitations
-- source/mobile/: implementation snapshot and new focused test
-- evidence/verification.txt: environment, commands and actual results
-- validation/native-checklist.md: remaining simulator/iPhone checks (BLOCKED)
-- screenshots/: intentionally empty; no native screenshots were captured
+- approved-brief.txt: original approved MVP-04.1 source-only scope and limitations
+- approved-final-corrections.txt: approved correction/readiness request
+- report.md: MVP-04.1 source resolution, dependency audit and prior evidence
+- readiness.md: final F-04.1-A/B correction evidence and host readiness report
+- source/mobile/: current App.tsx, store.ts, mobile-safety.mjs and focused tests
+- evidence/verification.txt: exact current commands, versions and measured results
+- validation/native-checklist.md: native Gate A/B/C tests still BLOCKED
+- screenshots/: intentionally empty; no native screenshots captured
 
-Scope: Phase 00 source spike only. No iOS binary, simulator execution, physical iPhone test, production rollout, or MVP-05 work is included.
+Scope: Phase 00 source spike only. No native binary, simulator execution, physical iPhone test, production rollout or MVP-05 work.

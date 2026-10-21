@@ -10,18 +10,39 @@ export class RecordingSessionGate {
 }
 
 export class LatestDraftWriter {
-  constructor(write) { this.write = write; this.pending = null; this.running = null; }
-  enqueue(value) { this.pending = value; }
+  constructor(write) { this.write = write; this.pending = null; this.running = null; this.closed = false; }
+  enqueue(value) { if (!this.closed) this.pending = value; }
   clearPending() { this.pending = null; }
+  async closeAndSettle() {
+    this.closed = true;
+    this.pending = null;
+    if (this.running) await this.running.catch(() => {});
+    this.pending = null;
+  }
+  resume() { this.closed = false; }
   async flush() {
+    if (this.closed) return;
     if (this.running) await this.running;
-    if (!this.pending) return;
+    if (this.closed || !this.pending) return;
     const value = this.pending; this.pending = null;
     this.running = Promise.resolve().then(() => this.write(value));
-    try { await this.running; } catch (error) { if (this.pending === null) this.pending = value; throw error; }
+    try { await this.running; } catch (error) { if (!this.closed && this.pending === null) this.pending = value; throw error; }
     finally { this.running = null; }
-    if (this.pending) return this.flush();
+    if (!this.closed && this.pending) return this.flush();
   }
+}
+
+export async function discardDraftSafely({ cancelDebounce, writer, noteId, expectedRevision, deleteJournal }) {
+  cancelDebounce();
+  await writer.closeAndSettle();
+  try { await deleteJournal(noteId, expectedRevision); }
+  catch (error) { writer.resume(); throw error; }
+}
+
+export async function commitThenClearDraft(commitNote, clearMatchingDraft) {
+  const result = await commitNote();
+  try { await clearMatchingDraft(); return { result, cleared: true }; }
+  catch (error) { return { result, cleared: false, error }; }
 }
 
 export function recoveryDecision(note, journal) {
@@ -35,3 +56,7 @@ export function normalizeNoteView(note) {
 }
 
 export function canTransitionLifecycle(current, next) { return current !== 'trashed' || next !== 'archived'; }
+
+export function canEditNativeNote(note, contentEditable) {
+  return Boolean(note?.lifecycle === 'active' && note?.schemaVersion === 1 && contentEditable);
+}

@@ -1,38 +1,35 @@
-noteOS MVP-04.1 verification evidence
+noteOS MVP-04.1 final corrections verification
 Captured 2026-10-21 (Asia/Ho_Chi_Minh)
 
 Environment
-- macOS 15.7.7 (24G720)
-- Node v24.21.0
-- npm 11.19.0
-- Expo 58.0.16
-- expo-sqlite 58.0.13
-- expo-audio 58.0.9
-- Xcode unavailable; active developer directory: /Library/Developer/CommandLineTools
+- macOS 15.7.7 (24G720), MacBook Air M2 2022 (Mac14,2), 16 GB RAM
+- Node v24.21.0; npm 11.19.0
+- Expo 58.0.16; expo-sqlite 58.0.13; expo-audio 58.0.9
+- Xcode unavailable; selected developer directory /Library/Developer/CommandLineTools; simctl unavailable
+- Root volume 460 GiB total / 75 GiB free
 
-Commands and results (from repo root)
-- rtk npm --prefix spikes/phase-00/gate1/mobile run expo-check
-  PASS: Dependencies are up to date.
-- rtk npm --prefix spikes/phase-00/gate1/mobile run typecheck
-  PASS: tsc --noEmit, exit 0.
+Commands from repository root
 - rtk npm --prefix spikes/phase-00/gate1/mobile test
-  PASS: 11 tests, 0 failures, 0 skipped.
+  PASS: 17 tests, 0 failures, 0 skipped. Pure JavaScript helper/synthetic tests only.
+- rtk npm --prefix spikes/phase-00/gate1/mobile run typecheck
+  PASS: tsc --noEmit.
+- rtk npm --prefix spikes/phase-00/gate1/mobile run expo-check
+  PASS: Expo dependencies up to date.
 - rtk npm --prefix spikes/phase-00/gate1/mobile run export:ios
-  PASS: iOS JavaScript export only; Metro bundled 978 modules; 3.1 MB bundle.
+  PASS: JavaScript/assets export only; 978 Metro modules; 3.1 MB bundle. No native binary.
 - rtk git diff --check
-  PASS: no whitespace errors.
-- rtk npm --prefix spikes/phase-00/gate1/mobile audit
-  FAIL: 23 reported vulnerabilities (15 high, 8 moderate, 0 critical).
-- rtk npm --prefix spikes/phase-00/gate1/mobile audit --omit=dev --audit-level=high
-  FAIL: 23 reported vulnerabilities. npm's --force suggestion downgrades Expo to 44.0.6; not applied.
-- rtk npm --prefix spikes/phase-00/gate1/mobile ls braces node-forge uuid --all
-  braces 3.0.3 -> micromatch 4.0.8 -> metro-file-map 0.87.1 -> @expo/metro / Expo CLI
-  node-forge 1.4.0 -> @expo/code-signing-certificates 0.0.7 / @expo/cli 58.1.13
-  uuid 7.0.3 -> xcode 3.0.1 -> @expo/config-plugins 58.0.9 (also via expo-sharing)
-- rtk xcodebuild -version
-  BLOCKED: full Xcode is required; current developer directory is Command Line Tools.
-- rtk xcrun simctl list devices
-  BLOCKED: simctl unavailable.
+  PASS.
+- Native Xcode / simulator / physical iPhone
+  BLOCKED: no full Xcode, no simctl and no iPhone.
 
-Test limitation
-The automated tests exercise pure JavaScript state/decision helpers and the existing synthetic canonical/backup tests. They do not execute Expo SQLite, Expo Audio, iOS navigation gestures, a simulator, or physical hardware. No native runtime result is claimed.
+Preflight
+- Software Update CLI listed Safari 27.0, macOS Sequoia 15.8.1 and macOS 27.0.1; no Tahoe 26.x offer appeared.
+- `tmutil status`: no active backup. `tmutil destinationinfo`: no configured destination. `tmutil latestbackup`: could not mount destination, code 17.
+- Backup contents were not inspected. No OS, Xcode or developer-tool system changes were made.
+- See ../readiness.md for compatibility sources, safe path and exact missing native evidence.
+
+Dependency audit
+- Prior `npm audit` result remains 23 advisories (15 high, 8 moderate, 0 critical); dependencies were not changed by this correction. No forced remediation.
+
+Limitations
+Tests do not execute Expo SQLite transactions, native APIs, navigation gestures, simulator, or physical hardware. The JS export does not constitute native validation.

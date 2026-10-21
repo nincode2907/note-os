@@ -11,8 +11,8 @@ import { makeBackup, parseBackup, filterNotes, sortNotes } from '../web/app/lib/
 import { normalizeTagList } from '../web/app/lib/note-organization.mjs';
 import { createEmptyCanonicalDocument } from '../web/packages/document-engine/src/plain-text.js';
 import { documentToNativeModel, nativeModelToDocument } from './document-subset';
-import { createNote, discardRecoveryDraft, exportNotes, getNote, getRecoveryDraft, importNotes, listNotes, listPendingFileCleanups, listRecordings, markFileCleanupDone, Note, permanentlyDeleteNote, RecoveryDraft, Recording, RecoveryConflictError, removeRecording, renameRecording, RevisionConflictError, saveNote, saveRecording, saveRecoveryDraft, setLifecycle, setPinned } from './store';
-import { LatestDraftWriter, recoveryDecision, RecordingSessionGate } from './mobile-safety.mjs';
+import { createNote, discardRecoveryDraft, exportNotes, getNote, getRecoveryDraft, importNotes, listNotes, listPendingFileCleanups, listRecordings, markFileCleanupDone, Note, permanentlyDeleteNote, RecoveryDraft, Recording, removeRecording, renameRecording, RevisionConflictError, saveNote, saveRecording, saveRecoveryDraft, setLifecycle, setPinned } from './store';
+import { canEditNativeNote, discardDraftSafely, LatestDraftWriter, recoveryDecision, RecordingSessionGate } from './mobile-safety.mjs';
 
 type RootStack = { Home: undefined; Editor: { id: string } };
 const Stack = createNativeStackNavigator<RootStack>();
@@ -94,7 +94,7 @@ function AudioPlayback({ uri, onClose }: { uri: string; onClose: () => void }) {
 
 function EditorScreen({ route, navigation }: any) {
   const [note, setNote] = useState<Note | null>(null); const [title, setTitle] = useState(''); const [paragraphs, setParagraphs] = useState<string[]>([]); const [tasks, setTasks] = useState<{ text: string; checked: boolean }[]>([]); const [tags, setTags] = useState(''); const [pinned, setPinned] = useState(false); const [editable, setEditable] = useState(false); const [readOnlyReason, setReadOnlyReason] = useState(''); const [dirty, setDirty] = useState(false); const [status, setStatus] = useState(''); const [recordings, setRecordings] = useState<Recording[]>([]); const [recordingPhase, setRecordingPhase] = useState('idle'); const [recoveryHeld, setRecoveryHeld] = useState(false); const [playingUri, setPlayingUri] = useState('');
-  const gateRef = useRef(new RecordingSessionGate()); const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null); const draftWriter = useRef<LatestDraftWriter | null>(null); const latestRef = useRef<any>(null); const recoveryBaseRef = useRef<number | null>(null);
+  const gateRef = useRef(new RecordingSessionGate()); const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null); const draftWriter = useRef<LatestDraftWriter | null>(null); const latestRef = useRef<any>(null);
   if (!draftWriter.current) draftWriter.current = new LatestDraftWriter((value: { id: string; revision: number; draft: RecoveryDraft }) => saveRecoveryDraft(value.id, value.revision, value.draft));
   function snapshotDraft() { if (!note) return null; return { id: note.id, revision: note.revision, draft: { version: 1 as const, baseRevision: note.revision, title, document: nativeModelToDocument(paragraphs, tasks), tagsText: tags, pinned } }; }
   async function flushDraft() { if (draftTimer.current) { clearTimeout(draftTimer.current); draftTimer.current = null; } const latest = snapshotDraft(); if (latest && dirty) { latestRef.current = latest; draftWriter.current?.enqueue(latest); } await draftWriter.current?.flush(); }
@@ -102,18 +102,17 @@ function EditorScreen({ route, navigation }: any) {
   const load = useCallback(async () => {
     const value = await getNote(route.params.id); if (!value) throw new Error('This note no longer exists.');
     setNote(value); setTitle(value.title); setTags(value.tags.join('\n')); setPinned(value.pinned);
-    const body = documentToNativeModel(value.document); setEditable(value.schemaVersion === 1 && body.editable); setReadOnlyReason(value.schemaVersion !== 1 ? 'This note metadata uses a newer schema and is preserved read-only.' : body.reason ?? '');
+    const body = documentToNativeModel(value.document); setEditable(canEditNativeNote(value, body.editable)); setReadOnlyReason(value.lifecycle !== 'active' ? 'Archived and trashed notes are read-only. Restore this note from Home before editing.' : value.schemaVersion !== 1 ? 'This note metadata uses a newer schema and is preserved read-only.' : body.reason ?? '');
     setParagraphs(body.paragraphs); setTasks(body.tasks); setDirty(false); setRecordings(await listRecordings(value.id));
     const journal = await getRecoveryDraft(value.id);
     if (journal) {
-      recoveryBaseRef.current = journal.baseRevision;
       const decision = recoveryDecision(value, journal);
       if (decision === 'offer-restore') Alert.alert('Recover draft?', 'A local recovery draft is available.', [
         { text: 'Keep draft', style: 'cancel', onPress: () => { setRecoveryHeld(true); setStatus('Recovery draft preserved. Editing is paused until you restore or discard it.'); } },
-        { text: 'Discard', style: 'destructive', onPress: () => { void discardRecoveryDraft(value.id, journal.baseRevision).then(() => { recoveryBaseRef.current = null; }).catch(error => setStatus(String(error))); } },
+        { text: 'Discard', style: 'destructive', onPress: () => { void discardRecoveryDraft(value.id, journal.baseRevision).catch(error => setStatus(String(error))); } },
         { text: 'Restore', onPress: () => { const recovered = journal.draft; const recoveredBody = documentToNativeModel(recovered.document); if (!recoveredBody.editable) { setRecoveryHeld(true); setStatus('Draft contains content outside the safe native subset; it remains preserved read-only.'); return; } setTitle(recovered.title); setParagraphs(recoveredBody.paragraphs); setTasks(recoveredBody.tasks); setTags(recovered.tagsText); setPinned(recovered.pinned); setDirty(true); setStatus('Draft restored. Save it to commit.'); } },
       ]);
-      else { setRecoveryHeld(true); Alert.alert('Older recovery draft', 'The note has changed since this draft was saved. Keep it for review or discard it; it cannot be restored over the newer note.', [{ text: 'Keep draft', style: 'cancel' }, { text: 'Discard', style: 'destructive', onPress: () => { void discardRecoveryDraft(value.id, journal.baseRevision).then(() => { recoveryBaseRef.current = null; setRecoveryHeld(false); }).catch(error => setStatus(String(error))); } }]); }
+      else { setRecoveryHeld(true); Alert.alert('Older recovery draft', 'The note has changed since this draft was saved. Keep it for review or discard it; it cannot be restored over the newer note.', [{ text: 'Keep draft', style: 'cancel' }, { text: 'Discard', style: 'destructive', onPress: () => { void discardRecoveryDraft(value.id, journal.baseRevision).then(() => setRecoveryHeld(false)).catch(error => setStatus(String(error))); } }]); }
     }
   }, [route.params.id]);
   useEffect(() => { void load().catch(error => setStatus(String(error))); }, [load]);
@@ -129,15 +128,15 @@ function EditorScreen({ route, navigation }: any) {
       await flushDraft();
       const nextDoc = nativeModelToDocument(paragraphs, tasks);
       const nextTags = normalizeTagList(tags.split(/\r?\n/u).map(tag => tag.trim()).filter(Boolean));
-      const updated = await saveNote({ ...note, title, document: nextDoc, tags: nextTags, pinned }, note.revision);
-      if (draftTimer.current) clearTimeout(draftTimer.current); latestRef.current = null; draftWriter.current?.clearPending(); setNote(updated); setDirty(false); setStatus('Saved on this device.'); return true;
+      const result = await saveNote({ ...note, title, document: nextDoc, tags: nextTags, pinned }, note.revision);
+      if (draftTimer.current) clearTimeout(draftTimer.current); latestRef.current = null; draftWriter.current?.clearPending(); setNote(result.note); setDirty(false); setStatus(result.recoveryJournalCleared ? 'Saved on this device.' : 'Note saved, but the matching recovery journal could not be cleared. It is safe and will not overwrite this newer revision.'); return true;
     } catch (error) { setStatus(error instanceof RevisionConflictError ? `${error.message} Your unsaved draft is still here.` : error instanceof Error ? error.message : 'Could not save.'); return false; }
   }
   function back(action: any) {
     if (!gateRef.current.canNavigate()) { setStatus('Stop and save the recording before leaving this note.'); return; }
     if (!dirty) { navigation.dispatch(action); return; }
     Alert.alert('Unsaved changes', 'Save this draft before leaving?', [
-      { text: 'Keep editing', style: 'cancel' }, { text: 'Discard', style: 'destructive', onPress: () => { void (async () => { try { await flushDraft(); if (note && recoveryBaseRef.current !== null) await discardRecoveryDraft(note.id, recoveryBaseRef.current); navigation.dispatch(action); } catch (error) { setStatus(`Draft was kept because discard did not commit: ${String(error)}`); } })(); } }, { text: 'Save', onPress: () => { void (async () => { if (await save()) navigation.dispatch(action); })(); } },
+      { text: 'Keep editing', style: 'cancel' }, { text: 'Discard', style: 'destructive', onPress: () => { void (async () => { if (!note || !draftWriter.current) return; try { await discardDraftSafely({ cancelDebounce: () => { if (draftTimer.current) clearTimeout(draftTimer.current); draftTimer.current = null; latestRef.current = null; }, writer: draftWriter.current, noteId: note.id, expectedRevision: note.revision, deleteJournal: discardRecoveryDraft }); navigation.dispatch(action); } catch (error) { setStatus(`Draft was kept because discard did not commit: ${String(error)}`); } })(); } }, { text: 'Save', onPress: () => { void (async () => { if (await save()) navigation.dispatch(action); })(); } },
     ]);
   }
   usePreventRemove(!gateRef.current.canNavigate() || dirty, ({ data }) => { if (!gateRef.current.canNavigate()) { setStatus('Stop and save the recording before leaving this note.'); return; } back(data.action); });

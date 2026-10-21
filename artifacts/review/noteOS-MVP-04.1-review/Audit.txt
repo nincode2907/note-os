@@ -1,50 +1,47 @@
-noteOS — MVP-04.1 Native Safety Hotfix Audit
-Date: 2026-10-21
-Status: SOURCE AND REVIEW PACKAGE PUSHED · AUTOMATED CHECKS PASS · NATIVE GATES A/B/C BLOCKED
+noteOS — MVP-04.1 Final Corrections & Native Validation Readiness
+Captured: 2026-10-21 (Asia/Ho_Chi_Minh)
+Status: SOURCE CORRECTIONS PASS · STATIC/SYNTHETIC CHECKS PASS · NATIVE GATES A/B/C BLOCKED
 
 SCOPE
-Implemented only the approved MVP-04.1 Phase 00 native prototype safety hotfix. No MVP-05, sync, AI, STT, cloud, background audio, release build, or App Store/TestFlight work.
+Approved MVP-04.1 final corrections within the Phase 00 native prototype. No canonical schema or Web IndexedDB change; no MVP-05, OS upgrade, Xcode installation, sudo/system change, developer-directory change, cloud build or release work.
 
-SOURCE COMMIT
-1db2a882537806c649e1871960e0dfc44e7fe4a8  fix(mvp04.1): harden native session and data safety
-a4bfc7cad8fec45cff4538171b5559d9553a3f28  docs(mvp04.1): package native safety review evidence
-4b6c962a0f7ce981f6ffd8dbf4d1c46a88c18bce  docs(mvp04.1): record verified push and final checksum
-10a713c4ac8ab2fe70f3d400518257c47eb3cc2d  fix(mvp04.1): guard native stack navigation gestures
+SOURCE COMMIT — PUSHED TO origin/main
+c74f8bb00856cb25676bc95586316f5d4ed8a00c fix(mvp04.1): close discard and lifecycle gaps
 
-IMPLEMENTED
-- Synchronous recording session state gate blocks duplicate starts/stops and navigation while a session is active or finalizing. Complete status waits for finalized file existence/size and SQLite recording metadata commit.
-- Exclusive SQLite transactions and additive schema v2 for recovery drafts and cleanup queue. Transaction queries use the callback txn. Import, revision updates and destructive multi-step operations are isolated.
-- Note permanent delete requires the expected revision and trashed lifecycle. Recording metadata and note rows are committed before physical cleanup. Cleanup URIs are queued and retried after restart.
-- Draft journal records schema version, note/base revision, title, canonical body/checklist, tags, pin and save time. Debounced latest-wins persistence, AppState best-effort flush, recovery prompt, stale-draft preservation and atomic matching-journal clear on successful save.
-- Shared pin/tag/search behavior; pin revision guard does not touch updatedAt and works with valid schema-v1 rich-text notes. Legacy backups receive read-only view defaults for absent pin/tags.
-- Lifecycle restriction, caught rename errors, lazy player mount, and missing-file checks. Expo Audio directory:'document' retained per approved SDK 58 correction.
+F-04.1-A — EXPLICIT DISCARD
+- Cancels the debounce, settles/closes any in-flight journal writer, then deletes only the selected note and expected revision.
+- A stale or failed cleanup retains the editor and reports the error; a successful discard cannot recreate the draft after navigation.
+- Save commits the note first, then clears only the matching journal in a second transaction. Journal-clear failure is reported as post-commit cleanup failure.
+- Regression helper evidence: normal edit/discard/reopen; pending write/discard race; stale revision retained; Keep Editing; clear-after-commit ordering — all PASS.
+
+F-04.1-B — NOTE EDIT POLICY
+- Only active schema-v1 notes with supported native content can be edited. Archived/trashed notes are read-only and display a Home restore instruction.
+- `saveNote()` checks the current DB record schema/content/lifecycle and expected revision in the exclusive SQLite transaction; SQL update remains revision- and active-lifecycle-guarded.
+- Pure policy test for active/archive/trash/schema/content — PASS. Expo SQLite transaction behavior remains BLOCKED.
 
 VERIFICATION
-- PASS: Expo SDK dependency check, dependencies up to date.
-- PASS: TypeScript `tsc --noEmit`.
-- PASS: 11 synthetic/pure-helper tests; 0 failures.
-- PASS: iOS JavaScript export, 978 Metro modules, 3.1 MB bundle. This is not a native binary.
-- PASS: `git diff --check`.
-- FAIL: npm audit: 23 findings (15 high, 8 moderate, 0 critical). The `--omit=dev` audit also reports 23.
-- BLOCKED: Native iOS build, Simulator Gates A/B/C and physical-iPhone validation. macOS 15.7.7 has Command Line Tools but no full Xcode; simctl is unavailable; no iPhone was connected.
+- PASS: `rtk npm --prefix spikes/phase-00/gate1/mobile test` — 17 pass, 0 failures, 0 skipped.
+- PASS: `rtk npm --prefix spikes/phase-00/gate1/mobile run typecheck` — `tsc --noEmit`.
+- PASS: `rtk npm --prefix spikes/phase-00/gate1/mobile run expo-check` — dependencies up to date.
+- PASS: `rtk npm --prefix spikes/phase-00/gate1/mobile run export:ios` — 978 Metro modules, 3.1 MB JS bundle only; no native binary.
+- PASS: `rtk git diff --check`.
+- FAIL (prior audit, retained visibly): npm audit reported 23 advisories (15 high, 8 moderate, 0 critical); this correction changed no dependencies. No `npm audit fix --force`.
 
-AUDIT PATHS
-- braces@3.0.3 → micromatch@4.0.8 → metro-file-map@0.87.1 → Expo Metro/CLI. Toolchain path; runtime reachability unknown; advisory reports no patched version.
-- node-forge@1.4.0 → @expo/code-signing-certificates@0.0.7 / @expo/cli@58.1.13. Signing/CLI path; runtime reachability unknown; advisory reports no patched version.
-- uuid@7.0.3 → xcode@3.0.1 → @expo/config-plugins@58.0.9 (also via expo-sharing). Toolchain path; runtime reachability unknown. Advisory lists uuid@11.1.1 as patched, but xcode override compatibility is unverified.
-- npm's force-fix recommendation downgrades Expo to 44.0.6; not applied. No compatible Expo 58 remediation was verified.
-- Advisory references: https://github.com/advisories/GHSA-vfj7-8cjw-p6xm ; https://github.com/advisories/GHSA-86w9-cpqp-85rv ; https://github.com/advisories/GHSA-w5hq-g745-h8pq
+READ-ONLY HOST PREFLIGHT
+- MacBook Air (M2, 2022), model `Mac14,2`, 16 GB RAM; macOS 15.7.7 (24G720).
+- Root volume 460 GiB total, 75 GiB free. App Store Xcode listing shows 3.1 GB; simulator runtimes and installed footprint add usage, so recheck before install.
+- Full Xcode unavailable; selected developer directory is Command Line Tools; `simctl` unavailable.
+- Software Update CLI listed Safari 27.0, macOS Sequoia 15.8.1 and macOS 27.0.1. It did not list Tahoe 26.x. Verify exact offered OS/build and Apple compatibility in System Settings before any upgrade.
+- No Time Machine destination configured; latest-backup mount check failed (code 17). Backup readiness NOT READY. No backup contents were accessed.
+- Expo SDK 58 requires Xcode 26.4+. Apple lists stable Xcode 27.1 (Xcode 27.2 is RC) requiring Tahoe 26.6 or later. MacBook Air M2 (2022) is on Apple's Tahoe compatibility list. See readiness report for safe, approval-gated path and source links.
 
-EVIDENCE FILES
-- noteOS-MVP-04.1-review.zip — approved brief, source snapshot, report, verification evidence and blocked native checklist.
-- noteOS-MVP-04.1-review.zip.sha256 — archive SHA-256.
-- noteOS-MVP-04.1-review/report.md — resolution table, test scope, risk and native checklist.
-- noteOS-MVP-04.1-review/evidence/verification.txt — versions, commands and results.
+NATIVE GATES
+- A — BLOCKED: no compatible full Xcode/simulator; SQLite migration, persistence, transaction/failure and UI behavior unmeasured.
+- B — BLOCKED: no native build/simulator; recorder, file URI, playback and interruption unmeasured.
+- C — BLOCKED: no physical iPhone/signing; no real-device input, offline, microphone or app suspension evidence.
+- No native screenshots captured. Pure helper tests are not SQLite, simulator or iPhone evidence.
 
-LIMITATIONS
-Automated tests do not execute Expo SQLite, Expo Audio, navigation gestures or iOS native APIs. Native rollback/race/SQLITE_BUSY behavior, recording persistence, app-restart recovery and cleanup interruption tests remain BLOCKED. SQLite and filesystem changes are not claimed to be atomic together.
+23 dependency advisories remain visible in `report.md`; no forced fix was run.
+Detailed machine compatibility, install/backup findings, citations, tests and reproduction are in `readiness.md` and `evidence/verification.txt`.
 
-PUSH STATUS
-The source and review commits above were pushed to origin/main. Verified remote `refs/heads/main` SHA: 10a713c4ac8ab2fe70f3d400518257c47eb3cc2d. The archive and checksum are refreshed with the native-stack navigation correction in the subsequent packaging commit. No force push was used.
-
-The archive has a detached SHA-256 sidecar so its own digest does not create a circular checksum inside the archive.
+The review ZIP uses a detached SHA-256 sidecar to avoid a circular self-hash. See `noteOS-MVP-04.1-review.zip.sha256`.
