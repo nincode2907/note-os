@@ -1,4 +1,5 @@
 import { assertNoteRecord, validateNoteDocument } from './note-validation.mjs';
+import { normalizeTagList } from './note-organization.mjs';
 export { NoteDocumentError } from './note-validation.mjs';
 
 const DATABASE_NAME = 'noteos-mvp-01';
@@ -66,6 +67,8 @@ export function makeEmptyNote(now = Date.now(), id = crypto.randomUUID()) {
     updatedAt: now,
     lifecycle: 'active',
     revision: 0,
+    pinned: false,
+    tags: [],
   };
 }
 
@@ -155,6 +158,7 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
       const current = await requestResult(store.get(id));
       if (!current) throw abort(transaction, new NoteNotFoundError(id));
       if (current.revision !== expectedRevision) throw abort(transaction, new NoteConflictError());
+      if (current.schemaVersion !== 1) throw abort(transaction, new NoteStateError('This note record uses a newer schema and is read-only in this version.'));
       if (current.lifecycle === 'trashed') throw abort(transaction, new NoteStateError('Restore a trashed note before editing it.'));
       const updated = {
         ...current,
@@ -170,6 +174,35 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
       try { await done; } catch { /* Consume the abort before returning the original error. */ }
       throw error;
     }
+  }
+
+  async function updateOrganization(id, changes, expectedRevision) {
+    assertExpectedRevision(expectedRevision);
+    if (!changes || typeof changes !== 'object' || Array.isArray(changes)) throw new TypeError('Organization changes must be an object.');
+    const hasPinned = Object.hasOwn(changes, 'pinned'), hasTags = Object.hasOwn(changes, 'tags');
+    if (!hasPinned && !hasTags) throw new TypeError('Choose a pin or tag change.');
+    if (hasPinned && typeof changes.pinned !== 'boolean') throw new TypeError('Pin state must be true or false.');
+    const tags = hasTags ? normalizeTagList(changes.tags) : undefined;
+    const database = await openDatabase();
+    const transaction = database.transaction(STORE_NAME, 'readwrite');
+    const done = transactionResult(transaction), store = transaction.objectStore(STORE_NAME);
+    try {
+      const current = await requestResult(store.get(id));
+      if (!current) throw abort(transaction, new NoteNotFoundError(id));
+      if (current.revision !== expectedRevision) throw abort(transaction, new NoteConflictError());
+      if (current.schemaVersion !== 1) throw abort(transaction, new NoteStateError('This note record uses a newer schema and is read-only in this version.'));
+      if (current.lifecycle !== 'active') throw abort(transaction, new NoteStateError('Restore this note before changing its organization.'));
+      const updated = {
+        ...current,
+        ...(hasPinned ? { pinned: changes.pinned } : {}),
+        ...(hasTags ? { tags } : {}),
+        revision: current.revision + 1,
+      };
+      assertNoteRecord(updated);
+      store.put(updated);
+      await done;
+      return updated;
+    } catch (error) { try { await done; } catch { /* Consume the transaction abort. */ } throw error; }
   }
 
   async function setLifecycle(id, lifecycle, expectedRevision) {
@@ -259,7 +292,7 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
     return { imported: additions.length, skipped: collisions };
   }
 
-  return { list, get, create, save, setLifecycle, deleteForever, importNotes };
+  return { list, get, create, save, updateOrganization, setLifecycle, deleteForever, importNotes };
 }
 
 function assertAudioTimestamp(value, label) {

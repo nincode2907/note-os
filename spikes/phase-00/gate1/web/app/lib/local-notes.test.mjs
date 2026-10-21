@@ -94,3 +94,39 @@ test('permanent deletion rejects stale revisions after a restore transition', as
   assert.equal((await repo.get(created.id)).lifecycle, 'active');
   await assert.rejects(repo.deleteForever(created.id, restored.revision), NoteStateError);
 });
+
+test('organization updates are revision guarded, keep content timestamps, and reject duplicate or invalid tags', async () => {
+  const { name, repo: first } = repository();
+  const second = createNotesRepository(globalThis.indexedDB, name);
+  const note = await first.create(makeNote('organization'));
+  const updated = await first.updateOrganization(note.id, { pinned: true, tags: ['Work', 'Công việc', '日本語'] }, note.revision);
+  assert.equal(updated.pinned, true); assert.deepEqual(updated.tags, ['Work', 'Công việc', '日本語']);
+  assert.equal(updated.updatedAt, note.updatedAt); assert.equal(updated.revision, note.revision + 1);
+  await assert.rejects(first.updateOrganization(note.id, { tags: ['same', ' same '] }, updated.revision), /duplicate tags/i);
+  await assert.rejects(first.updateOrganization(note.id, { tags: ['  '] }, updated.revision), /tag name/i);
+  await assert.rejects(first.updateOrganization(note.id, { tags: ['x'.repeat(33)] }, updated.revision), /up to 32/i);
+  await assert.rejects(second.save(note.id, { title: 'stale overwrite', document: note.document }, note.revision), NoteConflictError);
+  assert.equal((await second.get(note.id)).title, note.title);
+  assert.equal((await second.get(note.id)).pinned, true);
+});
+
+test('archive, trash, and restore retain pinned and tag metadata', async () => {
+  const { repo } = repository();
+  const note = await repo.create({ ...makeNote('organization-lifecycle'), pinned: true, tags: ['Personal', '日本語'] });
+  const archived = await repo.setLifecycle(note.id, 'archived', note.revision);
+  assert.equal(archived.pinned, true); assert.deepEqual(archived.tags, ['Personal', '日本語']);
+  const restored = await repo.setLifecycle(note.id, 'active', archived.revision);
+  const trashed = await repo.setLifecycle(note.id, 'trashed', restored.revision);
+  assert.equal(trashed.pinned, true); assert.deepEqual(trashed.tags, ['Personal', '日本語']);
+  const active = await repo.setLifecycle(note.id, 'active', trashed.revision);
+  assert.equal(active.pinned, true); assert.deepEqual(active.tags, ['Personal', '日本語']);
+});
+
+test('future note record schemas remain preserved but cannot be edited or organized as schema v1', async () => {
+  const { repo } = repository();
+  const future = { ...makeEmptyNote(100, 'future-record'), schemaVersion: 2, futureMetadata: { keep: true } };
+  await repo.create(future);
+  await assert.rejects(repo.save(future.id, { title: 'unsafe', document: future.document }, future.revision), /newer schema/i);
+  await assert.rejects(repo.updateOrganization(future.id, { pinned: true }, future.revision), /newer schema/i);
+  assert.deepEqual(await repo.get(future.id), future);
+});

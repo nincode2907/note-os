@@ -1,4 +1,5 @@
 import { assertNoteRecord } from './note-validation.mjs';
+import { normalizeTagList, tagKey } from './note-organization.mjs';
 
 export const BACKUP_FORMAT = 'noteos.local-backup';
 export const BACKUP_VERSION = 1;
@@ -20,9 +21,33 @@ function collectNodeText(node, output) {
 }
 
 export function noteSearchText(note) {
-  const pieces = [note?.title];
+  const pieces = [note?.title, ...(Array.isArray(note?.tags) ? note.tags : [])];
   collectNodeText(note?.document, pieces);
   return searchableText(pieces.join(' '));
+}
+
+export function filterNotesByTags(notes, selectedTags = []) {
+  const required = selectedTags.map(tagKey);
+  if (!required.length) return [...notes];
+  return notes.filter((note) => {
+    const tags = new Set((Array.isArray(note.tags) ? note.tags : []).map(tagKey));
+    return required.every((tag) => tags.has(tag));
+  });
+}
+
+export function sortNotes(notes, mode = 'updated') {
+  const compareDate = (left, right) => Number(right.updatedAt) - Number(left.updatedAt) || String(left.id).localeCompare(String(right.id));
+  const compareOther = (left, right) => {
+    if (mode === 'created') return Number(right.createdAt) - Number(left.createdAt) || compareDate(left, right);
+    if (mode === 'title') return String(left.title ?? '').localeCompare(String(right.title ?? ''), undefined, { sensitivity: 'base', numeric: true }) || compareDate(left, right);
+    return compareDate(left, right);
+  };
+  return [...notes].sort((left, right) => {
+    const pinOrder = Number(Boolean(right.pinned)) - Number(Boolean(left.pinned));
+    if (pinOrder) return pinOrder;
+    if (left.pinned && right.pinned) return compareDate(left, right);
+    return compareOther(left, right);
+  });
 }
 
 export function filterNotes(notes, query, lifecycle) {
@@ -49,6 +74,8 @@ export function parseBackup(input) {
   }
   return bundle;
 }
+
+export { normalizeTagList };
 
 export function titleFromDocument(document) {
   const text = [];

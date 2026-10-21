@@ -1,4 +1,5 @@
 import { validateCanonicalDocument } from '../../packages/document-engine/src/index.js';
+import { validateOrganizationMetadata } from './note-organization.mjs';
 
 export class NoteDocumentError extends Error {
   constructor(message, issues = []) { super(message); this.name = 'NoteDocumentError'; this.issues = issues; }
@@ -20,5 +21,6 @@ export function assertNoteRecord(note, { allowUnsupported = false } = {}) {
   if (typeof note.title !== 'string' || !Number.isSafeInteger(note.schemaVersion) || note.schemaVersion < 1 || !Number.isSafeInteger(note.createdAt) || note.createdAt < 0 || !Number.isSafeInteger(note.updatedAt) || note.updatedAt < 0 || !['active', 'archived', 'trashed'].includes(note.lifecycle) || !Number.isSafeInteger(note.revision) || note.revision < 0) {
     throw new TypeError(`Backup note “${note.id}” has invalid metadata.`);
   }
+  validateOrganizationMetadata(note);
   validateNoteDocument(note.document, allowUnsupported);
 }

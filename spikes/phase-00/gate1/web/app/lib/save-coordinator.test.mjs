@@ -78,3 +78,33 @@ test('deletion epoch prevents stale-tab save after same-ID reimport', async () =
   const f = fixture(); f.coordinator.edit(draft('A')); f.journal.current = false;
   assert.equal((await f.coordinator.flush()).ok, false); assert.equal(f.calls.length, 0); assert.equal(f.coordinator.snapshot().dirty, true);
 });
+
+test('organization mutation waits for draft autosave and uses its committed revision', async () => {
+  const f = fixture(), organizationWrites = [];
+  f.repository.updateOrganization = async (id, changes, revision) => {
+    organizationWrites.push({ id, changes, revision });
+    return { ...f.coordinator.snapshot().note, ...changes, revision: revision + 1 };
+  };
+  f.coordinator.edit(draft('Latest body'));
+  const mutation = f.coordinator.updateMetadata({ pinned: true });
+  assert.equal(f.calls.length, 1); assert.equal(organizationWrites.length, 0);
+  f.finish(0);
+  assert.equal((await mutation).ok, true);
+  assert.deepEqual(organizationWrites, [{ id: 'one', changes: { pinned: true }, revision: 1 }]);
+  assert.equal(f.coordinator.snapshot().note.title, 'Latest body');
+  assert.equal(f.coordinator.snapshot().note.pinned, true);
+  assert.equal(f.coordinator.snapshot().note.revision, 2);
+  assert.equal(f.journal.value, null);
+});
+
+test('failed draft save blocks organization mutation and retains its recovery journal', async () => {
+  const f = fixture(); let organizationWrites = 0;
+  f.repository.updateOrganization = async () => { organizationWrites += 1; return f.coordinator.snapshot().note; };
+  f.coordinator.edit(draft('Unsaved body'));
+  const mutation = f.coordinator.updateMetadata({ tags: ['Work'] });
+  f.calls[0].gate.reject(new Error('disk full'));
+  assert.equal((await mutation).ok, false);
+  assert.equal(organizationWrites, 0);
+  assert.equal(f.journal.value.title, 'Unsaved body');
+  assert.equal(f.coordinator.snapshot().note.revision, 0);
+});

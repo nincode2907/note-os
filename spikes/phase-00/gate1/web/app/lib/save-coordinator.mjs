@@ -52,5 +52,18 @@ export function createSaveCoordinator({ note, repository, journal, onChange = ()
       notify(); return { ok: true, note: saved };
     } catch (cause) { error = cause; notify(); return { ok: false, error: cause }; }
   }
-  return { edit, flush, transition, snapshot, clearJournal: () => journal.clear() };
+  async function updateMetadata(changes) {
+    const result = await flush();
+    if (!result.ok) return result;
+    try {
+      if (!journal.isCurrent()) throw new NoteConflictError();
+      saved = await repository.updateOrganization(saved.id, changes, saved.revision);
+      error = null; notify();
+      return { ok: true, note: saved };
+    } catch (cause) {
+      error = cause; notify();
+      return { ok: false, error: cause };
+    }
+  }
+  return { edit, flush, transition, updateMetadata, snapshot, clearJournal: () => journal.clear() };
 }

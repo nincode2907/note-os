@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { filterNotes, makeBackup, noteSearchText, parseBackup, searchableText } from './mvp-utils.mjs';
+import { filterNotes, filterNotesByTags, makeBackup, noteSearchText, parseBackup, searchableText, sortNotes } from './mvp-utils.mjs';
 
 const note = (id, title, body, lifecycle = 'active') => ({
   id, title, document: { schemaVersion: 1, type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: body }] }] },
@@ -24,11 +24,49 @@ test('lifecycle filtering does not include archived or trashed notes in active s
   assert.deepEqual(filterNotes(notes, 'same', 'active').map(({ id }) => id), ['a']);
 });
 
+test('tag filtering uses case-insensitive canonical Unicode identity and requires every selected tag', () => {
+  const notes = [
+    { ...note('both', 'One', 'x'), tags: ['Work', '日本語'] },
+    { ...note('work', 'Two', 'x'), tags: ['work'] },
+    { ...note('kana', 'Three', 'x'), tags: ['にほんご'] },
+  ];
+  assert.deepEqual(filterNotesByTags(notes, ['WORK']).map(({ id }) => id), ['both', 'work']);
+  assert.deepEqual(filterNotesByTags(notes, ['work', '日本語']).map(({ id }) => id), ['both']);
+  assert.deepEqual(filterNotesByTags(notes, ['日本語']).map(({ id }) => id), ['both']);
+  assert.equal(noteSearchText({ ...notes[0], tags: ['Công việc', '日本語'] }).includes('cong viec'), true);
+});
+
+test('pinned notes stay first; pinned ties use updatedAt and remaining notes honor selected sort', () => {
+  const notes = [
+    { ...note('older-pin', 'A pin', 'x'), pinned: true, updatedAt: 3 },
+    { ...note('newer-pin', 'Z pin', 'x'), pinned: true, updatedAt: 9 },
+    { ...note('recent', 'Zulu', 'x'), updatedAt: 20 },
+    { ...note('alpha', 'Alpha', 'x'), updatedAt: 10 },
+  ];
+  assert.deepEqual(sortNotes(notes).map(({ id }) => id), ['newer-pin', 'older-pin', 'recent', 'alpha']);
+  assert.deepEqual(sortNotes(notes, 'title').map(({ id }) => id), ['newer-pin', 'older-pin', 'alpha', 'recent']);
+});
+
 test('backup parser accepts version 1 data and preserves document values', () => {
   const source = note('one', 'A note', 'hello');
   const parsed = parseBackup(JSON.stringify(makeBackup([source], '2026-10-21T00:00:00.000Z')));
   assert.equal(parsed.version, 1);
   assert.deepEqual(parsed.notes[0].document, source.document);
+});
+
+test('backup v1 preserves organization metadata and remains compatible with older v1 notes', () => {
+  const source = { ...note('tagged', '日本語', '本文'), pinned: true, tags: ['仕事', 'Công việc'] };
+  const parsed = parseBackup(makeBackup([source]));
+  assert.equal(parsed.notes[0].pinned, true); assert.deepEqual(parsed.notes[0].tags, source.tags);
+  const older = note('older', 'Old export', 'body'); delete older.pinned; delete older.tags;
+  assert.deepEqual(parseBackup(makeBackup([older])).notes[0], older);
+});
+
+test('backup v1 rejects invalid organization metadata without rewriting source notes', () => {
+  const invalid = { ...note('invalid-tags', 'Bad', 'x'), pinned: true, tags: ['duplicate', ' Duplicate '] };
+  const before = structuredClone(invalid);
+  assert.throws(() => parseBackup(makeBackup([invalid])), /duplicate tags/i);
+  assert.deepEqual(invalid, before);
 });
 
 test('backup parser rejects duplicate IDs before repository mutation', () => {
