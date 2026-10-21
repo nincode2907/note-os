@@ -257,7 +257,7 @@ export function validateCanonicalDocument(input, schema = getCanonicalSchema()) 
       schemaVersion: CANONICAL_SCHEMA_VERSION,
       type: normalizedNode.type,
       ...(normalizedNode.attrs === undefined ? {} : { attrs: normalizedNode.attrs }),
-      ...(normalizedNode.content === undefined ? {} : { content: normalizedNode.content }),
+      content: normalizedNode.content ?? [],
     };
 
     return { status: 'supported', editable: true, document, issues: [] };

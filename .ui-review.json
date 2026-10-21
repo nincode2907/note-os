@@ -1,13 +1,80 @@
 {
   "version": 1,
-  "project": "noteOS Phase 00",
-  "baseUrl": "http://noteos.localhost",
+  "project": "noteOS MVP-01.1",
+  "baseUrl": "http://127.0.0.1:3000",
   "outputDir": "artifacts/ui-review",
   "viewports": {
     "desktop": { "width": 1440, "height": 1000 },
     "mobile": { "width": 390, "height": 844 }
   },
+  "capture": { "reducedMotion": true, "timeoutMs": 15000 },
   "targets": [
-    { "id": "phase00-harness", "name": "Môi trường kiểm chứng", "route": "/", "viewports": ["desktop", "mobile"], "pdf": true }
+    { "id": "home", "name": "Notes Home", "route": "/", "viewports": ["desktop", "mobile"] },
+    {
+      "id": "editor", "name": "Editor with synthetic note", "route": "/", "viewports": ["desktop", "mobile"],
+      "actions": [
+        { "type": "click", "selector": "button:has-text('New note')" },
+        { "type": "waitFor", "selector": "#note-title" },
+        { "type": "fill", "selector": "#note-title", "value": "Điện thoại — Đà Nẵng" },
+        { "type": "fill", "selector": "[contenteditable='true']", "value": "Ghi chú thử nghiệm. 今日は晴れです。" },
+        { "type": "wait", "ms": 900 }
+      ]
+    },
+    {
+      "id": "search", "name": "Search without Vietnamese diacritics", "route": "/", "viewports": ["desktop", "mobile"],
+      "actions": [
+        { "type": "click", "selector": "button:has-text('New note')" },
+        { "type": "waitFor", "selector": "#note-title" },
+        { "type": "fill", "selector": "#note-title", "value": "Điện thoại — Đà Nẵng" },
+        { "type": "fill", "selector": "[contenteditable='true']", "value": "Ghi chú thử nghiệm. 今日は晴れです。" },
+        { "type": "wait", "ms": 900 },
+        { "type": "click", "selector": "a.back-link" },
+        { "type": "waitFor", "selector": "#note-search" },
+        { "type": "fill", "selector": "#note-search", "value": "dien thoai" },
+        { "type": "waitFor", "selector": ".note-card" }
+      ]
+    },
+    {
+      "id": "archive", "name": "Archive with restore control", "route": "/", "viewports": ["desktop", "mobile"],
+      "actions": [
+        { "type": "click", "selector": "button:has-text('New note')" },
+        { "type": "waitFor", "selector": "#note-title" },
+        { "type": "fill", "selector": "#note-title", "value": "Synthetic archive note" },
+        { "type": "fill", "selector": "[contenteditable='true']", "value": "Archive and restore acceptance data." },
+        { "type": "wait", "ms": 900 },
+        { "type": "click", "selector": "button:has-text('Archive')" },
+        { "type": "waitFor", "selector": "h1.page-title:has-text('Archive')" },
+        { "type": "waitFor", "selector": "button:has-text('Restore')" }
+      ]
+    },
+    {
+      "id": "trash", "name": "Trash with restore control", "route": "/", "viewports": ["desktop", "mobile"],
+      "actions": [
+        { "type": "click", "selector": "button:has-text('New note')" },
+        { "type": "waitFor", "selector": "#note-title" },
+        { "type": "fill", "selector": "#note-title", "value": "Synthetic trash note" },
+        { "type": "fill", "selector": "[contenteditable='true']", "value": "Trash and restore acceptance data." },
+        { "type": "wait", "ms": 900 },
+        { "type": "click", "selector": "button:has-text('Move to trash')" },
+        { "type": "waitFor", "selector": "h1.page-title:has-text('Trash')" },
+        { "type": "waitFor", "selector": "button:has-text('Restore')" }
+      ]
+    },
+    {
+      "id": "delete-confirmation", "name": "Permanent delete safety confirmation", "route": "/", "viewports": ["desktop", "mobile"],
+      "actions": [
+        { "type": "click", "selector": "button:has-text('New note')" },
+        { "type": "waitFor", "selector": "#note-title" },
+        { "type": "fill", "selector": "#note-title", "value": "Synthetic confirmation note" },
+        { "type": "fill", "selector": "[contenteditable='true']", "value": "This note is disposable UI capture data." },
+        { "type": "wait", "ms": 900 },
+        { "type": "click", "selector": "button:has-text('Move to trash')" },
+        { "type": "waitFor", "selector": "h1.page-title:has-text('Trash')" },
+        { "type": "click", "selector": "button:has-text('Delete forever')" },
+        { "type": "waitFor", "selector": "[role='dialog']" },
+        { "type": "waitFor", "selector": "button:has-text('Request full backup download')" }
+      ]
+    },
+    { "id": "backup", "name": "Backup and restore", "route": "/backup", "viewports": ["desktop", "mobile"] }
   ]
 }

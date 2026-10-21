@@ -34,6 +34,14 @@ test('accepts empty and minimal v1 documents', () => {
   assert.equal(validateCanonicalDocument({ schemaVersion: 1, type: 'doc', content: [{ type: 'paragraph' }] }).status, 'supported');
 });
 
+test('empty document round-trips with its required empty content array', () => {
+  const validated = validateCanonicalDocument(createEmptyCanonicalDocument());
+  assert.deepEqual(validated.document, { schemaVersion: 1, type: 'doc', content: [] });
+  const serialized = serializeCanonicalDocument(validated.document);
+  assert.equal(serialized.status, 'serialized');
+  assert.deepEqual(parseCanonicalDocument(serialized.json).document, { schemaVersion: 1, type: 'doc', content: [] });
+});
+
 test('accepts supported blocks, marks, task lists, nested lists and attachment references', async () => {
   const result = validateCanonicalDocument(rich);
   assert.equal(result.status, 'supported', JSON.stringify(result.issues));

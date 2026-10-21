@@ -2,10 +2,13 @@
 
 noteOS là dự án kiểm chứng kiến trúc cho ứng dụng ghi chú local-first trên Web và iPhone. Repository hiện ở **Phase 00**: chạy các spike kỹ thuật và thu thập bằng chứng trước khi quyết định kiến trúc. Đây chưa phải ứng dụng production; chưa bắt đầu Phase 01.
 
+> **Product milestone update (MVP-01.1):** Local-first Web MVP quality and runtime acceptance passed for the tested synthetic browser workflows. Real-iPhone, full browser offline mode, and storage eviction behavior remain unverified. Sync remains undecided; MVP-02 and Phase 01 have not started. See [MVP-01.1 report](docs/mvp/mvp-01.1-report.md).
+
 ## Trạng thái hiện tại
 
 | Hạng mục | Trạng thái | Bằng chứng / giới hạn |
 | --- | --- | --- |
+| MVP-01 local-first Web notes | **MVP-01.1 PASS WITH LIMITS** | Browser acceptance, repository tests, typecheck và build đã chạy; xem [báo cáo MVP-01.1](docs/mvp/mvp-01.1-report.md). |
 | Dev Hub registration | **PASS** | noteOS đăng ký block `15700–15799`; 200 TCP probes IPv4/IPv6 và Docker publications không phát hiện conflict tại lần recheck trước khi ghi. |
 | Docker foundation tối thiểu (00-D) | **PASS** | Web/API/worker/MySQL/Redis/Mongo/PowerSync khởi động; health, kết nối network và persistence qua restart đã được kiểm tra. Search 5.000 note và backup/restore còn **BLOCKED / chưa chạy**; xem [báo cáo nền tảng](docs/phase-00/architecture-decisions.md). |
 | Sync bake-off (00-C) | **BLOCKED — engine UNDECIDED** | Suite cuối 5/5 PASS với fixture tổng hợp chung 100 notes. PowerSync Node SQLite full sync/lost ACK/reopen, WatermelonDB LokiJS sync/conflict/tombstone/privacy, Custom SQLite outbox/idempotency/migration prototype. Scenario chưa đồng nhất; Web/iPhone thật chưa chạy; chưa đủ chọn engine. Xem [bảng kiểm thử sync](docs/phase-00/sync-benchmark.md). |
