@@ -4,13 +4,32 @@
     "slug": "noteos-mvp04-prototype",
     "scheme": "noteos",
     "version": "0.4.0",
-    "newArchEnabled": true,
-    "platforms": ["ios"],
-    "ios": { "bundleIdentifier": "local.noteos.mvp04", "supportsTablet": false },
+    "platforms": [
+      "ios"
+    ],
+    "ios": {
+      "bundleIdentifier": "local.noteos.mvp04",
+      "supportsTablet": false
+    },
     "plugins": [
-      "expo-dev-client",
-      ["expo-audio", { "microphonePermission": "Allow noteOS to record audio for notes stored on this device.", "enableBackgroundRecording": false, "enableBackgroundPlayback": false }],
-      ["expo-file-system", { "enableFileSharing": true, "supportsOpeningDocumentsInPlace": false }]
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Allow noteOS to record audio for notes stored on this device.",
+          "enableBackgroundRecording": false,
+          "enableBackgroundPlayback": false
+        }
+      ],
+      [
+        "expo-file-system",
+        {
+          "enableFileSharing": true,
+          "supportsOpeningDocumentsInPlace": false
+        }
+      ],
+      "expo-sharing",
+      "expo-sqlite",
+      "expo-asset"
     ]
   }
 }
