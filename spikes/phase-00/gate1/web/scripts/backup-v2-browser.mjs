@@ -1,0 +1,68 @@
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import { mkdir, writeFile, readFile } from 'node:fs/promises';
+import assert from 'node:assert/strict';
+import { seedBackupFixture, fingerprint } from './backup-v2-fixture.mjs';
+import { createTar, readTar } from '../app/lib/archive-tar.mjs';
+const require = createRequire(import.meta.url), root = fileURLToPath(new URL('../../../../../', import.meta.url));
+const { chromium } = require(require.resolve('playwright', { paths: [process.env.NOTEOS_PLAYWRIGHT_ROOT ?? `${root}/../ui-lens`] }));
+const baseUrl = process.env.NOTEOS_TEST_URL ?? 'http://127.0.0.1:15710', output = `${root}/artifacts/review/noteOS-Backup-V2-review/evidence`;
+await mkdir(output, { recursive: true });
+const browser = await chromium.launch(), results = [], diagnostics = { consoleErrors: [], pageErrors: [], externalRequests: [] };
+async function context(viewport = { width: 1440, height: 1000 }) {
+  const c = await browser.newContext({ acceptDownloads: true, viewport });
+  await c.route('**/*', route => { if (new URL(route.request().url()).origin !== baseUrl) { diagnostics.externalRequests.push(route.request().url()); return route.abort(); } return route.continue(); });
+  c.on('page', page => { page.setDefaultTimeout(20000); page.on('console', m => { if (m.type() === 'error') diagnostics.consoleErrors.push(m.text()); }); page.on('pageerror', e => diagnostics.pageErrors.push(e.message)); });
+  return c;
+}
+try {
+  const source = await context(), target = await context();
+  const page = await source.newPage(), restore = await target.newPage();
+  await seedBackupFixture(page, baseUrl); const before = await fingerprint(page);
+  await page.screenshot({ path: `${output}/backup-desktop.png`, fullPage: true });
+  let downloads = 0; page.on('download', () => downloads++);
+  const pending = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Download Full Archive V2', exact: true }).evaluate(button => { button.click(); button.click(); });
+  const download = await pending, path = await download.path();
+  assert.match(download.suggestedFilename(), /\.tar$/); await page.getByRole('status').filter({ hasText: 'Download requested for 3 notes and 2 recordings' }).waitFor(); assert.equal(downloads,1);
+  await download.saveAs(`${output}/synthetic-roundtrip.tar`);
+  assert.deepEqual(await fingerprint(page),before);
+  results.push({ name: 'full-export-snapshot-and-double-action-guard', status: 'PASS' });
+  await restore.goto(`${baseUrl}/backup`); await restore.locator('input[type=file]').setInputFiles(path);
+  await restore.getByRole('button', { name: 'Validate and import', exact: true }).click();
+  await restore.getByRole('status').filter({ hasText: 'Imported 3 notes and 2 recordings' }).waitFor();
+  assert.deepEqual(await fingerprint(restore),before);
+  await restore.screenshot({ path: `${output}/restore-desktop.png`, fullPage: true });
+  results.push({ name: 'clean-browser-restore-exact-notes-metadata-and-SHA256', status: 'PASS' });
+  await restore.locator('input[type=file]').setInputFiles(path); await restore.getByRole('button', { name: 'Validate and import', exact: true }).click();
+  await restore.getByRole('status').filter({ hasText: 'Imported 0 notes and 0 recordings' }).waitFor(); assert.deepEqual(await fingerprint(restore),before);
+  await restore.getByLabel('Skip the entire import if any IDs conflict').check();
+  await restore.locator('input[type=file]').setInputFiles(path); await restore.getByRole('button', { name: 'Validate and import', exact: true }).click();
+  await restore.getByRole('alert').filter({ hasText: 'entire import was aborted' }).waitFor(); assert.deepEqual(await fingerprint(restore),before);
+  results.push({ name: 'merge-repeat-and-skip-conflict-preserve-existing-bytes', status: 'PASS' });
+  const entries = await readTar(new Blob([await readFile(path)])), audioPath = [...entries.keys()].find(p => p.startsWith('blobs/'));
+  entries.set(audioPath,new Blob(['X',entries.get(audioPath).slice(1)]));
+  const corrupt = createTar([...entries].map(([path,blob])=>({path,blob})));
+  await restore.locator('input[type=file]').setInputFiles({name:'corrupt.tar',mimeType:'application/x-tar',buffer:Buffer.from(await corrupt.arrayBuffer())});
+  await restore.getByRole('button', { name: 'Validate and import', exact: true }).click(); await restore.getByRole('alert').filter({hasText:'checksum mismatch'}).waitFor(); assert.deepEqual(await fingerprint(restore),before);
+  results.push({name:'corrupted-browser-import-zero-mutation',status:'PASS'});
+  await page.evaluate(() => new Promise((resolve,reject)=>{const r=indexedDB.open('noteos-mvp-01');r.onsuccess=()=>{const db=r.result,tx=db.transaction('recordings','readwrite'),store=tx.objectStore('recordings'),q=store.get('synthetic-recording-0');q.onsuccess=()=>store.put({...q.result,status:'paused'});tx.oncomplete=()=>{db.close();resolve();};tx.onabort=()=>reject(tx.error);};}));
+  const active = await fingerprint(page); await page.getByRole('button',{name:'Download Full Archive V2',exact:true}).click(); await page.getByRole('alert').filter({hasText:'Stop/finalize'}).waitFor(); assert.deepEqual(await fingerprint(page),active);
+  await page.setViewportSize({width:390,height:844}); await page.screenshot({path:`${output}/backup-mobile-active-blocked.png`,fullPage:true});
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+  results.push({name:'active-recording-blocks-full-export-and-mobile-layout',status:'PASS'});
+  const [legacy] = await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'Download backup',exact:true}).click()]); assert.match(legacy.suggestedFilename(),/\.json$/);
+  results.push({name:'legacy-export-still-available-with-explicit-audio-warning',status:'PASS'});
+  const quotaContext = await context(), quota = await quotaContext.newPage();
+  await quota.goto(baseUrl); await quota.getByRole('button', { name: /New note/ }).first().click(); await quota.locator('#note-title').waitFor(); await quota.goto(`${baseUrl}/backup`);
+  const quotaBefore = await fingerprint(quota);
+  await quota.evaluate(() => { const add = IDBObjectStore.prototype.add; IDBObjectStore.prototype.add = function(value, ...args) { if (this.name === 'recordingChunks') throw new DOMException('Synthetic quota failure', 'QuotaExceededError'); return add.call(this, value, ...args); }; });
+  await quota.locator('input[type=file]').setInputFiles(path); await quota.getByRole('button', { name: 'Validate and import', exact: true }).click();
+  await quota.getByRole('alert').filter({ hasText: 'Synthetic quota failure' }).waitFor(); assert.deepEqual(await fingerprint(quota), quotaBefore);
+  results.push({name:'real-IndexedDB-quota-abort-preserves-existing-data-and-rolls-back-all-stores',status:'PASS'});
+  await quotaContext.close();
+  await source.close(); await target.close();
+} catch(error) { results.push({name:'browser-acceptance',status:'FAIL',error:error.stack}); }
+finally { await writeFile(`${output}/browser-results.json`,JSON.stringify({browser:browser.version(),results,diagnostics},null,2)); await browser.close(); }
+console.log(JSON.stringify({results,diagnostics},null,2));
+if(results.some(r=>r.status==='FAIL') || Object.values(diagnostics).some(v=>v.length)) process.exitCode=1;

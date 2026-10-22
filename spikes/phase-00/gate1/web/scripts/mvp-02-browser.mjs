@@ -136,7 +136,7 @@ try {
     await page.getByRole('button', { name: 'Resume' }).click(); await page.getByText('Recording — audio chunks are being saved on this device.').waitFor();
     await stop(page); await otherTab.getByRole('button', { name: /Record audio/ }).click();
     await otherTab.getByText('Recording — audio chunks are being saved on this device.').waitFor();
-    await waitForChunks(otherTab, id); await stop(otherTab);
+    await waitForNewRecordingChunk(otherTab, id, 1); await stop(otherTab);
     check((await records(page, id)).filter((row) => row.status === 'complete').length === 2, 'The per-note lock was not released after final chunk persistence.');
     await otherTab.close();
   });

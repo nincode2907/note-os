@@ -1,5 +1,6 @@
 import { assertNoteRecord, validateNoteDocument } from './note-validation.mjs';
 import { normalizeTagList } from './note-organization.mjs';
+import { requireVerifiedArchive } from './archive-v2.mjs';
 export { NoteDocumentError } from './note-validation.mjs';
 
 const DATABASE_NAME = 'noteos-mvp-01';
@@ -292,7 +293,50 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
     return { imported: additions.length, skipped: collisions };
   }
 
-  return { list, get, create, save, updateOrganization, setLifecycle, deleteForever, importNotes };
+  async function snapshotArchive() {
+    const database = await openDatabase();
+    const transaction = database.transaction([STORE_NAME, RECORDINGS_STORE, RECORDING_CHUNKS_STORE], 'readonly');
+    const done = transactionResult(transaction);
+    // Queue every request synchronously in the same storage-level snapshot.
+    const requests = [STORE_NAME, RECORDINGS_STORE, RECORDING_CHUNKS_STORE].map((name) => requestResult(transaction.objectStore(name).getAll()));
+    const [notes, recordings, chunks] = await Promise.all(requests);
+    await done;
+    return { notes, recordings, chunks };
+  }
+
+  async function importArchive(snapshot, mode = 'merge') {
+    requireVerifiedArchive(snapshot);
+    if (!['merge', 'skip'].includes(mode)) throw new TypeError('Choose merge or skip.');
+    const database = await openDatabase();
+    const transaction = database.transaction([STORE_NAME, RECORDINGS_STORE, RECORDING_CHUNKS_STORE], 'readwrite');
+    const done = transactionResult(transaction);
+    try {
+      // Only IndexedDB requests are awaited inside this transaction. Parsing,
+      // hashing, Blob slicing, and record validation finished before it opened.
+      const stores = [STORE_NAME, RECORDINGS_STORE, RECORDING_CHUNKS_STORE].map((name) => transaction.objectStore(name));
+      const keys = await Promise.all(stores.map((store) => requestResult(store.getAllKeys())));
+      const [noteIds, recordingIds, chunkIds] = keys.map((ids) => new Set(ids));
+      const skippedNoteIds = new Set(snapshot.notes.filter((note) => noteIds.has(note.id)).map((note) => note.id));
+      const recordingNotes = new Map(snapshot.recordings.map((recording) => [recording.id, recording.noteId]));
+      for (const recording of snapshot.recordings) if (recordingIds.has(recording.id)) skippedNoteIds.add(recording.noteId);
+      for (const chunk of snapshot.chunks) if (chunkIds.has(chunk.id)) skippedNoteIds.add(recordingNotes.get(chunk.recordingId));
+      if (mode === 'skip' && skippedNoteIds.size) throw new Error('An incoming note, recording or chunk ID already exists. The entire import was aborted.');
+      const notes = snapshot.notes.filter((note) => !skippedNoteIds.has(note.id));
+      const recordings = snapshot.recordings.filter((recording) => !skippedNoteIds.has(recording.noteId));
+      const importedRecordingIds = new Set(recordings.map((recording) => recording.id));
+      for (const note of notes) stores[0].add(note);
+      for (const recording of recordings) stores[1].add(recording);
+      for (const chunk of snapshot.chunks) if (importedRecordingIds.has(chunk.recordingId)) stores[2].add(chunk);
+      await done;
+      return { importedNotes: notes.length, skippedNotes: snapshot.notes.length - notes.length, importedRecordings: recordings.length, skippedRecordings: snapshot.recordings.length - recordings.length };
+    } catch (error) {
+      abort(transaction, error);
+      try { await done; } catch { /* Consume the abort; retain quota or collision cause. */ }
+      throw error;
+    }
+  }
+
+  return { list, get, create, save, updateOrganization, setLifecycle, deleteForever, importNotes, snapshotArchive, importArchive };
 }
 
 function assertAudioTimestamp(value, label) {

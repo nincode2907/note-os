@@ -14,6 +14,7 @@
     "benchmark:documents": "npm --prefix packages/document-engine run benchmark"
   },
   "dependencies": {
+    "@noble/hashes": "2.4.0",
     "@nozbe/watermelondb": "0.28.0",
     "@powersync/web": "2.5.0",
     "@tiptap/core": "3.32.0",

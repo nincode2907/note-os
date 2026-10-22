@@ -259,3 +259,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
 }
+
+.archive-recommended { border-top: 3px solid var(--accent); }
+.backup-panel .backup-limit { font-size: 12px; }
