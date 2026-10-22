@@ -1,0 +1,30 @@
+# Isolated synthetic validation service. No live app volumes or ports are used.
+name: noteos-backup-v2
+networks:
+  default:
+    name: noteos-backup-v2-validation
+services:
+  web:
+    image: noteos-backup-v2-web
+    build:
+      context: ./spikes/phase-00/gate1/web
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:15710:3000"
+    environment:
+      NEXT_TELEMETRY_DISABLED: "1"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/backup').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+  checks:
+    profiles: ["checks"]
+    image: noteos-backup-v2-checks
+    build:
+      context: ./spikes/phase-00/gate1/web
+      dockerfile: Dockerfile
+      target: build
+    volumes:
+      - ./spikes/phase-00/gate1/web/app:/app/app:ro
+    command: ["sh", "-c", "npm run typecheck && npm run test:mvp && npm run test:documents"]

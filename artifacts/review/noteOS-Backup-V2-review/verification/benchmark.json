@@ -1,0 +1,217 @@
+{
+  "environment": {
+    "node": "v24.21.0",
+    "platform": "darwin",
+    "os": "24.6.0",
+    "arch": "arm64",
+    "cpu": "Apple M2",
+    "logicalCpus": 8,
+    "totalMemoryBytes": 17179869184,
+    "browser": "156.0.8078.4"
+  },
+  "dataset": "Synthetic byte sequences, 3 Unicode notes, 2 recordings (complete/interrupted), 1 MiB chunks; no playback claim",
+  "scratch": "<temporary benchmark directory; archives not packaged>",
+  "memoryMethod": "Dedicated Chromium process IDs from CDP SystemInfo; summed RSS sampled with ps every ~100ms plus JSHeapUsedSize. Shared pages may be double-counted; Blob disk/cache allocations are not fully attributed. Not fixed-memory or zero-copy proof.",
+  "samples": [
+    {
+      "sizeMiB": 50,
+      "iteration": 1,
+      "status": "PASS",
+      "exportMs": 1514.7024170000002,
+      "exportMemory": {
+        "baselineRssBytes": 463716352,
+        "peakSummedRssBytes": 498024448,
+        "baselineJsHeapBytes": 5883864,
+        "peakJsHeapBytes": 7935528,
+        "sampleCount": 11,
+        "pollMs": 100
+      },
+      "archiveBytes": 52443136,
+      "importMs": 1435.4410420000004,
+      "importMemory": {
+        "baselineRssBytes": 378781696,
+        "peakSummedRssBytes": 413974528,
+        "baselineJsHeapBytes": 4633800,
+        "peakJsHeapBytes": 6209200,
+        "sampleCount": 11,
+        "pollMs": 100
+      }
+    },
+    {
+      "sizeMiB": 50,
+      "iteration": 2,
+      "status": "PASS",
+      "exportMs": 1494.148874999999,
+      "exportMemory": {
+        "baselineRssBytes": 468500480,
+        "peakSummedRssBytes": 483475456,
+        "baselineJsHeapBytes": 5840264,
+        "peakJsHeapBytes": 7892336,
+        "sampleCount": 11,
+        "pollMs": 100
+      },
+      "archiveBytes": 52443136,
+      "importMs": 1913.482750000001,
+      "importMemory": {
+        "baselineRssBytes": 375308288,
+        "peakSummedRssBytes": 398131200,
+        "baselineJsHeapBytes": 4624048,
+        "peakJsHeapBytes": 6124880,
+        "sampleCount": 14,
+        "pollMs": 100
+      }
+    },
+    {
+      "sizeMiB": 50,
+      "iteration": 3,
+      "status": "PASS",
+      "exportMs": 1572.7802909999991,
+      "exportMemory": {
+        "baselineRssBytes": 518275072,
+        "peakSummedRssBytes": 518275072,
+        "baselineJsHeapBytes": 5764708,
+        "peakJsHeapBytes": 8274484,
+        "sampleCount": 11,
+        "pollMs": 100
+      },
+      "archiveBytes": 52443136,
+      "importMs": 1963.8186249999999,
+      "importMemory": {
+        "baselineRssBytes": 377389056,
+        "peakSummedRssBytes": 388038656,
+        "baselineJsHeapBytes": 4638656,
+        "peakJsHeapBytes": 6132928,
+        "sampleCount": 12,
+        "pollMs": 100
+      }
+    },
+    {
+      "sizeMiB": 200,
+      "iteration": 1,
+      "status": "PASS",
+      "exportMs": 5893.368000000002,
+      "exportMemory": {
+        "baselineRssBytes": 867860480,
+        "peakSummedRssBytes": 867860480,
+        "baselineJsHeapBytes": 6783444,
+        "peakJsHeapBytes": 7004484,
+        "sampleCount": 43,
+        "pollMs": 100
+      },
+      "archiveBytes": 209747968,
+      "importMs": 5014.050291000003,
+      "importMemory": {
+        "baselineRssBytes": 558317568,
+        "peakSummedRssBytes": 626507776,
+        "baselineJsHeapBytes": 4621936,
+        "peakJsHeapBytes": 6130052,
+        "sampleCount": 35,
+        "pollMs": 100
+      }
+    },
+    {
+      "sizeMiB": 200,
+      "iteration": 2,
+      "status": "PASS",
+      "exportMs": 5413.266165999998,
+      "exportMemory": {
+        "baselineRssBytes": 923893760,
+        "peakSummedRssBytes": 923893760,
+        "baselineJsHeapBytes": 6595488,
+        "peakJsHeapBytes": 7377780,
+        "sampleCount": 37,
+        "pollMs": 100
+      },
+      "archiveBytes": 209747968,
+      "importMs": 4461.728166000001,
+      "importMemory": {
+        "baselineRssBytes": 559054848,
+        "peakSummedRssBytes": 592592896,
+        "baselineJsHeapBytes": 4652332,
+        "peakJsHeapBytes": 6173920,
+        "sampleCount": 33,
+        "pollMs": 100
+      }
+    },
+    {
+      "sizeMiB": 200,
+      "iteration": 3,
+      "status": "PASS",
+      "exportMs": 5187.627708,
+      "exportMemory": {
+        "baselineRssBytes": 899268608,
+        "peakSummedRssBytes": 899268608,
+        "baselineJsHeapBytes": 6565596,
+        "peakJsHeapBytes": 6773988,
+        "sampleCount": 34,
+        "pollMs": 100
+      },
+      "archiveBytes": 209747968,
+      "importMs": 4433.414625000005,
+      "importMemory": {
+        "baselineRssBytes": 558710784,
+        "peakSummedRssBytes": 611385344,
+        "baselineJsHeapBytes": 4647724,
+        "peakJsHeapBytes": 6131860,
+        "sampleCount": 34,
+        "pollMs": 100
+      }
+    }
+  ],
+  "summary": {
+    "50": {
+      "iterations": 3,
+      "status": "PASS",
+      "archiveBytes": 52443136,
+      "export": {
+        "p50Ms": 1514.7024170000002,
+        "p95Ms": 1572.7802909999991,
+        "maxPeakRssMiB": 494.265625,
+        "maxPeakJsHeapMiB": 7.891162872314453,
+        "baselineRssMiB": [
+          442.2,
+          446.8,
+          494.3
+        ]
+      },
+      "import": {
+        "p50Ms": 1913.482750000001,
+        "p95Ms": 1963.8186249999999,
+        "maxPeakRssMiB": 394.796875,
+        "maxPeakJsHeapMiB": 5.9215545654296875,
+        "baselineRssMiB": [
+          361.2,
+          357.9,
+          359.9
+        ]
+      }
+    },
+    "200": {
+      "iterations": 3,
+      "status": "PASS",
+      "archiveBytes": 209747968,
+      "export": {
+        "p50Ms": 5413.266165999998,
+        "p95Ms": 5893.368000000002,
+        "maxPeakRssMiB": 881.09375,
+        "maxPeakJsHeapMiB": 7.035999298095703,
+        "baselineRssMiB": [
+          827.7,
+          881.1,
+          857.6
+        ]
+      },
+      "import": {
+        "p50Ms": 4461.728166000001,
+        "p95Ms": 5014.050291000003,
+        "maxPeakRssMiB": 597.484375,
+        "maxPeakJsHeapMiB": 5.887908935546875,
+        "baselineRssMiB": [
+          532.5,
+          533.2,
+          532.8
+        ]
+      }
+    }
+  }
+}

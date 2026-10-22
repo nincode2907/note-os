@@ -1,0 +1,49 @@
+noteOS — Backup V2 audit (UTF-8)
+Implementation commit: 5002323fbe392ef22699a0c3dcc2c764848fcb76
+Base commit: 0c0aa80
+Scope: Web Backup V2, existing IndexedDB repositories, focused test tooling, documentation. No native or canonical-schema source changed.
+
+PASS — Snapshot: one readonly IndexedDB transaction over notes/recordings/recordingChunks, no recovery/mutation. Active recording/paused sessions block V2 export.
+PASS — Archive: deterministic uncompressed POSIX ustar with manifest, manifest SHA-256 sidecar, original notes/recording JSON and byte-preserving audio; chunk boundaries/MIME/IDs restored.
+PASS — Verification: bounded regular-file TAR parser; duplicate/traversal/link rejection; byte lengths and all payload hashes verified; all records, relationships and chunk ranges validated before the write transaction.
+PASS — Commit: one multi-store readwrite transaction; no hashes, network or arbitrary asynchronous work in the transaction. No overwrites. Merge skips a complete conflicting note group; Skip aborts the whole import. Injected quota and asynchronous transaction failures rollback atomically.
+PASS — Compatibility: V1 makeBackup/parseBackup unchanged. Future canonical schema preserved read-only. Additional validated recording JSON metadata survives. Limits include 16 MiB JSON, 512 MiB audio entry and 1 GiB TAR.
+PASS — Safety/UX: separate Full Archive V2 vs Legacy JSON V1, unencrypted privacy warning, stage progress, duplicate action guard, truthful download-request wording, imported/skipped note+recording counts.
+
+Final verification:
+- Docker production build and TypeScript: PASS (Node 22.21.1; Next 16.4.2; React 19.3.1).
+- Web unit tests: 61/61 PASS, including 20 archive tests.
+- Canonical document tests: 31/31 PASS.
+- Browser V2: 7/7 PASS, including real IndexedDB rollback with an injected QuotaExceededError.
+- Existing safety browser: 13/13 PASS.
+- Existing organization browser: 8/8 PASS.
+- Existing audio browser: 10/10 PASS (fake Chromium audio input only).
+- UI Lens: desktop 1440x1000 and mobile 390x844, 2/2 PASS; empty console/page/request diagnostics. Screenshots visually inspected.
+- Scale: 50 MiB and 200 MiB, 3 fresh Chromium runs each, 6/6 PASS; independent restored chunk SHA-256 equality.
+- 50 MiB p50 export/import: 1.515 / 1.913 s; p95: 1.573 / 1.964 s.
+- 200 MiB p50 export/import: 5.413 / 4.462 s; p95: 5.893 / 5.014 s.
+- Apple M2, 16 GiB RAM, macOS 15.7.7 arm64, Chromium 156.0.8078.4.
+- Maximum sampled summed browser RSS for 200 MiB: export 881.1 MiB / import 597.5 MiB. Export baseline already includes fixture allocation; RSS may double-count shared pages and omits some Blob disk/cache use. No zero-copy/fixed-memory claim. p95 at n=3 is the observed maximum. CPU/storage peaks not measured.
+
+Initial failures and resolution:
+- Parallel initial Compose commands on this Docker engine created duplicate isolated network names. A distinct validation network and sequential startup resolved it; no network pruning or live volumes were used. The first pre-start browser attempt saw connection refused; all final browser suites ran after health checks.
+- An existing audio test waiter matched chunks from an earlier completed session and stopped the second recording too early. The waiter now requires the new session's first committed chunk. Initial audio failure JSON/screenshot retained; rerun 10/10 passed. Recorder behavior was not changed beyond backup-description copy.
+
+Changed-scope security/data review:
+- No unresolved high/critical finding on the reviewed path; not an independent security certification.
+- Archive paths are generated independently from user IDs; no extraction to disk, eval, HTML rendering or external upload.
+- Checksums detect accidental corruption; unencrypted archives are not authenticated signatures. The SHA-256 sidecar is the root checksum and cannot checksum itself recursively.
+- Partial bytes can remain unplayable; preserving bytes does not repair missing audio.
+- Metadata/Blob references and JSON stay in memory; large archive behavior is browser/device-dependent. Configured upper limits were not benchmarked to 1 GiB.
+- Browser compatibility beyond Chromium (Safari/WebKit, Firefox, low-memory/mobile browsers): BLOCKED/unmeasured. No physical-iPhone result is claimed or required for this Web-only milestone.
+- Local recovery journals outside the three IndexedDB stores are outside the defined archive contract.
+- npm audit reports two moderate advisory entries: unchanged @nozbe/watermelondb and its @babel/runtime dependency (GHSA-968p-4wvh-cqc8); none for the added hash package; the selected dependency is pinned @noble/hashes 2.4.0 (MIT), no transitive dependencies. No force audit fix or unrelated upgrade was run.
+
+Runtime handoff:
+- Only related noteos-web-1 was updated to the tested image. localhost:15700 /backup returns HTTP 200 with Full Archive V2. Isolated localhost:15710 test service is healthy.
+- Original Web image ID is in verification/previous-web-image.txt for rollback by retagging and Web-only Compose up. No database clearing or volume reset is needed; already imported data remains.
+- Other services and Metro were not restarted or modified. No real browser profile, personal note fixture or real microphone was used.
+- Absolute workspace paths in generated text evidence were redacted. The 50/200 MiB scratch archives are not included in this review ZIP; the small synthetic round-trip TAR is included.
+
+The implementation commit is identified above. The final evidence-package commit and verified origin/main status are reported in the handoff message, avoiding a recursive self-commit hash in this package.
+STOP after Backup V2 for Lead Architect review.

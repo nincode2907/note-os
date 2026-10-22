@@ -1,0 +1,315 @@
+# noteOS — Backup V2: Complete Notes & Audio Archive
+
+**Role:** Codex — Implementation Engineer  
+**Lead Architect:** ChatGPT  
+**Authorization:** APPROVED — Implement in one complete pass  
+**Target:** Existing `main` branch, no new branch
+
+## 1. Objective
+
+Upgrade noteOS Web backup/restore so that a user can safely export and restore ALL supported local note data, including:
+
+- Active, archived and trashed notes.
+- Canonical document JSON.
+- Titles, tags, pin, revisions and timestamps.
+- Audio recording metadata.
+- Original audio bytes, including completed and recoverable interrupted recordings.
+
+The resulting archive must be self-contained, integrity-checked, backward-compatible with existing v1 notes-only backups, and safe to import without overwriting user data.
+
+**This is a data-durability milestone, not a new feature platform.**
+
+## 2. Source inspection
+
+Before implementation, read the repository's AGENTS.md and inspect the latest `main`:
+
+- `spikes/phase-00/gate1/web/app/backup/page.tsx`
+- `spikes/phase-00/gate1/web/app/lib/local-notes.js`
+- `spikes/phase-00/gate1/web/app/lib/mvp-utils.mjs`
+- `spikes/phase-00/gate1/web/app/ui/audio-recorder.tsx`
+- Current Web backup, audio storage and recovery tests.
+- Current browser/UI regression scripts.
+
+The current Web IndexedDB database is `noteos-mvp-01`, version 2, with stores:
+
+- `notes`
+- `recordings`
+- `recordingChunks`
+
+Recording chunks are stored as Blob values, indexed by recording ID and sequence.
+
+Do not redesign the repository or create a second persistence engine.
+
+## 3. Immediate UI safety correction
+
+The existing backup screen says "Export a full backup", while the v1 JSON export contains notes only.
+
+Fix the misleading wording.
+
+The new UI must distinguish:
+
+**Full Archive V2**
+- Includes notes AND audio.
+- Recommended for disaster recovery and migration.
+- Has checksum validation.
+
+**Legacy JSON V1**
+- Includes notes and metadata only.
+- Does NOT include audio.
+- Retained for backward compatibility.
+
+Clearly warn:
+
+"Archives contain private notes and voice recordings in unencrypted form. Store them securely."
+
+Do not claim the browser successfully saved a downloaded file. State that the download was requested and the user should verify it in Downloads.
+
+## 4. Full Archive V2 format
+
+Design one deterministic, self-contained archive using a standard, broadly readable format such as `.zip` or `.tar`.
+
+Evaluate available libraries and browser memory behavior before selecting the implementation. Avoid new heavyweight dependencies.
+
+Suggested logical structure:
+
+    manifest.json
+    notes.json
+    recordings.json
+    blobs/<recording-id>.<extension>
+
+`notes.json` remains the authoritative canonical representation of note records.
+
+`recordings.json` preserves recording metadata, noteId relationships, original MIME types, timing and recording statuses.
+
+Audio blobs must preserve their original byte sequences and correct MIME/extension mapping.
+
+The manifest should contain:
+
+- Format identifier: `noteos.archive`
+- Version: `2`
+- Export timestamp
+- Source platform
+- Record counts
+- File names
+- Byte lengths
+- SHA-256 checksums
+- Relevant archive warnings and skipped entries, if any
+
+Keep future schema evolution possible.
+
+Do not introduce Audio Anchors as a feature in this pass, but ensure the archive format can preserve additional validated recording metadata without requiring a redesign.
+
+Do not build an HTML backup viewer, AI integration, or Markdown exporter in this milestone.
+
+## 5. Snapshot consistency
+
+The current repositories read from IndexedDB independently.
+
+Do not simply loop over notes and audio repositories while live data is changing and assume the resulting archive is consistent.
+
+Create an appropriate storage-level snapshot operation using IndexedDB transactions.
+
+Verify:
+
+- Every recording refers to a valid exported note.
+- Every exported audio blob has complete, correctly ordered chunks.
+- Recording metadata and chunks represent a consistent snapshot.
+- Archive, Trash and Restore lifecycle states are preserved.
+- No note revisions are modified during export.
+- No accidental recovery or mutation occurs as a side effect of backup.
+
+For active `recording` or `paused` sessions, choose the conservative policy:
+
+**Block Full Archive export with a clear message requesting that active recording sessions be stopped/finalized first.**
+
+Do not silently include incomplete in-flight recording data as though it were complete.
+
+Handle interrupted or failed recordings with saved chunks explicitly, preserving their status and indicating that playback may be partial.
+
+Preserve existing recording locks, interruption recovery and deletion safeguards.
+
+## 6. Memory safety
+
+Recording archives may be large.
+
+Do not concatenate all recordings into one giant Uint8Array or repeatedly convert audio to base64.
+
+Use Blob-based or streaming construction where appropriate.
+
+Remember:
+
+- `crypto.subtle.digest()` is not a streaming hash API.
+- Blob construction is not guaranteed zero-copy on every browser.
+- Compression and archive libraries may allocate additional memory.
+
+Select an approach with clear memory boundaries and document the tradeoffs.
+
+At minimum benchmark export/import with synthetic data sizes appropriate to the machine, including 50 MB and 200 MB. Record duration, peak memory where measurable, and failures.
+
+Keep benchmarks isolated from live user data.
+
+Do not claim fixed-memory or zero-copy behavior without measurement.
+
+## 7. Import verification — Zero mutation first
+
+Before any database write:
+
+1. Identify the archive version and supported format.
+2. Parse with file-count, total-size and entry-size limits.
+3. Reject duplicate or unsafe archive entry paths.
+4. Verify all expected entries exist.
+5. Check byte lengths.
+6. Verify SHA-256 for every file.
+7. Validate every note record, allowing supported preservation of future-schema read-only notes.
+8. Validate every recording metadata record.
+9. Validate recording-to-note relationships.
+10. Validate chunk ordering, count and audio consistency.
+11. Reject malformed, truncated, corrupted or unsupported archives.
+
+Never begin an import transaction if verification fails.
+
+Do not trust imported MIME types, filenames, path components or metadata without validation.
+
+## 8. Restore semantics and collision safety
+
+Preserve the existing two import modes:
+
+**Skip**
+- If any incoming note ID or recording ID conflicts, abort the entire import.
+- No partial writes.
+
+**Merge**
+- Never overwrite existing notes or recordings.
+- Preserve all existing note revisions and audio bytes.
+- Import new notes and their associated recordings together.
+- If an incoming note already exists, conservatively skip its associated recordings rather than attaching unfamiliar media to that existing note.
+- Report exactly what was imported and skipped.
+
+Implement one IndexedDB readwrite transaction spanning the relevant stores for the commit step, so a failed commit does not leave orphaned records/chunks.
+
+Do all asynchronous archive parsing, hashing and validation BEFORE opening this transaction.
+
+Inside the IndexedDB transaction, avoid arbitrary asynchronous operations that could allow the transaction to become inactive.
+
+Never clear or replace the existing database as a restore strategy.
+
+Handle QuotaExceededError and transaction aborts without losing existing data.
+
+## 9. Legacy V1 compatibility
+
+Existing `noteos.local-backup` version 1 JSON files MUST still import exactly as before.
+
+Do not break `makeBackup` / `parseBackup` compatibility for existing users.
+
+V1 remains explicitly notes-only.
+
+Future-schema read-only preservation must continue to work.
+
+Do not migrate or rewrite existing notes automatically.
+
+## 10. Web UI
+
+Use the approved Refined Editorial A+ styling.
+
+The Backup screen should show:
+
+- Recommended Full Archive V2 export.
+- Separate legacy notes-only JSON export.
+- Restore file selector accepting supported archive types and legacy JSON.
+- Merge / Skip behavior.
+- Clear progress and errors.
+- Counts of imported/skipped notes and recordings.
+- Prominent warning when audio cannot be included.
+- Explanation that archives are unencrypted.
+
+For large exports, provide visible progress where technically reliable. If exact byte progress is unavailable, display truthful stage-based status rather than inventing percentages.
+
+Prevent duplicate button actions while a backup/restore job runs.
+
+Make keyboard and mobile controls accessible.
+
+Do not redesign unrelated Home/Editor/Audio UI.
+
+## 11. Mandatory regression tests
+
+Use fake IndexedDB and isolated browser contexts.
+
+Add tests for at least:
+
+1. Notes + 2 recordings → export → clean import → all notes and audio bytes preserved.
+2. Exact SHA-256 equality after restore.
+3. Unicode titles, tags and recording names, including Vietnamese and Japanese.
+4. Active, archived and trashed notes.
+5. Completed and interrupted recordings.
+6. Corrupt a single audio byte → reject entire import before mutation.
+7. Missing audio entry → reject.
+8. Truncated/corrupted manifest → reject.
+9. Duplicate note/recording ID → correct Skip/Merge behavior.
+10. Existing note revision and audio unchanged after a colliding import.
+11. Active recording blocks export without modifying its chunks or status.
+12. Quota/transaction failure → atomic rollback.
+13. Legacy JSON V1 still imports.
+14. Future document schema remains preserved read-only.
+15. Export never alters note revision or recording metadata.
+16. Repeated import does not duplicate audio.
+17. Malicious archive path / excessive file size / duplicate entry is rejected.
+18. Existing autosave, recovery, recording locks and permanent-delete flows still pass.
+
+Add a browser UI test for the new Backup screen and restore flow.
+
+Do not use the real Chrome profile or existing user note as a test fixture.
+
+## 12. Scope restrictions
+
+DO NOT:
+
+- Modify Expo SDK 57 or any React Native source.
+- Create a Git branch.
+- Modify the canonical document schema.
+- Modify the current native backup implementation.
+- Build Sync, STT, AI or Calendar integration.
+- Add Audio Anchors yet.
+- Introduce server-side backup storage or upload private data.
+- Remove the existing v1 backup feature.
+- Clear or modify live IndexedDB records.
+- Run destructive cleanup commands.
+- Force-install unrelated dependency updates.
+- Alter unrelated staged/worktree changes.
+
+The iPhone Expo Go verification is running separately. Avoid interference with its Metro process and project files.
+
+## 13. Verification and handoff
+
+Run the relevant checks:
+
+- TypeScript.
+- Existing Web unit tests.
+- New Backup V2 tests.
+- Existing safety/recovery/browser tests.
+- Existing audio browser tests.
+- Production build.
+- UI Lens for the Backup screen at desktop/mobile sizes.
+
+Verify the live Web service is healthy only if safe to do so. Do not restart or modify unrelated containers.
+
+Perform the final round-trip restoration only in an isolated synthetic database/context.
+
+Before committing, inspect the full diff and verify no personal data is included.
+
+Commit this implementation on `main` and push to `origin/main` only if all required durability tests pass. Preserve unrelated changes.
+
+Deliver:
+
+1. Summary of changes.
+2. Actual archive schema and chosen format.
+3. Files changed.
+4. Test counts and failures, if any.
+5. Screenshots of Backup V2.
+6. Archive size/performance findings.
+7. Known limitations and browser compatibility.
+8. Commit SHA and verified remote status.
+9. Review ZIP and UTF-8 audit text.
+
+**Stop after Backup V2.**
+
+Do not begin iPhone editor parity, Audio Anchors, Sync or AI until the Lead Architect reviews this milestone.

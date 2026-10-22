@@ -1,0 +1,37 @@
+{
+  "results": [
+    {
+      "name": "full-export-snapshot-and-double-action-guard",
+      "status": "PASS"
+    },
+    {
+      "name": "clean-browser-restore-exact-notes-metadata-and-SHA256",
+      "status": "PASS"
+    },
+    {
+      "name": "merge-repeat-and-skip-conflict-preserve-existing-bytes",
+      "status": "PASS"
+    },
+    {
+      "name": "corrupted-browser-import-zero-mutation",
+      "status": "PASS"
+    },
+    {
+      "name": "active-recording-blocks-full-export-and-mobile-layout",
+      "status": "PASS"
+    },
+    {
+      "name": "legacy-export-still-available-with-explicit-audio-warning",
+      "status": "PASS"
+    },
+    {
+      "name": "real-IndexedDB-quota-abort-preserves-existing-data-and-rolls-back-all-stores",
+      "status": "PASS"
+    }
+  ],
+  "diagnostics": {
+    "consoleErrors": [],
+    "pageErrors": [],
+    "externalRequests": []
+  }
+}

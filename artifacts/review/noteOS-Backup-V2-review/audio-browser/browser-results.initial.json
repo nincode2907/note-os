@@ -1,0 +1,52 @@
+{
+  "browser": "156.0.8078.4",
+  "launch": "Chromium fake audio device; no physical microphone input",
+  "results": [
+    {
+      "name": "unsupported-browser-api",
+      "status": "PASS"
+    },
+    {
+      "name": "permission-denied",
+      "status": "PASS"
+    },
+    {
+      "name": "record-pause-resume-reload-play-export",
+      "status": "PASS"
+    },
+    {
+      "name": "multiple-recordings-and-explicit-delete",
+      "status": "PASS"
+    },
+    {
+      "name": "storage-failure-keeps-interrupted-chunks",
+      "status": "PASS"
+    },
+    {
+      "name": "reload-recovers-partial-session",
+      "status": "PASS"
+    },
+    {
+      "name": "copied-session-id-and-live-owner-protection",
+      "status": "FAIL",
+      "error": "Error: Stop did not complete: n\nnoteOS\n⌂\nNotes\n▤\nArchive\n⌫\nTrash\n↥\nBackup\n● Private by default\n\nYour notes live in this browser on this device. Nothing is sent to a server.\n\n0 MB used · 10240 MB available\n\n← Back to notes\nSaved 11:57 AM\nPin\nNote title\nTags\nNo tags yet.\nAdd a tag\nAdd tag\n\nON THIS DEVICE\n\nAudio\n2 recordings\nHide recordings\n−\n\nPrivate local audio. Full Archive V2 includes recordings; Legacy JSON V1 does not. Audio is never uploaded.\n\n● Record audio\nNo audio was captured. The empty recording was not marked saved.\nAudio recording\nPartially saved — storage failed\n0:00\n10/22/2026, 11:57:51 AM\naudio/webm;codecs=opus\nRename\nDelete\nAudio recording\nSaved\n0:01\n10/22/2026, 11:57:49 AM\naudio/webm;codecs=opus\nPlay\nExport\nRename\nDelete\nlocator.waitFor: Timeout 15000ms exceeded.\nCall log:\n\u001b[2m  - waiting for getByText('Recording saved on this device.') to be visible\u001b[22m\n\n    at stop (file://<repo>/spikes/phase-00/gate1/web/scripts/mvp-02-browser.mjs:68:280)\n    at async file://<repo>/spikes/phase-00/gate1/web/scripts/mvp-02-browser.mjs:139:40\n    at async scenario (file://<repo>/spikes/phase-00/gate1/web/scripts/mvp-02-browser.mjs:32:9)\n    at async file://<repo>/spikes/phase-00/gate1/web/scripts/mvp-02-browser.mjs:120:3"
+    },
+    {
+      "name": "unsupported-locks-preserve-unfinished-session",
+      "status": "PASS"
+    },
+    {
+      "name": "active-recording-blocks-navigation-and-lifecycle",
+      "status": "PASS"
+    },
+    {
+      "name": "archive-trash-preserve-recordings-and-delete-cascade",
+      "status": "PASS"
+    }
+  ],
+  "diagnostics": {
+    "consoleErrors": [],
+    "pageErrors": [],
+    "externalRequests": []
+  }
+}

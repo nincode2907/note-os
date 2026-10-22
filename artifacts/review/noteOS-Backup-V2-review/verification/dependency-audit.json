@@ -1,0 +1,76 @@
+{
+  "auditReportVersion": 2,
+  "vulnerabilities": {
+    "@babel/runtime": {
+      "name": "@babel/runtime",
+      "severity": "moderate",
+      "isDirect": false,
+      "via": [
+        {
+          "source": 1104000,
+          "name": "@babel/runtime",
+          "dependency": "@babel/runtime",
+          "title": "Babel has inefficient RegExp complexity in generated code with .replace when transpiling named capturing groups",
+          "url": "https://github.com/advisories/GHSA-968p-4wvh-cqc8",
+          "severity": "moderate",
+          "cwe": [
+            "CWE-1333"
+          ],
+          "cvss": {
+            "score": 6.2,
+            "vectorString": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+          },
+          "range": "<7.26.10"
+        }
+      ],
+      "effects": [
+        "@nozbe/watermelondb"
+      ],
+      "range": "<7.26.10",
+      "nodes": [
+        "node_modules/@babel/runtime"
+      ],
+      "fixAvailable": {
+        "name": "@nozbe/watermelondb",
+        "version": "0.25.5",
+        "isSemVerMajor": true
+      }
+    },
+    "@nozbe/watermelondb": {
+      "name": "@nozbe/watermelondb",
+      "severity": "moderate",
+      "isDirect": true,
+      "via": [
+        "@babel/runtime"
+      ],
+      "effects": [],
+      "range": ">=0.26.0-0",
+      "nodes": [
+        "node_modules/@nozbe/watermelondb"
+      ],
+      "fixAvailable": {
+        "name": "@nozbe/watermelondb",
+        "version": "0.25.5",
+        "isSemVerMajor": true
+      }
+    }
+  },
+  "metadata": {
+    "vulnerabilities": {
+      "info": 0,
+      "low": 0,
+      "moderate": 2,
+      "high": 0,
+      "critical": 0,
+      "total": 2
+    },
+    "dependencies": {
+      "prod": 75,
+      "dev": 6,
+      "optional": 39,
+      "peer": 0,
+      "peerOptional": 0,
+      "total": 119
+    }
+  }
+}

@@ -1,0 +1,13 @@
+PASS F-01 recovery updates live body/title, continued editing survives reload
+PASS F-01 failed recovery save retains journal; explicit Keep saved version resets live editor safely
+PASS F-01 concurrent recovery revision stays safe and offers a separate recovered note
+PASS F-02 stale two-tab revision blocks Archive
+PASS F-02 stale two-tab revision blocks Move to trash
+PASS F-02 save failure blocks Archive and preserves body/title/journal
+PASS F-02 immediate Archive flushes latest text; untouched lifecycle adds only one revision; restore/trash happy paths
+PASS F-03 delayed real IndexedDB transaction + A/B/C edits + Archive serialize to latest
+PASS F-04 immediate back navigation flushes under 650ms
+PASS F-04 immediate sidebar navigation flushes under 650ms
+PASS F-04 failed flush blocks sidebar navigation and retains latest draft
+PASS F-05 delete/reimport same ID removes stale journal and retains newer journal as copy only
+PASS MVP-01.1 smoke: search Unicode, backup download/collision, future readonly, missing ID does not resurrect

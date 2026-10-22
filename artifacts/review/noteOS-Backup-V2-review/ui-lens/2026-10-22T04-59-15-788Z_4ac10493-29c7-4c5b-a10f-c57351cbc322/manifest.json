@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "tool": "UI Lens",
+  "tool_version": "0.1.0",
+  "project": "noteOS Backup V2",
+  "captured_at": "2026-10-22T04:59:15.789Z",
+  "base_url": "http://127.0.0.1:15710",
+  "git": {
+    "branch": "main",
+    "commit": "0c0aa809e207a307846807b8b695c79146d09e40",
+    "dirty": true
+  },
+  "targets": [
+    {
+      "target_id": "backup-v2",
+      "target_name": "Full Archive and Legacy Backup",
+      "route": "/backup",
+      "url": "http://127.0.0.1:15710/backup",
+      "viewport": {
+        "id": "desktop",
+        "width": 1440,
+        "height": 1000,
+        "deviceScaleFactor": 1
+      },
+      "screenshot": "backup-v2/desktop.png",
+      "pdf": null,
+      "capture_mode": "fullPage",
+      "duration_ms": 1557,
+      "captured_at": "2026-10-22T04:59:16.300Z",
+      "console_error_count": 0,
+      "console_warning_count": 0,
+      "page_error_count": 0,
+      "failed_request_count": 0,
+      "http_error_count": 0,
+      "success": true
+    },
+    {
+      "target_id": "backup-v2",
+      "target_name": "Full Archive and Legacy Backup",
+      "route": "/backup",
+      "url": "http://127.0.0.1:15710/backup",
+      "viewport": {
+        "id": "mobile",
+        "width": 390,
+        "height": 844,
+        "deviceScaleFactor": 1
+      },
+      "screenshot": "backup-v2/mobile.png",
+      "pdf": null,
+      "capture_mode": "fullPage",
+      "duration_ms": 886,
+      "captured_at": "2026-10-22T04:59:17.857Z",
+      "console_error_count": 0,
+      "console_warning_count": 0,
+      "page_error_count": 0,
+      "failed_request_count": 0,
+      "http_error_count": 0,
+      "success": true
+    }
+  ],
+  "summary": {
+    "passed": 2,
+    "failed": 0
+  }
+}

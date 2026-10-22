@@ -1,0 +1,588 @@
+
+> typecheck
+> tsc --noEmit
+
+
+> test:mvp
+> node --test app/lib/*.test.mjs
+
+TAP version 13
+# Subtest: notes plus two recordings round trip preserves Unicode, lifecycle, revisions, metadata and exact chunk SHA-256
+ok 1 - notes plus two recordings round trip preserves Unicode, lifecycle, revisions, metadata and exact chunk SHA-256
+  ---
+  duration_ms: 38.238292
+  type: 'test'
+  ...
+# Subtest: fixed timestamp exports are deterministic and do not modify revisions, metadata or partial status
+ok 2 - fixed timestamp exports are deterministic and do not modify revisions, metadata or partial status
+  ---
+  duration_ms: 8.213084
+  type: 'test'
+  ...
+# Subtest: one corrupt audio byte rejects verification before opening an import write transaction
+ok 3 - one corrupt audio byte rejects verification before opening an import write transaction
+  ---
+  duration_ms: 6.050916
+  type: 'test'
+  ...
+# Subtest: missing audio entry is rejected
+ok 4 - missing audio entry is rejected
+  ---
+  duration_ms: 4.171375
+  type: 'test'
+  ...
+# Subtest: truncated/corrupted manifest and truncated TAR are rejected
+ok 5 - truncated/corrupted manifest and truncated TAR are rejected
+  ---
+  duration_ms: 12.92025
+  type: 'test'
+  ...
+# Subtest: Skip collision aborts all notes and audio; Merge retains existing revisions/audio and imports new groups only
+ok 6 - Skip collision aborts all notes and audio; Merge retains existing revisions/audio and imports new groups only
+  ---
+  duration_ms: 7.146834
+  type: 'test'
+  ...
+# Subtest: repeated merge import creates no duplicate audio; repeated Skip imports nothing
+ok 7 - repeated merge import creates no duplicate audio; repeated Skip imports nothing
+  ---
+  duration_ms: 21.830709
+  type: 'test'
+  ...
+# Subtest: active recording blocks export without recovery or chunk mutations
+ok 8 - active recording blocks export without recovery or chunk mutations
+  ---
+  duration_ms: 2.209791
+  type: 'test'
+  ...
+# Subtest: active paused blocks export without recovery or chunk mutations
+ok 9 - active paused blocks export without recovery or chunk mutations
+  ---
+  duration_ms: 1.782458
+  type: 'test'
+  ...
+# Subtest: quota failure after queued note/audio writes aborts atomically and preserves existing data
+ok 10 - quota failure after queued note/audio writes aborts atomically and preserves existing data
+  ---
+  duration_ms: 4.607958
+  type: 'test'
+  ...
+# Subtest: asynchronous transaction abort also rolls back previously queued stores
+ok 11 - asynchronous transaction abort also rolls back previously queued stores
+  ---
+  duration_ms: 6.485167
+  type: 'test'
+  ...
+# Subtest: Legacy V1 restore remains notes-only with previous collision semantics
+ok 12 - Legacy V1 restore remains notes-only with previous collision semantics
+  ---
+  duration_ms: 1.586417
+  type: 'test'
+  ...
+# Subtest: future canonical schema and additional validated recording metadata survive V2 unchanged
+ok 13 - future canonical schema and additional validated recording metadata survive V2 unchanged
+  ---
+  duration_ms: 7.391125
+  type: 'test'
+  ...
+# Subtest: duplicate note/recording IDs, relationships, chunk gaps and MIME/path inconsistencies are rejected after checksums
+ok 14 - duplicate note/recording IDs, relationships, chunk gaps and MIME/path inconsistencies are rejected after checksums
+  ---
+  duration_ms: 22.133417
+  type: 'test'
+  ...
+# Subtest: failed empty recordings retain metadata and explicit warning; complete empty recordings are rejected
+ok 15 - failed empty recordings retain metadata and explicit warning; complete empty recordings are rejected
+  ---
+  duration_ms: 5.207958
+  type: 'test'
+  ...
+# Subtest: malicious path, unsupported TAR links, excessive advertised size and duplicate entries reject
+ok 16 - malicious path, unsupported TAR links, excessive advertised size and duplicate entries reject
+  ---
+  duration_ms: 0.548916
+  type: 'test'
+  ...
+# Subtest: recording ID conflict skips the entire incoming note group in Merge and rejects Skip
+ok 17 - recording ID conflict skips the entire incoming note group in Merge and rejects Skip
+  ---
+  duration_ms: 3.493042
+  type: 'test'
+  ...
+# Subtest: storage snapshot serializes against concurrent mutations and never invokes recovery
+ok 18 - storage snapshot serializes against concurrent mutations and never invokes recovery
+  ---
+  duration_ms: 2.869667
+  type: 'test'
+  ...
+# Subtest: unverified import objects cannot open the write transaction
+ok 19 - unverified import objects cannot open the write transaction
+  ---
+  duration_ms: 0.154292
+  type: 'test'
+  ...
+# Subtest: incremental hash agrees with Node SHA-256 across the 1 MiB read boundary, including empty files
+ok 20 - incremental hash agrees with Node SHA-256 across the 1 MiB read boundary, including empty files
+  ---
+  duration_ms: 28.399709
+  type: 'test'
+  ...
+# Subtest: v1 note database upgrades additively and preserves existing note bytes
+ok 21 - v1 note database upgrades additively and preserves existing note bytes
+  ---
+  duration_ms: 12.305291
+  type: 'test'
+  ...
+# Subtest: chunks remain ordered, linked to the right note, and reload as playable blobs
+ok 22 - chunks remain ordered, linked to the right note, and reload as playable blobs
+  ---
+  duration_ms: 13.881041
+  type: 'test'
+  ...
+# Subtest: one active session per note, pause/resume transitions, and reload recovery are explicit
+ok 23 - one active session per note, pause/resume transitions, and reload recovery are explicit
+  ---
+  duration_ms: 4.310959
+  type: 'test'
+  ...
+# Subtest: timestamps alone never recover recording or paused sessions
+ok 24 - timestamps alone never recover recording or paused sessions
+  ---
+  duration_ms: 1.181959
+  type: 'test'
+  ...
+# Subtest: active recording blocks cross-tab recording and destructive deletion races
+ok 25 - active recording blocks cross-tab recording and destructive deletion races
+  ---
+  duration_ms: 1.866541
+  type: 'test'
+  ...
+# Subtest: archive and trash keep media; confirmed permanent note delete cascades atomically to recordings and chunks
+ok 26 - archive and trash keep media; confirmed permanent note delete cascades atomically to recordings and chunks
+  ---
+  duration_ms: 1.641417
+  type: 'test'
+  ...
+# Subtest: chunk transaction failure keeps existing chunks and metadata visible as partial
+ok 27 - chunk transaction failure keeps existing chunks and metadata visible as partial
+  ---
+  duration_ms: 1.769583
+  type: 'test'
+  ...
+# Subtest: revision race rejects stale saves and preserves the newer committed record
+ok 28 - revision race rejects stale saves and preserves the newer committed record
+  ---
+  duration_ms: 15.555166
+  type: 'test'
+  ...
+# Subtest: canonical documents are validated at create and save boundaries
+ok 29 - canonical documents are validated at create and save boundaries
+  ---
+  duration_ms: 1.438292
+  type: 'test'
+  ...
+# Subtest: backup import validates all documents before writing and preserves future schema read-only
+ok 30 - backup import validates all documents before writing and preserves future schema read-only
+  ---
+  duration_ms: 1.981333
+  type: 'test'
+  ...
+# Subtest: skip import is all-or-nothing on collision; merge never overwrites matching IDs
+ok 31 - skip import is all-or-nothing on collision; merge never overwrites matching IDs
+  ---
+  duration_ms: 3.019584
+  type: 'test'
+  ...
+# Subtest: permanent deletion requires a trashed note and matching revision; missing notes are explicit
+ok 32 - permanent deletion requires a trashed note and matching revision; missing notes are explicit
+  ---
+  duration_ms: 1.879417
+  type: 'test'
+  ...
+# Subtest: permanent deletion rejects stale revisions after a restore transition
+ok 33 - permanent deletion rejects stale revisions after a restore transition
+  ---
+  duration_ms: 0.922375
+  type: 'test'
+  ...
+# Subtest: organization updates are revision guarded, keep content timestamps, and reject duplicate or invalid tags
+ok 34 - organization updates are revision guarded, keep content timestamps, and reject duplicate or invalid tags
+  ---
+  duration_ms: 1.573625
+  type: 'test'
+  ...
+# Subtest: archive, trash, and restore retain pinned and tag metadata
+ok 35 - archive, trash, and restore retain pinned and tag metadata
+  ---
+  duration_ms: 1.14275
+  type: 'test'
+  ...
+# Subtest: future note record schemas remain preserved but cannot be edited or organized as schema v1
+ok 36 - future note record schemas remain preserved but cannot be edited or organized as schema v1
+  ---
+  duration_ms: 1.266125
+  type: 'test'
+  ...
+# Subtest: search folds Vietnamese accents including đ/Đ and punctuation while retaining Japanese text
+ok 37 - search folds Vietnamese accents including đ/Đ and punctuation while retaining Japanese text
+  ---
+  duration_ms: 4.198
+  type: 'test'
+  ...
+# Subtest: lifecycle filtering does not include archived or trashed notes in active search
+ok 38 - lifecycle filtering does not include archived or trashed notes in active search
+  ---
+  duration_ms: 0.2885
+  type: 'test'
+  ...
+# Subtest: tag filtering uses case-insensitive canonical Unicode identity and requires every selected tag
+ok 39 - tag filtering uses case-insensitive canonical Unicode identity and requires every selected tag
+  ---
+  duration_ms: 0.443125
+  type: 'test'
+  ...
+# Subtest: pinned notes stay first; pinned ties use updatedAt and remaining notes honor selected sort
+ok 40 - pinned notes stay first; pinned ties use updatedAt and remaining notes honor selected sort
+  ---
+  duration_ms: 11.465209
+  type: 'test'
+  ...
+# Subtest: backup parser accepts version 1 data and preserves document values
+ok 41 - backup parser accepts version 1 data and preserves document values
+  ---
+  duration_ms: 7.43025
+  type: 'test'
+  ...
+# Subtest: backup v1 preserves organization metadata and remains compatible with older v1 notes
+ok 42 - backup v1 preserves organization metadata and remains compatible with older v1 notes
+  ---
+  duration_ms: 1.007
+  type: 'test'
+  ...
+# Subtest: backup v1 rejects invalid organization metadata without rewriting source notes
+ok 43 - backup v1 rejects invalid organization metadata without rewriting source notes
+  ---
+  duration_ms: 0.541708
+  type: 'test'
+  ...
+# Subtest: backup parser rejects duplicate IDs before repository mutation
+ok 44 - backup parser rejects duplicate IDs before repository mutation
+  ---
+  duration_ms: 0.1995
+  type: 'test'
+  ...
+# Subtest: backup parser rejects unsupported bundle versions and invalid note metadata
+ok 45 - backup parser rejects unsupported bundle versions and invalid note metadata
+  ---
+  duration_ms: 0.5605
+  type: 'test'
+  ...
+# Subtest: safe note copies retain supported source tags but never pin or carry unsupported metadata
+ok 46 - safe note copies retain supported source tags but never pin or carry unsupported metadata
+  ---
+  duration_ms: 1.668833
+  type: 'test'
+  ...
+# Subtest: a copied storage token cannot claim a per-note lock held by another component or tab
+ok 47 - a copied storage token cannot claim a per-note lock held by another component or tab
+  ---
+  duration_ms: 1.071292
+  type: 'test'
+  ...
+# Subtest: missing Web Locks is explicitly reported as unsupported, never as ownership
+ok 48 - missing Web Locks is explicitly reported as unsupported, never as ownership
+  ---
+  duration_ms: 0.709375
+  type: 'test'
+  ...
+# Subtest: reopen keeps journal with equal timestamps and own earlier in-flight commit
+ok 49 - reopen keeps journal with equal timestamps and own earlier in-flight commit
+  ---
+  duration_ms: 13.277833
+  type: 'test'
+  ...
+# Subtest: one tab cannot clear a different tab journal; concurrent DB change recovers as copy
+ok 50 - one tab cannot clear a different tab journal; concurrent DB change recovers as copy
+  ---
+  duration_ms: 0.755292
+  type: 'test'
+  ...
+# Subtest: confirmed delete cleans only unchanged committed journals; same-ID import cannot apply retained draft in place
+ok 51 - confirmed delete cleans only unchanged committed journals; same-ID import cannot apply retained draft in place
+  ---
+  duration_ms: 25.13125
+  type: 'test'
+  ...
+# Subtest: parser and repository share validation; future content is preserved without rewriting
+ok 52 - parser and repository share validation; future content is preserved without rewriting
+  ---
+  duration_ms: 3.72875
+  type: 'test'
+  ...
+# Subtest: serializes delayed A then newest B/C, preserves latest journal and does not show Saved early
+ok 53 - serializes delayed A then newest B/C, preserves latest journal and does not show Saved early
+  ---
+  duration_ms: 2.3355
+  type: 'test'
+  ...
+# Subtest: C arriving while B saves is drained with the next expected revision
+ok 54 - C arriving while B saves is drained with the next expected revision
+  ---
+  duration_ms: 1.437083
+  type: 'test'
+  ...
+# Subtest: autosave and lifecycle share a flush and lifecycle uses the committed revision
+ok 55 - autosave and lifecycle share a flush and lifecycle uses the committed revision
+  ---
+  duration_ms: 0.576833
+  type: 'test'
+  ...
+# Subtest: failed in-flight save retains newest draft and journal and blocks lifecycle without retry
+ok 56 - failed in-flight save retains newest draft and journal and blocks lifecycle without retry
+  ---
+  duration_ms: 1.208125
+  type: 'test'
+  ...
+# Subtest: cross-tab stale revision stays rejected; no adoption of another tab revision
+ok 57 - cross-tab stale revision stays rejected; no adoption of another tab revision
+  ---
+  duration_ms: 0.640917
+  type: 'test'
+  ...
+# Subtest: unchanged draft does not save or increment revision; unsupported/trashed record can restore
+ok 58 - unchanged draft does not save or increment revision; unsupported/trashed record can restore
+  ---
+  duration_ms: 1.165459
+  type: 'test'
+  ...
+# Subtest: deletion epoch prevents stale-tab save after same-ID reimport
+ok 59 - deletion epoch prevents stale-tab save after same-ID reimport
+  ---
+  duration_ms: 0.381292
+  type: 'test'
+  ...
+# Subtest: organization mutation waits for draft autosave and uses its committed revision
+ok 60 - organization mutation waits for draft autosave and uses its committed revision
+  ---
+  duration_ms: 1.28
+  type: 'test'
+  ...
+# Subtest: failed draft save blocks organization mutation and retains its recovery journal
+ok 61 - failed draft save blocks organization mutation and retains its recovery journal
+  ---
+  duration_ms: 2.027459
+  type: 'test'
+  ...
+1..61
+# tests 61
+# suites 0
+# pass 61
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 641.050584
+
+> test:documents
+> npm --prefix packages/document-engine test
+
+
+> test
+> node --test tests/*.test.mjs
+
+TAP version 13
+# Subtest: accepts empty and minimal v1 documents
+ok 1 - accepts empty and minimal v1 documents
+  ---
+  duration_ms: 18.643125
+  type: 'test'
+  ...
+# Subtest: empty document round-trips with its required empty content array
+ok 2 - empty document round-trips with its required empty content array
+  ---
+  duration_ms: 0.905542
+  type: 'test'
+  ...
+# Subtest: accepts supported blocks, marks, task lists, nested lists and attachment references
+ok 3 - accepts supported blocks, marks, task lists, nested lists and attachment references
+  ---
+  duration_ms: 1.925083
+  type: 'test'
+  ...
+# Subtest: preserves Vietnamese combining marks without Unicode normalization
+ok 4 - preserves Vietnamese combining marks without Unicode normalization
+  ---
+  duration_ms: 0.851625
+  type: 'test'
+  ...
+# Subtest: preserves Japanese Kanji, Hiragana, Katakana and punctuation
+ok 5 - preserves Japanese Kanji, Hiragana, Katakana and punctuation
+  ---
+  duration_ms: 1.477583
+  type: 'test'
+  ...
+# Subtest: preserves actual mixed Japanese Kanji and Kana code points
+ok 6 - preserves actual mixed Japanese Kanji and Kana code points
+  ---
+  duration_ms: 0.245917
+  type: 'test'
+  ...
+# Subtest: preserves emoji including surrogate pairs and joined emoji sequences
+ok 7 - preserves emoji including surrogate pairs and joined emoji sequences
+  ---
+  duration_ms: 0.210417
+  type: 'test'
+  ...
+# Subtest: plain text conversion preserves multiline input, blank lines and edge whitespace
+ok 8 - plain text conversion preserves multiline input, blank lines and edge whitespace
+  ---
+  duration_ms: 0.320458
+  type: 'test'
+  ...
+# Subtest: empty plain text produces an empty document and a trailing newline remains observable
+ok 9 - empty plain text produces an empty document and a trailing newline remains observable
+  ---
+  duration_ms: 0.531459
+  type: 'test'
+  ...
+# Subtest: plain-text API rejects non-string input instead of coercing it
+ok 10 - plain-text API rejects non-string input instead of coercing it
+  ---
+  duration_ms: 1.26125
+  type: 'test'
+  ...
+# Subtest: converts links to Markdown and keeps href and link text
+ok 11 - converts links to Markdown and keeps href and link text
+  ---
+  duration_ms: 33.05225
+  type: 'test'
+  ...
+# Subtest: projects nested lists and checklists with an explicit GFM warning
+ok 12 - projects nested lists and checklists with an explicit GFM warning
+  ---
+  duration_ms: 1.800584
+  type: 'test'
+  ...
+# Subtest: projects attachments with a warning and leaves the canonical reference intact
+ok 13 - projects attachments with a warning and leaves the canonical reference intact
+  ---
+  duration_ms: 2.197625
+  type: 'test'
+  ...
+# Subtest: reports omitted formatting for plain-text projection
+ok 14 - reports omitted formatting for plain-text projection
+  ---
+  duration_ms: 0.549375
+  type: 'test'
+  ...
+# Subtest: malformed JSON is explicit
+ok 15 - malformed JSON is explicit
+  ---
+  duration_ms: 0.316083
+  type: 'test'
+  ...
+# Subtest: rejects unsupported schema versions read-only without modifying input
+ok 16 - rejects unsupported schema versions read-only without modifying input
+  ---
+  duration_ms: 7.625667
+  type: 'test'
+  ...
+# Subtest: unknown node types are unsupported rather than discarded
+ok 17 - unknown node types are unsupported rather than discarded
+  ---
+  duration_ms: 3.308209
+  type: 'test'
+  ...
+# Subtest: unknown marks are unsupported rather than stripped
+ok 18 - unknown marks are unsupported rather than stripped
+  ---
+  duration_ms: 1.921833
+  type: 'test'
+  ...
+# Subtest: unknown nested nodes and deeply nested marks remain unsupported and untouched
+ok 19 - unknown nested nodes and deeply nested marks remain unsupported and untouched
+  ---
+  duration_ms: 2.218166
+  type: 'test'
+  ...
+# Subtest: unknown node fields and attributes are kept out of the editable path
+ok 20 - unknown node fields and attributes are kept out of the editable path
+  ---
+  duration_ms: 0.716042
+  type: 'test'
+  ...
+# Subtest: rejects partial/corrupt trees and schema-invalid nesting
+ok 21 - rejects partial/corrupt trees and schema-invalid nesting
+  ---
+  duration_ms: 3.842125
+  type: 'test'
+  ...
+# Subtest: rejects invalid known attributes and invalid link marks
+ok 22 - rejects invalid known attributes and invalid link marks
+  ---
+  duration_ms: 0.458334
+  type: 'test'
+  ...
+# Subtest: plain text and Markdown warn when export drops code/list metadata
+ok 23 - plain text and Markdown warn when export drops code/list metadata
+  ---
+  duration_ms: 1.222875
+  type: 'test'
+  ...
+# Subtest: rejects executable and ambiguous link protocols
+ok 24 - rejects executable and ambiguous link protocols
+  ---
+  duration_ms: 0.402334
+  type: 'test'
+  ...
+# Subtest: round-trips canonical JSON through serialization and parsing
+ok 25 - round-trips canonical JSON through serialization and parsing
+  ---
+  duration_ms: 1.069375
+  type: 'test'
+  ...
+# Subtest: editor JSON conversion wraps and validates schemaVersion 1
+ok 26 - editor JSON conversion wraps and validates schemaVersion 1
+  ---
+  duration_ms: 0.747208
+  type: 'test'
+  ...
+# Subtest: repeated serialize/deserialize cycles remain stable
+ok 27 - repeated serialize/deserialize cycles remain stable
+  ---
+  duration_ms: 11.832917
+  type: 'test'
+  ...
+# Subtest: batched projection and serialization calls do not mutate canonical input
+ok 28 - batched projection and serialization calls do not mutate canonical input
+  ---
+  duration_ms: 2.217167
+  type: 'test'
+  ...
+# Subtest: saved JSON fixture survives reload and still validates
+ok 29 - saved JSON fixture survives reload and still validates
+  ---
+  duration_ms: 23.766834
+  type: 'test'
+  ...
+# Subtest: exports never mutate canonical source objects
+ok 30 - exports never mutate canonical source objects
+  ---
+  duration_ms: 1.912583
+  type: 'test'
+  ...
+# Subtest: generative Unicode and whitespace cases preserve every input string
+ok 31 - generative Unicode and whitespace cases preserve every input string
+  ---
+  duration_ms: 3.060291
+  type: 'test'
+  ...
+1..31
+# tests 31
+# suites 0
+# pass 31
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 499.008751
