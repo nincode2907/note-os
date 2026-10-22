@@ -1,0 +1,41 @@
+
+> test
+> node --experimental-strip-types --test tests/*.test.mjs
+
+(node:53547) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///Users/buivannin/Desktop/workspace/personal/note-os/spikes/phase-00/gate1/mobile/document-subset.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /Users/buivannin/Desktop/workspace/personal/note-os/spikes/phase-00/gate1/mobile/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ supported paragraph and checklist subset round-trips through native model (5.001708ms)
+✔ unsupported canonical structures and future schema remain read-only without changing bytes (0.147625ms)
+✔ native record uses the Web notes-only backup v1 contract and keeps checklist state (0.478708ms)
+✔ backup parser rejects invalid JSON and future bundle versions (0.275833ms)
+✔ canonical rich structure, formatting, nested lists, tasks, and multilingual text survive bridge validation (23.400083ms)
+✔ snapshot replies require the matching request id and preserve checked states (1.124708ms)
+✔ unsupported future schema remains unchanged and cannot enter an editable bridge message (0.323666ms)
+✔ malformed canonical documents and unsafe link protocols are rejected (0.499417ms)
+✔ bridge rejects malformed envelopes, unknown message types, oversized messages, and wrong-note sessions (0.274167ms)
+✔ stale and out-of-order WebView generations are rejected (0.191334ms)
+✔ background recovery decision only offers a same-revision active schema-v1 draft (0.172083ms)
+✔ native save gate in source prevents overlapping commits and preserves the revision CAS call (8.090083ms)
+✔ recording gate locks double start/stop and navigation until verified persistence finishes (0.922417ms)
+✔ background requested while recording is best effort and start lock remains held (0.204833ms)
+✔ trashed notes cannot transition directly to archived (0.8675ms)
+✔ legacy Web v1 organization defaults are view-only and pinned items sort first (0.507917ms)
+✔ recovery drafts restore only at their exact base revision and known schema (0.260042ms)
+✔ draft writer serializes overlapping edits and leaves the newest snapshot last (11.106917ms)
+✔ normal edit then explicit discard leaves no journal when the editor is reopened (0.199208ms)
+✔ discard waits for an in-flight journal write, deletes it, and cannot recreate it (1.455708ms)
+✔ discard does not delete a journal from another revision and reopens the writer on failure (1.629208ms)
+✔ Keep Editing leaves unsaved text in the journal (3.485084ms)
+✔ journal clear runs only after note commit succeeds (0.461291ms)
+✔ native editing policy permits only active schema-v1 notes with supported native content (0.208458ms)
+✔ shared tag normalization rejects duplicates instead of silently dropping one (0.237875ms)
+ℹ tests 25
+ℹ suites 0
+ℹ pass 25
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 223.26125

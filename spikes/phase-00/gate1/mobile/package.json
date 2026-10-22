@@ -6,6 +6,8 @@
     "start": "expo start --go",
     "ios:native-build-only": "expo run:ios",
     "export:ios": "expo export --platform ios",
+    "build:editor": "node scripts/build-editor-bundle.mjs",
+    "test:editor-browser": "node scripts/editor-browser-check.mjs",
     "expo-check": "expo install --check",
     "expo-fix": "expo install --fix",
     "test": "node --experimental-strip-types --test tests/*.test.mjs",
@@ -29,10 +31,12 @@
     "react-dom": "19.2.3",
     "react-native": "0.86.3",
     "react-native-safe-area-context": "~5.7.0",
-    "react-native-screens": "~4.26.0"
+    "react-native-screens": "~4.26.0",
+    "react-native-webview": "13.16.1"
   },
   "devDependencies": {
     "@types/react": "~19.2.0",
+    "esbuild": "^0.28.2",
     "typescript": "~6.0.3"
   }
 }

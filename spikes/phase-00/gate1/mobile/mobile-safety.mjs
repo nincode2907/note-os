@@ -9,6 +9,12 @@ export class RecordingSessionGate {
   finish() { this.phase = 'idle'; this.backgroundRequested = false; }
 }
 
+export class SingleSaveGate {
+  active = false;
+  begin() { if (this.active) return false; this.active = true; return true; }
+  finish() { this.active = false; }
+}
+
 export class LatestDraftWriter {
   constructor(write) { this.write = write; this.pending = null; this.running = null; this.closed = false; }
   enqueue(value) { if (!this.closed) this.pending = value; }

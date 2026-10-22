@@ -1,0 +1,28 @@
+UTF-8 audit: PASS
+Files checked: 23
+All packaged files decode as UTF-8.
+
+Checked files:
+README.md
+evidence/editor-browser.log
+evidence/editor-build.log
+evidence/expo-check.log
+evidence/expo-doctor.log
+evidence/ios-export.log
+evidence/mobile-tests.log
+evidence/typecheck.log
+implementation.diff
+report.md
+source/App.tsx
+source/CanonicalEditor.tsx
+source/editor/canonical-editor.html
+source/editor/canonical-editor.template.html
+source/editor/webview-entry.js
+source/editor-bridge.mjs
+source/metro.config.js
+source/mobile-safety.mjs
+source/package-lock.json
+source/package.json
+source/scripts/build-editor-bundle.mjs
+source/scripts/editor-browser-check.mjs
+source/tests/editor-bridge.test.mjs
