@@ -7,6 +7,7 @@ import { exportArchive, verifyArchive, restoreBackup, sha256Blob } from './archi
 import { createTar, readTar, ARCHIVE_LIMITS } from './archive-tar.mjs';
 import { makeBackup } from './mvp-utils.mjs';
 import { validateCanonicalDocument } from '../../packages/document-engine/src/index.js';
+import { createAudioAnchor } from './audio-anchors.mjs';
 
 let serial = 0;
 const repository = () => { const name = `archive-v2-${++serial}`; return { name, notes: createNotesRepository(indexedDB, name), audio: createAudioRepository(indexedDB, name) }; };
@@ -61,6 +62,35 @@ test('Web V2 reader accepts an iPhone source platform with the unchanged V2 mani
   assert.equal(verified.notes.length, 3);
   assert.equal(verified.recordings.length, 2);
   assert.equal(verified.chunks.length, 4);
+});
+test('Web V2 round trip preserves versioned audio anchors and accepts older recordings without the extension', async () => {
+  const name = `archive-anchor-${++serial}`, notes = createNotesRepository(indexedDB, name), audio = createAudioRepository(indexedDB, name);
+  const note = makeEmptyNote(100, 'anchor-archive-note'); await notes.create(note);
+  const recording = await audio.create(note.id, { mimeType: 'audio/webm', ownerId: 'synthetic', createdAt: 101 });
+  await audio.appendChunk(recording.id, 0, new Blob(['audio'], { type: 'audio/webm' }), 1000);
+  await audio.setStatus(recording.id, 'complete', { durationMs: 1000 });
+  await audio.addAnchor(recording.id, createAudioAnchor(recording.id, 500, 'Ghi chú 東京', { id: 'anchor-v2', createdAt: 102 }));
+  const verified = await verifyArchive(await archive({ notes }));
+  assert.deepEqual(verified.recordings[0].audioAnchors, { version: 1, items: [{ id: 'anchor-v2', recordingId: recording.id, offsetMs: 500, label: 'Ghi chú 東京', createdAt: 102 }] });
+  const targetName = `archive-anchor-target-${++serial}`, target = createNotesRepository(indexedDB, targetName);
+  await restoreBackup(await archive({ notes }), target);
+  const restored = createAudioRepository(indexedDB, targetName);
+  assert.equal((await restored.listAnchors(recording.id))[0].label, 'Ghi chú 東京');
+
+  const oldArchive = await rewrite(await archive({ notes }), async entries => {
+    const rows = JSON.parse(await entries.get('recordings.json').text()); delete rows[0].recording.audioAnchors;
+    entries.set('recordings.json', json(rows));
+  });
+  assert.equal((await verifyArchive(oldArchive)).recordings[0].audioAnchors, undefined);
+});
+test('malformed V2 anchor metadata is rejected during verification before import mutation', async () => {
+  const source = await fixture();
+  const malformed = await rewrite(await archive(source), async entries => {
+    const rows = JSON.parse(await entries.get('recordings.json').text());
+    rows[0].recording.audioAnchors = { version: 1, items: [{ id: 'bad', recordingId: rows[0].recording.id, offsetMs: -1, label: 'bad', createdAt: 1 }] };
+    entries.set('recordings.json', json(rows));
+  });
+  await assert.rejects(verifyArchive(malformed), /identity or time is invalid/u);
 });
 test('fixed timestamp exports are deterministic and do not modify revisions, metadata or partial status', async () => {
   const source = await fixture(), before = await source.notes.snapshotArchive();

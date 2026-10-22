@@ -1,0 +1,5 @@
+Commands:
+- npm run build:editor
+- npm run test:editor-browser
+
+Results: PASS. Built the offline Tiptap asset (404,803 bytes). Chromium 156.0.8078.4 verified the local editor runtime, canonical round-trip, bold formatting, task toggle, IME snapshot deferral, and zero external requests.

@@ -1,5 +1,6 @@
 import { sha256 } from '@noble/hashes/sha2.js';
 import { assertNoteRecord } from '../web/app/lib/note-validation.mjs';
+import { validateAudioAnchorSet } from '../web/app/lib/audio-anchors.mjs';
 
 export const NATIVE_ARCHIVE_LIMITS = Object.freeze({ maxArchiveBytes: 1024 ** 3, maxEntryBytes: 512 * 1024 ** 2, maxJsonBytes: 16 * 1024 ** 2, maxEntries: 10004, maxNotes: 50000, maxRecordings: 10000, maxChunks: 100000, ioChunkBytes: 64 * 1024 });
 const encoder = new TextEncoder();
@@ -53,6 +54,7 @@ function validateRecording(recording) {
   safeJson(recording);
   if (!recording || Array.isArray(recording) || !validId(recording.id) || !validId(recording.noteId) || !validId(recording.ownerId) || typeof recording.title !== 'string' || !recording.title.trim() || recording.title.length > 120 || !['complete', 'interrupted', 'failed'].includes(recording.status) || !['createdAt', 'updatedAt', 'durationMs', 'chunkCount'].every(key => integer(recording[key]))) fail('Invalid recording metadata.');
   audioExtension(recording.mimeType);
+  validateAudioAnchorSet(recording.audioAnchors, recording.id, { durationMs: recording.durationMs, durationKnown: recording.nativeProvenance?.durationKnown !== false && recording.durationMs > 0 });
 }
 
 function digest(bytes) { return Array.from(sha256(bytes), byte => byte.toString(16).padStart(2, '0')).join(''); }
@@ -311,6 +313,7 @@ export async function buildArchivePlan({ notes, recordings, readStream, stat, ex
       createdAt: source.created_at,
       updatedAt: meta.updatedAt ?? source.created_at,
       durationMs: meta.durationMs ?? original.durationMs ?? 0,
+      ...(meta.audioAnchors ?? original.audioAnchors ? { audioAnchors: meta.audioAnchors ?? original.audioAnchors } : {}),
       chunkCount: info?.size ? 1 : 0,
       nativeProvenance: {
         sourcePlatform: meta.sourcePlatform ?? 'ios', durationKnown: meta.durationKnown === true,
@@ -400,6 +403,7 @@ export function adaptArchiveRecording(row, nativeRecording, sourcePlatform, medi
     ownerId: sourceRecording.ownerId,
     updatedAt: sourceRecording.updatedAt,
     durationMs: sourceRecording.durationMs,
+    ...(sourceRecording.audioAnchors ?? nativeRecording.archiveMetadata?.audioAnchors ? { audioAnchors: sourceRecording.audioAnchors ?? nativeRecording.archiveMetadata.audioAnchors } : {}),
     durationKnown: typeof sourceRecording.nativeProvenance?.durationKnown === 'boolean' ? sourceRecording.nativeProvenance.durationKnown : true,
     sourcePlatform,
     sourceRecording,

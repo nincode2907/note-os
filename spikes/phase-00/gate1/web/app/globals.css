@@ -174,6 +174,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .audio-panel .tool-button { min-height: 36px; }
 .audio-panel .notice { margin: 10px 0; }
 .audio-panel.is-recording { border-color: #d7a48a; box-shadow: 0 0 0 2px #b46c4514; }
+.audio-anchor-list { display: grid; gap: 5px; margin: 10px 0 0; padding: 0; list-style: none; }
+.audio-anchor-row { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; border-top: 1px solid var(--line); padding-top: 5px; }
+.audio-anchor-seek { display: flex; flex: 1 1 180px; align-items: center; gap: 10px; min-height: 36px; padding: 5px 8px; border: 0; border-radius: 7px; background: transparent; color: var(--ink); text-align: left; cursor: pointer; }
+.audio-anchor-seek span:first-child { color: var(--accent); font-variant-numeric: tabular-nums; font-weight: 700; }
+.audio-anchor-seek:hover { background: var(--surface-soft); }
 
 .notice { margin: 12px 0; padding: 12px 14px; border-radius: 8px; background: #fff4e8; color: #815a31; font-size: 13px; line-height: 1.55; }
 .notice.error { background: var(--danger-soft); color: #8f3b33; }

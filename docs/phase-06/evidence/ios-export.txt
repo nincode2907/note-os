@@ -1,0 +1,6 @@
+Command: npm run export:ios
+Expo SDK: 57
+Result: PASS
+iOS bundle: _expo/static/js/ios/AppEntry-d555cc46c0219e614b43026f344364fa.hbc
+Bundled modules: 964
+Bundle size: 3.3 MB

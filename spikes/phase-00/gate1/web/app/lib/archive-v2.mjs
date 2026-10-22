@@ -2,6 +2,7 @@ import { sha256 } from '@noble/hashes/sha2.js';
 import { assertNoteRecord } from './note-validation.mjs';
 import { parseBackup } from './mvp-utils.mjs';
 import { ARCHIVE_LIMITS, createTar, readTar } from './archive-tar.mjs';
+import { validateAudioAnchorSet } from './audio-anchors.mjs';
 
 export { ARCHIVE_LIMITS };
 const verified = new WeakSet();
@@ -31,6 +32,7 @@ function checkRecording(recording) {
   if (['recording', 'paused'].includes(recording.status)) fail('Stop/finalize active recording sessions in every tab before exporting a Full Archive. Saved chunks and statuses were kept unchanged.');
   if (!id(recording.id) || !id(recording.noteId) || !id(recording.ownerId) || typeof recording.title !== 'string' || !recording.title.trim() || recording.title.length > 120 || !['complete', 'interrupted', 'failed'].includes(recording.status) || !['createdAt', 'updatedAt', 'durationMs', 'chunkCount'].every((key) => integer(recording[key]))) fail('Invalid recording metadata.');
   audioExtension(recording.mimeType);
+  validateAudioAnchorSet(recording.audioAnchors, recording.id, { durationMs: recording.durationMs, durationKnown: recording.nativeProvenance?.durationKnown !== false && recording.durationMs > 0 });
 }
 export function validateArchiveSnapshot(snapshot) {
   const { notes, recordings, chunks } = snapshot;

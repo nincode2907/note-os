@@ -3,14 +3,15 @@ import { Alert, AppState, Button, FlatList, KeyboardAvoidingView, Platform, Pres
 import { NavigationContainer, usePreventRemove } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import { AudioModule, RecordingPresets, setAudioModeAsync, useAudioPlayer, useAudioRecorder, useAudioRecorderState } from 'expo-audio';
+import { AudioModule, RecordingPresets, setAudioModeAsync, useAudioPlayer, useAudioPlayerStatus, useAudioRecorder } from 'expo-audio';
 import { File, Paths } from 'expo-file-system';
 import * as DocumentPicker from 'expo-document-picker';
 import * as Sharing from 'expo-sharing';
 import { makeBackup, parseBackup, filterNotes, sortNotes } from '../web/app/lib/mvp-utils.mjs';
 import { normalizeTagList } from '../web/app/lib/note-organization.mjs';
 import { canonicalToPlainText, createEmptyCanonicalDocument, validateCanonicalDocument } from '../web/packages/document-engine/src/index.js';
-import { beginRecordingFinalization, clearQuickCaptureDraft, commitQuickVoiceCapture, createNote, createQuickCaptureNote as createQuickCaptureRecord, discardRecoveryDraft, exportNotes, getNote, getQuickCaptureDraft, getRecoveryDraft, importNotes, journalQuickVoiceCapture, listNotes, listPendingFileCleanups, listPendingQuickVoiceCaptures, listRecordings, markFileCleanupDone, Note, permanentlyDeleteNote, persistQuickCaptureDraft, RecordingArchiveMetadata, RecoveryDraft, Recording, recordingArchiveMetadata, removeRecording, renameRecording, RevisionConflictError, saveNote, saveRecording, saveRecoveryDraft, setLifecycle, setPinned } from './store';
+import { addRecordingAnchor, addRecordingSessionAnchor, beginAudioAnchorSession, beginRecordingFinalization, clearQuickCaptureDraft, commitAudioAnchorSession, commitQuickVoiceCapture, createNote, createQuickCaptureNote as createQuickCaptureRecord, deleteRecordingAnchor, discardRecoveryDraft, exportNotes, getNote, getQuickCaptureDraft, getRecoveryDraft, importNotes, listAudioAnchorSessions, listNotes, listPendingFileCleanups, listPendingQuickVoiceCaptures, listRecordings, markFileCleanupDone, Note, permanentlyDeleteNote, persistQuickCaptureDraft, RecordingArchiveMetadata, RecoveryDraft, Recording, recordingArchiveMetadata, removeAudioAnchorSession, removeRecording, renameRecording, renameRecordingAnchor, RevisionConflictError, saveNote, saveRecoveryDraft, setLifecycle, setPinned } from './store';
+import { createAudioAnchor, formatAudioTimestamp } from '../web/app/lib/audio-anchors.mjs';
 import { canEditNativeNote, discardDraftSafely, LatestDraftWriter, recoveryDecision, RecordingSessionGate, SingleSaveGate, acquireNativeRecordingSession } from './mobile-safety.mjs';
 import { documentToNativeModel, nativeModelToDocument } from './document-subset';
 import { CanonicalEditor, CanonicalEditorHandle } from './CanonicalEditor';
@@ -28,9 +29,9 @@ function HomeScreen({ navigation }: any) {
   const [lifecycle, setLifecycleFilter] = useState<'active' | 'archived' | 'trashed'>('active'); const [status, setStatus] = useState(''); const [backupBusy, setBackupBusy] = useState(false); const [backupStatus, setBackupStatus] = useState('');
   const [captureText, setCaptureText] = useState(''); const [captureReady, setCaptureReady] = useState(false); const [captureBusy, setCaptureBusy] = useState(false); const [captureFocused, setCaptureFocused] = useState(false); const [captureStatus, setCaptureStatus] = useState('');
   const captureTextRef = useRef(''); const captureSequenceRef = useRef(0); const captureNoteRef = useRef<Note | null>(null); const captureTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null); const captureSaveGate = useRef(new QuickCaptureSaveGate());
-  const [voicePhase, setVoicePhase] = useState<'idle'|'requesting'|'starting'|'recording'|'stopping'|'saving'|'saved'|'interrupted'|'failed'>('idle'); const [voiceStatus, setVoiceStatus] = useState('');
-  const quickRecorder = useAudioRecorder({ ...RecordingPresets.HIGH_QUALITY, directory: 'document' }); const quickRecorderState = useAudioRecorderState(quickRecorder);
-  const quickVoiceGate = useRef(new RecordingSessionGate()); const quickVoiceRelease = useRef<null | (() => void)>(null); const quickVoicePending = useRef<null | { note: Note; recording: Recording; metadata: RecordingArchiveMetadata }>(null); const quickVoiceSaveGate = useRef(new QuickCaptureSaveGate()); const finishQuickVoiceRef = useRef<(interrupted?: boolean) => Promise<void>>(async () => {});
+  const [voicePhase, setVoicePhase] = useState<'idle'|'requesting'|'starting'|'recording'|'paused'|'stopping'|'saving'|'saved'|'interrupted'|'failed'>('idle'); const [voiceStatus, setVoiceStatus] = useState(''); const [voiceAnchors, setVoiceAnchors] = useState<any[]>([]);
+  const quickRecorder = useAudioRecorder({ ...RecordingPresets.HIGH_QUALITY, directory: 'document' });
+  const quickVoiceGate = useRef(new RecordingSessionGate()); const quickVoiceRelease = useRef<null | (() => void)>(null); const quickVoicePending = useRef<null | { note: Note; recording: Recording; metadata: RecordingArchiveMetadata }>(null); const quickVoiceSession = useRef<null | { note: Note; recording: any; metadata: RecordingArchiveMetadata }>(null); const quickVoiceSaveGate = useRef(new QuickCaptureSaveGate()); const finishQuickVoiceRef = useRef<(interrupted?: boolean) => Promise<void>>(async () => {});
   const pendingPins = useRef(new Set<string>());
   const refresh = useCallback(async () => { setNotes(await listNotes()); const pending = await listPendingFileCleanups(); for (const uri of pending) { try { const file = new File(uri); if (file.exists) file.delete(); await markFileCleanupDone(uri); } catch (error) { setStatus(`File cleanup is pending retry: ${String(error)}`); } } }, []);
   async function togglePin(item: Note) { if (backupBusy || pendingPins.current.has(item.id)) return; pendingPins.current.add(item.id); try { await setPinned(item.id, !item.pinned, item.revision); await refresh(); } catch (error) { setStatus(String(error)); } finally { pendingPins.current.delete(item.id); } }
@@ -54,11 +55,24 @@ function HomeScreen({ navigation }: any) {
         }
       } catch (error) { if (mounted) { setVoicePhase('failed'); setVoiceStatus(`A voice recovery journal needs attention and has been preserved. ${String(error)}`); } }
     }
+    // Recover Phase 06 provisional sessions without treating an unfinished file as a saved recording.
+    for (const row of await listAudioAnchorSessions()) {
+      try {
+        const note = row.note_json ? JSON.parse(row.note_json) as Note : null;
+        const recording = JSON.parse(row.recording_json) as any;
+        const metadata = JSON.parse(row.metadata_json) as RecordingArchiveMetadata;
+        const file = recording.file_uri ? new File(recording.file_uri) : null;
+        if (!file?.exists || file.size <= 0) { if (mounted) setVoiceStatus('An interrupted recording journal is preserved because its audio file is unavailable.'); continue; }
+        recording.status = 'interrupted'; recording.title = `${note ? 'Interrupted voice note' : 'Interrupted recording'} · ${new Date(recording.created_at).toLocaleString()}`;
+        await commitAudioAnchorSession(recording.id, note, recording, { ...metadata, durationMs: Math.max(metadata.durationMs || 0, 0), durationKnown: false, updatedAt: Date.now() });
+        if (mounted && note) setVoiceStatus('Recovered an interrupted voice note with its bookmarks. Open it from Recent notes.');
+      } catch (error) { if (mounted) setVoiceStatus(`An audio bookmark recovery journal is preserved for retry. ${String(error)}`); }
+    }
     const unresolved = await reconcileArchiveImports(); if (unresolved.length && mounted) setStatus(`Archive recovery needs attention: ${unresolved.join(' ')}`);
     await refresh(); if (mounted) setCaptureReady(true);
   })().catch(error => { if (mounted) { setStatus(String(error)); setCaptureReady(true); } }); return () => { mounted = false; if (captureTimerRef.current) clearTimeout(captureTimerRef.current); }; }, [refresh]);
   useEffect(() => { const unsubscribe = navigation.addListener('focus', () => { void refresh(); }); return unsubscribe; }, [navigation, refresh]);
-  const quickVoiceActive = ['requesting','starting','recording','stopping','saving'].includes(voicePhase) || Boolean(quickVoicePending.current);
+  const quickVoiceActive = ['requesting','starting','recording','paused','stopping','saving'].includes(voicePhase) || Boolean(quickVoicePending.current);
   usePreventRemove(quickVoiceActive, () => setVoiceStatus('Finish saving the voice note before leaving Quick Capture.'));
   const visible = useMemo(() => sortNotes(filterNotes(notes, query, lifecycle) as Note[]), [notes, query, lifecycle]);
   function updateCapture(value: string) {
@@ -99,8 +113,7 @@ function HomeScreen({ navigation }: any) {
     if (!pending || !quickVoiceSaveGate.current.begin()) return;
     setVoicePhase('saving'); setVoiceStatus('Saving the finalized voice note…');
     try {
-      await journalQuickVoiceCapture(pending.note, pending.recording, pending.metadata);
-      await commitQuickVoiceCapture(pending.recording.id);
+      await commitAudioAnchorSession(pending.recording.id, pending.note, pending.recording, pending.metadata);
       quickVoicePending.current = null;
       setNotes(current => [pending.note, ...current.filter(item => item.id !== pending.note.id)]);
       setVoicePhase(pending.recording.status === 'interrupted' ? 'interrupted' : 'saved');
@@ -121,8 +134,23 @@ function HomeScreen({ navigation }: any) {
       await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true, allowsBackgroundRecording: false });
       await quickRecorder.prepareToRecordAsync();
       if (gate.backgroundRequested) { await quickRecorder.stop(); gate.finish(); quickVoiceRelease.current?.(); quickVoiceRelease.current = null; setVoicePhase('interrupted'); setVoiceStatus('Recording start was interrupted before audio began. No note was created.'); return; }
+      const createdAt = timeNow(), note = makeQuickVoiceNote({ id: makeId(), now: createdAt }) as Note;
+      const recording = { id: `recording-${makeId()}`, note_id: note.id, title: `Voice note · ${new Date(createdAt).toLocaleString()}`, file_uri: quickRecorder.uri ?? '', status: 'recording', created_at: createdAt };
+      const metadata = recordingArchiveMetadata({ ...recording, status: 'interrupted' });
+      await beginAudioAnchorSession(null, note, recording, metadata);
+      quickVoiceSession.current = { note, recording, metadata }; setVoiceAnchors([]);
       quickRecorder.record(); gate.move('starting', 'recording'); setVoicePhase('recording'); setVoiceStatus('Recording locally. It will stop when the app leaves the foreground.');
-    } catch (error) { gate.finish(); quickVoiceRelease.current?.(); quickVoiceRelease.current = null; setVoicePhase('failed'); setVoiceStatus(`Recording could not start. No note was created. ${String(error)}`); }
+    } catch (error) { const session = quickVoiceSession.current; if (session) { await removeAudioAnchorSession(session.recording.id).catch(() => {}); quickVoiceSession.current = null; } gate.finish(); quickVoiceRelease.current?.(); quickVoiceRelease.current = null; setVoicePhase('failed'); setVoiceStatus(`Recording could not start. No note was created. ${String(error)}`); }
+  }
+  async function addQuickVoiceBookmark() {
+    const session = quickVoiceSession.current; if (!session) return;
+    try { const offsetMs = Math.max(0, Math.round(quickRecorder.currentTime * 1000)); const set = await addRecordingSessionAnchor(session.recording.id, createAudioAnchor(session.recording.id, offsetMs, '', { id: `bookmark-${makeId()}`, createdAt: timeNow() } as any)); session.metadata = { ...session.metadata, audioAnchors: set }; quickVoiceSession.current = session; setVoiceAnchors(set.items); setVoiceStatus(`Bookmark saved at ${formatAudioTimestamp(offsetMs)}.`); }
+    catch (error) { setVoiceStatus(`Could not save bookmark. The recording journal remains safe. ${String(error)}`); }
+  }
+  async function toggleQuickVoicePause() {
+    const gate = quickVoiceGate.current;
+    try { if (gate.phase === 'recording' && gate.pause()) { await quickRecorder.pause(); setVoicePhase('paused'); setVoiceStatus('Recording paused. Bookmarks keep the current media time.'); } else if (gate.phase === 'paused' && gate.resume()) { quickRecorder.record(); setVoicePhase('recording'); setVoiceStatus('Recording resumed.'); } }
+    catch (error) { setVoiceStatus(`Could not change recording state. ${String(error)}`); }
   }
   async function finishQuickVoice(interrupted = false) {
     const gate = quickVoiceGate.current;
@@ -132,25 +160,27 @@ function HomeScreen({ navigation }: any) {
     if (!gate.beginStop()) { releaseFinalization(); return; }
     setVoicePhase('stopping'); setVoiceStatus('Stopping and verifying the audio file…');
     try {
+      const durationMs = Math.max(0, Math.round(quickRecorder.currentTime * 1000));
       await quickRecorder.stop();
       const uri = quickRecorder.uri;
       if (!uri) throw new Error('Recorder did not provide a finalized audio file.');
       const file = new File(uri);
       if (!file.exists || file.size <= 0) throw new Error('Finalized audio is missing or empty.');
-      const createdAt = timeNow(), note = makeQuickVoiceNote({ id: makeId(), now: createdAt }) as Note;
-      const recording: Recording = { id: `recording-${makeId()}`, note_id: note.id, title: `Voice note · ${new Date(createdAt).toLocaleString()}`, file_uri: uri, status: interrupted ? 'interrupted' : 'complete', created_at: createdAt };
-      quickVoicePending.current = { note, recording, metadata: recordingArchiveMetadata(recording) };
+      const session = quickVoiceSession.current; if (!session) throw new Error('The provisional bookmark journal is missing; finalized audio was kept.');
+      const recording: Recording = { ...session.recording, file_uri: uri, status: interrupted ? 'interrupted' : 'complete' };
+      const metadata = { ...session.metadata, durationMs, durationKnown: false, updatedAt: timeNow() };
+      quickVoicePending.current = { note: session.note, recording, metadata };
       setVoicePhase('saving'); setVoiceStatus('Audio finalized. Saving its note and recording together…');
-      await retryQuickVoiceSave();
+      await retryQuickVoiceSave(); if (!quickVoicePending.current) quickVoiceSession.current = null;
     } catch (error) {
       const uri = quickRecorder.uri;
       const file = uri ? new File(uri) : null;
-      if (file?.exists && file.size > 0 && !quickVoicePending.current) {
-        const createdAt = timeNow(), note = makeQuickVoiceNote({ id: makeId(), now: createdAt }) as Note;
-        const recording: Recording = { id: `recording-${makeId()}`, note_id: note.id, title: `Interrupted voice note · ${new Date(createdAt).toLocaleString()}`, file_uri: uri!, status: 'interrupted', created_at: createdAt };
-        quickVoicePending.current = { note, recording, metadata: recordingArchiveMetadata(recording) };
+      if (file?.exists && file.size > 0 && !quickVoicePending.current && quickVoiceSession.current) {
+        const session = quickVoiceSession.current;
+        const recording: Recording = { ...session.recording, file_uri: uri!, status: 'interrupted', title: `Interrupted voice note · ${new Date(session.recording.created_at).toLocaleString()}` };
+        quickVoicePending.current = { note: session.note, recording, metadata: { ...session.metadata, durationMs: Math.round(quickRecorder.currentTime * 1000), durationKnown: false, updatedAt: timeNow() } };
         setVoicePhase('failed'); setVoiceStatus(`The recording stopped unexpectedly. Its audio is preserved for retry. ${String(error)}`);
-      } else { setVoicePhase('failed'); setVoiceStatus(`Recording could not be saved. No note was created. ${String(error)}`); }
+      } else { setVoicePhase('failed'); setVoiceStatus(`Recording could not be saved. Its provisional journal is preserved when available. ${String(error)}`); }
     } finally { gate.finish(); releaseFinalization?.(); quickVoiceRelease.current?.(); quickVoiceRelease.current = null; }
   }
   finishQuickVoiceRef.current = finishQuickVoice;
@@ -241,18 +271,21 @@ function HomeScreen({ navigation }: any) {
     ]);
   }
   const pendingVoiceForUi = quickVoicePending.current as { note: Note; recording: Recording; metadata: RecordingArchiveMetadata } | null;
-  const voiceButtonLabel = pendingVoiceForUi && voicePhase === 'failed' ? 'Retry save' : voicePhase === 'recording' ? `Stop · ${Math.round(quickRecorderState.durationMillis / 1000)}s` : ['requesting','starting','stopping','saving'].includes(voicePhase) ? ({ requesting: 'Requesting…', starting: 'Starting…', stopping: 'Stopping…', saving: 'Saving…' } as Record<string,string>)[voicePhase] : 'Voice';
+  const voiceButtonLabel = pendingVoiceForUi && voicePhase === 'failed' ? 'Retry save' : ['recording','paused'].includes(voicePhase) ? `Stop · ${Math.round(quickRecorder.currentTime)}s` : ['requesting','starting','stopping','saving'].includes(voicePhase) ? ({ requesting: 'Requesting…', starting: 'Starting…', stopping: 'Stopping…', saving: 'Saving…' } as Record<string,string>)[voicePhase] : 'Voice';
   return <SafeAreaView style={styles.screen} edges={['top', 'left', 'right', 'bottom']}><KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
     <View style={styles.homeHeader}><View><Text style={styles.eyebrow}>PRIVATE · ON THIS DEVICE</Text><Text style={styles.heading}>Your notes</Text></View><Pressable disabled={backupBusy || quickVoiceActive} style={styles.primary} onPress={() => void create()}><Text style={styles.primaryText}>＋ Full editor</Text></Pressable></View>
     <View style={[styles.captureCard, captureFocused && styles.captureFocused]}>
       <TextInput accessibilityLabel="What's on your mind?" style={styles.captureInput} placeholder="What's on your mind?" placeholderTextColor="#99978E" value={captureText} onChangeText={updateCapture} onFocus={() => setCaptureFocused(true)} onBlur={() => setCaptureFocused(false)} editable={captureReady} multiline textAlignVertical="top" blurOnSubmit={false} returnKeyType="default" />
       <View style={styles.captureActions}>
-        <Pressable accessibilityRole="button" accessibilityLabel={voiceButtonLabel} disabled={backupBusy || !['idle','saved','interrupted','failed','recording'].includes(voicePhase) || Boolean(pendingVoiceForUi && voicePhase !== 'failed')} style={[styles.voiceButton, voicePhase === 'recording' && styles.voiceButtonRecording]} onPress={() => { if (pendingVoiceForUi && voicePhase === 'failed') void retryQuickVoiceSave(); else if (voicePhase === 'recording') void finishQuickVoice(false); else { setVoiceStatus(''); void startQuickVoice(); } }}><Text style={[styles.voiceButtonText, voicePhase === 'recording' && styles.voiceButtonRecordingText]}>{voiceButtonLabel}</Text></Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel={voiceButtonLabel} disabled={backupBusy || !['idle','saved','interrupted','failed','recording','paused'].includes(voicePhase) || Boolean(pendingVoiceForUi && voicePhase !== 'failed')} style={[styles.voiceButton, ['recording','paused'].includes(voicePhase) && styles.voiceButtonRecording]} onPress={() => { if (pendingVoiceForUi && voicePhase === 'failed') void retryQuickVoiceSave(); else if (['recording','paused'].includes(voicePhase)) void finishQuickVoice(false); else { setVoiceStatus(''); void startQuickVoice(); } }}><Text style={[styles.voiceButtonText, ['recording','paused'].includes(voicePhase) && styles.voiceButtonRecordingText]}>{voiceButtonLabel}</Text></Pressable>
+        {['recording','paused'].includes(voicePhase) ? <Pressable accessibilityRole="button" style={styles.action} onPress={() => void toggleQuickVoicePause()}><Text style={styles.action}>{voicePhase === 'paused' ? 'Resume' : 'Pause'}</Text></Pressable> : null}
+        {['recording','paused'].includes(voicePhase) ? <Pressable accessibilityRole="button" style={styles.action} onPress={() => void addQuickVoiceBookmark()}><Text style={styles.action}>⚑ Bookmark</Text></Pressable> : null}
         <Text style={styles.captureHint}>{captureBusy ? 'Saving locally…' : 'A thought is enough. Shape it later.'}</Text>
         <Pressable accessibilityRole="button" disabled={backupBusy || !captureReady || captureBusy || !normalizeQuickCaptureInput(captureText)} style={[styles.captureSaveButton, (backupBusy || !captureReady || captureBusy || !normalizeQuickCaptureInput(captureText)) && styles.disabledButton]} onPress={() => void saveCapture()}><Text style={styles.captureSaveText}>{captureBusy ? 'Saving…' : 'Save'}</Text></Pressable>
       </View>
       {captureStatus ? <Text accessibilityRole="alert" style={[styles.captureMessage, captureStatus.startsWith('Could not') && styles.captureError]}>{captureStatus}</Text> : null}
-      {voiceStatus ? <Text accessibilityLiveRegion="polite" style={[styles.captureMessage, voicePhase === 'failed' && styles.captureError]}>{voicePhase === 'recording' ? `● ${Math.round(quickRecorderState.durationMillis / 1000)}s · ${voiceStatus}` : voiceStatus}</Text> : null}
+      {voiceAnchors.map(anchor => <Text key={anchor.id} style={styles.subtle}>⚑ {formatAudioTimestamp(anchor.offsetMs)} · {anchor.label || 'Bookmark'}</Text>)}
+      {voiceStatus ? <Text accessibilityLiveRegion="polite" style={[styles.captureMessage, voicePhase === 'failed' && styles.captureError]}>{['recording','paused'].includes(voicePhase) ? `● ${Math.round(quickRecorder.currentTime)}s · ${voiceStatus}` : voiceStatus}</Text> : null}
     </View>
     <TextInput style={styles.search} placeholder="Search notes and tags" value={query} onChangeText={setQuery} returnKeyType="search" />
     <View style={styles.segmentRow}>{(['active', 'archived', 'trashed'] as const).map(value => <Pressable key={value} onPress={() => setLifecycleFilter(value)} style={[styles.segment, lifecycle === value && styles.segmentActive]}><Text style={[styles.segmentText, lifecycle === value && styles.segmentTextActive]}>{value === 'active' ? 'Notes' : value === 'archived' ? 'Archive' : 'Trash'}</Text></Pressable>)}</View>
@@ -277,16 +310,16 @@ function HomeScreen({ navigation }: any) {
   </KeyboardAvoidingView></SafeAreaView>;
 }
 
-function AudioItem({ item, onPlay, onRename, onDelete }: { item: Recording; onPlay: (item: Recording) => void; onRename: (item: Recording) => void; onDelete: (item: Recording) => void }) {
-  return <View style={styles.audioRow}><View style={{ flex: 1 }}><Text style={styles.audioTitle}>{item.title}</Text><Text style={styles.subtle}>{item.file_uri ? item.status === 'complete' ? 'Saved locally' : 'Interrupted · recovery available' : 'Metadata preserved · no audio bytes available'}</Text></View><Pressable disabled={!item.file_uri} onPress={() => onPlay(item)} style={[styles.smallButton, !item.file_uri && { opacity: .45 }]}><Text style={styles.smallButtonText}>Play</Text></Pressable><Pressable onPress={() => onRename(item)}><Text style={styles.action}>Rename</Text></Pressable><Pressable onPress={() => onDelete(item)}><Text style={styles.dangerAction}>Delete</Text></Pressable></View>;
+function AudioItem({ item, onPlay, onSeek, onRename, onDelete, onRenameAnchor, onDeleteAnchor }: { item: Recording; onPlay: (item: Recording) => void; onSeek: (anchor: any) => void; onRename: (item: Recording) => void; onDelete: (item: Recording) => void; onRenameAnchor: (id: string, label: string) => void; onDeleteAnchor: (id: string) => void }) {
+  return <View><View style={styles.audioRow}><View style={{ flex: 1 }}><Text style={styles.audioTitle}>{item.title}</Text><Text style={styles.subtle}>{item.file_uri ? item.status === 'complete' ? 'Saved locally' : 'Interrupted · recovery available' : 'Metadata preserved · no audio bytes available'}</Text></View><Pressable disabled={!item.file_uri} onPress={() => onPlay(item)} style={[styles.smallButton, !item.file_uri && { opacity: .45 }]}><Text style={styles.smallButtonText}>Play</Text></Pressable><Pressable onPress={() => onRename(item)}><Text style={styles.action}>Rename</Text></Pressable><Pressable onPress={() => onDelete(item)}><Text style={styles.dangerAction}>Delete</Text></Pressable></View>{item.audioAnchors?.items.map(anchor => <View key={anchor.id} style={styles.segmentRow}><Pressable disabled={!item.file_uri} onPress={() => onSeek(anchor)}><Text style={styles.action}>⚑ {formatAudioTimestamp(anchor.offsetMs)} · {anchor.label || 'Bookmark'}</Text></Pressable><Pressable onPress={() => onRenameAnchor(anchor.id, anchor.label)}><Text style={styles.action}>Rename</Text></Pressable><Pressable onPress={() => onDeleteAnchor(anchor.id)}><Text style={styles.dangerAction}>Delete</Text></Pressable></View>)}</View>;
 }
 
-function AudioPlayback({ uri, onClose }: { uri: string; onClose: () => void }) { const player = useAudioPlayer(uri); useEffect(() => { player.play(); return () => { try { player.pause(); } catch {} }; }, [player]); return <Pressable onPress={onClose}><Text style={styles.action}>Playing audio · tap to stop</Text></Pressable>; }
+function AudioPlayback({ uri, seekOffsetMs, onSeekConsumed, onBookmark, onClose }: { uri: string; seekOffsetMs: number | null; onSeekConsumed: () => void; onBookmark: (offsetMs: number) => void; onClose: () => void }) { const player = useAudioPlayer(uri); const status = useAudioPlayerStatus(player); const consumeSeekRef = useRef(onSeekConsumed); consumeSeekRef.current = onSeekConsumed; useEffect(() => { if (!status.isLoaded) return; if (seekOffsetMs !== null) { const offset = Math.min(Math.max(0, seekOffsetMs / 1000), status.duration > 0 ? status.duration : seekOffsetMs / 1000); void player.seekTo(offset).then(() => { player.play(); consumeSeekRef.current(); }); } else player.play(); }, [player, status.isLoaded, status.duration, seekOffsetMs]); return <View style={styles.segmentRow}><Text style={styles.subtle}>{status.isLoaded ? `${status.playing ? 'Playing' : 'Paused'} · ${formatAudioTimestamp(Math.max(0, Math.round(status.currentTime * 1000)))}` : 'Loading audio…'}</Text><Pressable onPress={() => onBookmark(Math.max(0, Math.round(status.currentTime * 1000)))} disabled={!status.isLoaded}><Text style={styles.action}>⚑ Bookmark this moment</Text></Pressable><Pressable onPress={() => { player.pause(); onClose(); }}><Text style={styles.action}>Stop</Text></Pressable></View>; }
 
 function EditorScreen({ route, navigation }: any) {
-  const [note, setNote] = useState<Note | null>(null); const [title, setTitle] = useState(''); const [document, setDocument] = useState<any>(createEmptyCanonicalDocument()); const [tags, setTags] = useState(''); const [pinned, setPinned] = useState(false); const [editable, setEditable] = useState(false); const [readOnlyReason, setReadOnlyReason] = useState(''); const [dirty, setDirty] = useState(false); const [status, setStatus] = useState(''); const [recordings, setRecordings] = useState<Recording[]>([]); const [recordingPhase, setRecordingPhase] = useState('idle'); const [recoveryHeld, setRecoveryHeld] = useState(false); const [playingUri, setPlayingUri] = useState(''); const [editorFailed, setEditorFailed] = useState(false); const [editorReady, setEditorReady] = useState(false); const [editorHeight, setEditorHeight] = useState(320); const [saving, setSaving] = useState(false);
+  const [note, setNote] = useState<Note | null>(null); const [title, setTitle] = useState(''); const [document, setDocument] = useState<any>(createEmptyCanonicalDocument()); const [tags, setTags] = useState(''); const [pinned, setPinned] = useState(false); const [editable, setEditable] = useState(false); const [readOnlyReason, setReadOnlyReason] = useState(''); const [dirty, setDirty] = useState(false); const [status, setStatus] = useState(''); const [recordings, setRecordings] = useState<Recording[]>([]); const [recordingPhase, setRecordingPhase] = useState('idle'); const [recordingPending, setRecordingPending] = useState(false); const [recoveryHeld, setRecoveryHeld] = useState(false); const [playingUri, setPlayingUri] = useState(''); const [playingRecordingId, setPlayingRecordingId] = useState(''); const [playbackOffsetMs, setPlaybackOffsetMs] = useState<number | null>(null); const [editorFailed, setEditorFailed] = useState(false); const [editorReady, setEditorReady] = useState(false); const [editorHeight, setEditorHeight] = useState(320); const [saving, setSaving] = useState(false);
   const [sessionId, setSessionId] = useState(() => createEditorSession(route.params.id, makeId()));
-  const gateRef = useRef(new RecordingSessionGate()); const recordingSessionRelease = useRef<null | (() => void)>(null); const editorRef = useRef<CanonicalEditorHandle>(null); const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null); const draftWriter = useRef<LatestDraftWriter | null>(null); const latestRef = useRef<any>(null);
+  const gateRef = useRef(new RecordingSessionGate()); const recordingSessionRelease = useRef<null | (() => void)>(null); const editorAudioSession = useRef<null | { recording: any; metadata: RecordingArchiveMetadata }>(null); const editorRef = useRef<CanonicalEditorHandle>(null); const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null); const draftWriter = useRef<LatestDraftWriter | null>(null); const latestRef = useRef<any>(null);
   const noteRef = useRef<Note | null>(null); const documentRef = useRef<any>(null); const dirtyRef = useRef(false); const changeSequence = useRef(0); const editorGeneration = useRef(0); const sessionRef = useRef(sessionId); const snapshotSequence = useRef(0); const pendingSnapshot = useRef<null | { id: string; resolve: (value: { document: any; generation: number }) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>(null); const saveLock = useRef(new SingleSaveGate());
   const draftValues = useRef({ title, document, tags, pinned }); draftValues.current = { title, document, tags, pinned };
   sessionRef.current = sessionId;
@@ -321,7 +354,6 @@ function EditorScreen({ route, navigation }: any) {
   useEffect(() => { editorGeneration.current = 0; setEditorReady(false); if (pendingSnapshot.current) { clearTimeout(pendingSnapshot.current.timer); pendingSnapshot.current.reject(new Error('The WebView instance changed before returning the snapshot.')); pendingSnapshot.current = null; } }, [sessionId]);
   useEffect(() => navigation.setOptions({ title: note?.title || 'Note', headerBackTitle: 'Notes' }), [navigation, note?.title]);
   const recorder = useAudioRecorder({ ...RecordingPresets.HIGH_QUALITY, directory: 'document' });
-  const recorderState = useAudioRecorderState(recorder);
   useEffect(() => { if (dirty && editable && !recoveryHeld) scheduleDraft(); }, [dirty, editable, recoveryHeld, title, document, tags, pinned, note]);
   useEffect(() => { const subscription = AppState.addEventListener('change', state => { if (state !== 'active' && dirtyRef.current && editable && !recoveryHeld) void flushDraft().catch(error => setStatus(`Background recovery flush is best effort and failed: ${String(error)}`)); }); return () => subscription.remove(); }, [editable, recoveryHeld, note]);
   function handleEditorMessage(event: any) {
@@ -382,16 +414,16 @@ function EditorScreen({ route, navigation }: any) {
     } finally { saveLock.current.finish(); setSaving(false); }
   }
   function back(action: any) {
-    if (!gateRef.current.canNavigate()) { setStatus('Stop and save the recording before leaving this note.'); return; }
+    if (!gateRef.current.canNavigate() || recordingPending) { setStatus('Stop and save the recording before leaving this note.'); return; }
     if (saveLock.current.active) { setStatus('Save is in progress. Wait for its result before leaving this note.'); return; }
     if (!dirtyRef.current) { navigation.dispatch(action); return; }
     Alert.alert('Unsaved changes', 'Save this draft before leaving?', [
       { text: 'Keep editing', style: 'cancel' }, { text: 'Discard', style: 'destructive', onPress: () => { void (async () => { if (!note || !draftWriter.current) return; try { await discardDraftSafely({ cancelDebounce: () => { if (draftTimer.current) clearTimeout(draftTimer.current); draftTimer.current = null; latestRef.current = null; }, writer: draftWriter.current, noteId: note.id, expectedRevision: note.revision, deleteJournal: discardRecoveryDraft }); navigation.dispatch(action); } catch (error) { setStatus(`Could not confirm discard; you are still in this note. ${String(error)}`); } })(); } }, { text: 'Save', onPress: () => { void (async () => { if (await save()) navigation.dispatch(action); })(); } },
     ]);
   }
-  usePreventRemove(!gateRef.current.canNavigate() || dirty || saving, ({ data }) => { if (!gateRef.current.canNavigate()) { setStatus('Stop and save the recording before leaving this note.'); return; } back(data.action); });
+  usePreventRemove(!gateRef.current.canNavigate() || recordingPending || dirty || saving, ({ data }) => { if (!gateRef.current.canNavigate() || recordingPending) { setStatus('Stop and save the recording before leaving this note.'); return; } back(data.action); });
   async function startRecording() {
-    const gate = gateRef.current; if (!gate.beginStart()) return;
+    const gate = gateRef.current; const currentNote = note; if (!currentNote || !gate.beginStart()) return;
     const release = acquireNativeRecordingSession(`editor:${route.params.id}`);
     if (!release) { gate.finish(); setStatus('Another recording session is already active. Stop and save it first.'); return; }
     recordingSessionRelease.current = release; setRecordingPhase(gate.phase);
@@ -402,8 +434,21 @@ function EditorScreen({ route, navigation }: any) {
       await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true, allowsBackgroundRecording: false });
       await recorder.prepareToRecordAsync();
       if (gate.backgroundRequested) { await recorder.stop(); gate.finish(); setRecordingPhase(gate.phase); setStatus('Recording start was cancelled when the app left the foreground.'); recordingSessionRelease.current?.(); recordingSessionRelease.current = null; return; }
+      const createdAt = timeNow(), recording = { id: `recording-${makeId()}`, note_id: currentNote.id, title: `Recording ${new Date(createdAt).toLocaleString()}`, file_uri: recorder.uri ?? '', status: 'recording', created_at: createdAt };
+      const metadata = recordingArchiveMetadata({ ...recording, status: 'interrupted' });
+      await beginAudioAnchorSession(currentNote.id, null, recording, metadata); editorAudioSession.current = { recording, metadata };
       recorder.record(); gate.move('starting', 'recording'); setRecordingPhase(gate.phase); setStatus('Recording locally…');
-    } catch (error) { gate.finish(); setRecordingPhase(gate.phase); recordingSessionRelease.current?.(); recordingSessionRelease.current = null; setStatus(`Recording could not start: ${String(error)}`); }
+    } catch (error) { const session = editorAudioSession.current; if (session) { await removeAudioAnchorSession(session.recording.id).catch(() => {}); editorAudioSession.current = null; } gate.finish(); setRecordingPhase(gate.phase); recordingSessionRelease.current?.(); recordingSessionRelease.current = null; setStatus(`Recording could not start: ${String(error)}`); }
+  }
+  async function addEditorBookmark() {
+    const session = editorAudioSession.current; if (!session) return;
+    try { const offsetMs = Math.max(0, Math.round(recorder.currentTime * 1000)); const set = await addRecordingSessionAnchor(session.recording.id, createAudioAnchor(session.recording.id, offsetMs, '', { id: `bookmark-${makeId()}`, createdAt: timeNow() } as any)); session.metadata = { ...session.metadata, audioAnchors: set }; editorAudioSession.current = session; setStatus(`Bookmark saved at ${formatAudioTimestamp(offsetMs)}.`); }
+    catch (error) { setStatus(`Could not save bookmark. The recording journal remains safe. ${String(error)}`); }
+  }
+  async function toggleEditorPause() {
+    const gate = gateRef.current;
+    try { if (gate.phase === 'recording' && gate.pause()) { await recorder.pause(); setRecordingPhase(gate.phase); setStatus('Recording paused.'); } else if (gate.phase === 'paused' && gate.resume()) { recorder.record(); setRecordingPhase(gate.phase); setStatus('Recording resumed.'); } }
+    catch (error) { setStatus(`Could not change recording state. ${String(error)}`); }
   }
   async function finishRecording(interrupted = false) {
     const gate = gateRef.current; if (!note) return;
@@ -412,18 +457,28 @@ function EditorScreen({ route, navigation }: any) {
     catch (error) { setStatus(error instanceof Error ? error.message : 'Wait for backup to finish before stopping the recording.'); return; }
     if (!gate.beginStop()) { releaseFinalization(); return; } setRecordingPhase(gate.phase);
     try {
+      const durationMs = Math.max(0, Math.round(recorder.currentTime * 1000));
       await recorder.stop();
       gate.move('stopping', 'finalizing'); setRecordingPhase(gate.phase);
       const uri = recorder.uri;
       if (!uri) throw new Error('Recorder did not provide a finalized audio file.');
       const file = new File(uri);
       if (!file.exists || file.size <= 0) throw new Error('Finalized recording file is missing or empty; it was not marked complete.');
-      const id = makeId(); const created = timeNow();
-      await saveRecording({ id, note_id: note.id, title: interrupted ? `Interrupted recording ${new Date(created).toLocaleString()}` : `Recording ${new Date(created).toLocaleString()}`, file_uri: uri, status: interrupted ? 'interrupted' : 'complete', created_at: created });
+      const session = editorAudioSession.current; if (!session) throw new Error('The provisional bookmark journal is missing; finalized audio was kept.');
+      const recording = { ...session.recording, file_uri: uri, status: interrupted ? 'interrupted' : 'complete', title: interrupted ? `Interrupted recording ${new Date(session.recording.created_at).toLocaleString()}` : session.recording.title };
+      const metadata = { ...session.metadata, durationMs, durationKnown: false, updatedAt: timeNow() };
+      session.recording = recording; session.metadata = metadata; editorAudioSession.current = session;
+      await commitAudioAnchorSession(recording.id, null, recording, metadata);
+      editorAudioSession.current = null; setRecordingPending(false);
       setRecordings(await listRecordings(note.id));
       setStatus(interrupted ? 'Recording stopped when the app left the foreground and was kept as interrupted for recovery.' : 'Recording finalized, verified and saved locally.');
-    } catch (error) { setStatus(`Audio save state is unknown. Any recorder file was left in place for recovery: ${String(error)}`); }
+    } catch (error) { const retryable = ['complete', 'interrupted'].includes(editorAudioSession.current?.recording.status); setRecordingPending(retryable); setStatus(retryable ? `Finalized audio and its bookmark journal are preserved for retry. ${String(error)}` : `Recording did not finalize. Its provisional bookmark journal remains available for recovery. ${String(error)}`); }
     finally { gate.finish(); setRecordingPhase(gate.phase); releaseFinalization(); recordingSessionRelease.current?.(); recordingSessionRelease.current = null; }
+  }
+  async function retryEditorRecordingSave() {
+    const session = editorAudioSession.current; if (!session || !note) return;
+    try { await commitAudioAnchorSession(session.recording.id, null, session.recording, session.metadata); editorAudioSession.current = null; setRecordingPending(false); setRecordings(await listRecordings(note.id)); setStatus('Recording and bookmarks saved on this device.'); }
+    catch (error) { setStatus(`Audio and bookmarks remain in the recovery journal. Retry when ready. ${String(error)}`); }
   }
   useEffect(() => {
     const sub = AppState.addEventListener('change', state => { if (state === 'active') return; const gate = gateRef.current; if (gate.requestBackgroundStop()) void finishRecording(true); });
@@ -434,6 +489,9 @@ function EditorScreen({ route, navigation }: any) {
     Alert.alert('Delete recording?', `“${item.title}” will be removed from this device.`, [{ text: 'Cancel', style: 'cancel' }, { text: 'Delete', style: 'destructive', onPress: () => { void (async () => { try { const uri = await removeRecording(item.id); setRecordings(await listRecordings(item.note_id)); await finishFileCleanup(uri); } catch (error) { setStatus(`Recording metadata may be removed; queued file cleanup will retry: ${String(error)}`); } })(); } }]);
   }
   function rename(item: Recording) { Alert.prompt('Rename recording', 'Enter a new title.', value => { if (value?.trim()) void renameRecording(item.id, value.trim()).then(() => listRecordings(item.note_id)).then(setRecordings).catch(error => setStatus(`Rename failed: ${String(error)}`)); }, 'plain-text', item.title); }
+  function renameAnchor(item: Recording, anchorId: string, currentLabel: string) { Alert.prompt('Rename bookmark', 'Leave blank to show “Bookmark”.', value => { if (value !== undefined) void renameRecordingAnchor(item.id, anchorId, value).then(() => listRecordings(item.note_id)).then(setRecordings).catch(error => setStatus(`Bookmark rename failed: ${String(error)}`)); }, 'plain-text', currentLabel); }
+  function deleteAnchor(item: Recording, anchorId: string) { void deleteRecordingAnchor(item.id, anchorId).then(() => listRecordings(item.note_id)).then(setRecordings).catch(error => setStatus(`Bookmark delete failed: ${String(error)}`)); }
+  async function addPlaybackBookmark(recordingId: string, offsetMs: number) { const item = recordings.find(recording => recording.id === recordingId); if (!item) return; try { await addRecordingAnchor(recordingId, createAudioAnchor(recordingId, Math.max(0, Math.round(offsetMs)), '', { id: `bookmark-${makeId()}`, createdAt: timeNow() } as any)); setRecordings(await listRecordings(item.note_id)); setStatus(`Playback bookmark saved at ${formatAudioTimestamp(offsetMs)}.`); } catch (error) { setStatus(`Could not save playback bookmark. ${String(error)}`); } }
   async function shareAudio(item: Recording) {
     if (!item.file_uri) { setStatus('This recording’s metadata was preserved, but it contains no audio bytes to export.'); return; }
     const file = new File(item.file_uri);
@@ -459,9 +517,10 @@ function EditorScreen({ route, navigation }: any) {
       {note.lifecycle === 'active' && editable && !recoveryHeld ? <View style={styles.audioPanel}>
         <View style={styles.segmentRow}><Text style={styles.sectionLabel}>LOCAL AUDIO</Text><Text style={styles.subtle}>Included in Full Archive V2</Text></View>
         <Text style={styles.subtle}>On-device recordings only · recording stops when the app leaves the foreground.</Text>
-        {recordingPhase === 'idle' ? <Pressable style={styles.recordButton} onPress={() => void startRecording()}><Text style={styles.recordButtonText}>●  Record</Text></Pressable> : recordingPhase === 'recording' ? <Pressable style={styles.stopButton} onPress={() => void finishRecording(false)}><Text style={styles.stopText}>■  Stop & save · {Math.round(recorderState.durationMillis / 1000)}s</Text></Pressable> : <Text style={styles.subtle}>Recording {recordingPhase}…</Text>}
-        {recordings.map(item => <View key={item.id} style={styles.audioWithShare}><AudioItem item={item} onPlay={recording => { const f = new File(recording.file_uri); if (!f.exists || f.size <= 0) { Alert.alert('File unavailable', 'This recording’s file is missing or empty.'); return; } setPlayingUri(recording.file_uri); }} onRename={rename} onDelete={deleteRecording} />{item.file_uri ? <Pressable onPress={() => void shareAudio(item)}><Text style={styles.action}>Export</Text></Pressable> : null}</View>)}
-        {playingUri ? <AudioPlayback uri={playingUri} onClose={() => setPlayingUri('')} /> : null}
+        {recordingPhase === 'idle' ? <Pressable style={styles.recordButton} onPress={() => void startRecording()}><Text style={styles.recordButtonText}>●  Record</Text></Pressable> : ['recording','paused'].includes(recordingPhase) ? <View style={styles.segmentRow}><Pressable style={styles.stopButton} onPress={() => void finishRecording(false)}><Text style={styles.stopText}>■ Stop · {Math.round(recorder.currentTime)}s</Text></Pressable><Pressable style={styles.smallButton} onPress={() => void toggleEditorPause()}><Text style={styles.smallButtonText}>{recordingPhase === 'paused' ? 'Resume' : 'Pause'}</Text></Pressable><Pressable style={styles.smallButton} onPress={() => void addEditorBookmark()}><Text style={styles.smallButtonText}>⚑ Bookmark</Text></Pressable></View> : recordingPending ? <Pressable style={styles.recordButton} onPress={() => void retryEditorRecordingSave()}><Text style={styles.recordButtonText}>Retry saving recording</Text></Pressable> : <Text style={styles.subtle}>Recording {recordingPhase}…</Text>}
+        {recordingPending ? <Text accessibilityRole="alert" style={styles.status}>Final audio is preserved with its bookmark journal. Retry save before leaving this note.</Text> : null}
+        {recordings.map(item => <View key={item.id} style={styles.audioWithShare}><AudioItem item={item} onPlay={recording => { const f = new File(recording.file_uri); if (!f.exists || f.size <= 0) { Alert.alert('File unavailable', 'This recording’s file is missing or empty.'); return; } setPlayingRecordingId(recording.id); setPlaybackOffsetMs(null); setPlayingUri(recording.file_uri); }} onSeek={anchor => { setPlayingRecordingId(item.id); setPlaybackOffsetMs(anchor.offsetMs); setPlayingUri(item.file_uri); }} onRename={rename} onDelete={deleteRecording} onRenameAnchor={(anchorId, currentLabel) => renameAnchor(item, anchorId, currentLabel)} onDeleteAnchor={anchorId => deleteAnchor(item, anchorId)} />{item.file_uri ? <Pressable onPress={() => void shareAudio(item)}><Text style={styles.action}>Export</Text></Pressable> : null}</View>)}
+        {playingUri ? <AudioPlayback uri={playingUri} seekOffsetMs={playbackOffsetMs} onSeekConsumed={() => setPlaybackOffsetMs(null)} onBookmark={offsetMs => void addPlaybackBookmark(playingRecordingId, offsetMs)} onClose={() => { setPlayingUri(''); setPlayingRecordingId(''); setPlaybackOffsetMs(null); }} /> : null}
       </View> : null}
       {status ? <Text accessibilityRole="alert" style={styles.status}>{status}</Text> : null}
       <Text style={styles.revision}>Revision {note.revision} · {new Date(note.updatedAt).toLocaleString()}</Text>

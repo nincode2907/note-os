@@ -3,8 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createAudioRepository } from '../lib/local-notes.js';
 import { acquireRecordingLock } from '../lib/recording-lock.mjs';
+import { ActiveMediaClock, createAudioAnchor, formatAudioTimestamp } from '../lib/audio-anchors.mjs';
 
-type Recording = { id: string; noteId: string; title: string; mimeType: string; status: 'recording' | 'paused' | 'complete' | 'interrupted' | 'failed'; createdAt: number; durationMs: number; chunkCount: number };
+type AudioAnchor = { id: string; recordingId: string; offsetMs: number; label: string; createdAt: number };
+type Recording = { id: string; noteId: string; title: string; mimeType: string; status: 'recording' | 'paused' | 'complete' | 'interrupted' | 'failed'; createdAt: number; durationMs: number; chunkCount: number; audioAnchors?: { version: 1; items: AudioAnchor[] } };
 const repo = createAudioRepository();
 
 function formatDuration(durationMs: number) {
@@ -30,9 +32,10 @@ export function AudioRecorder({ noteId, disabled = false, openSignal = 0, onActi
   const [recordings, setRecordings] = useState<Recording[]>([]), [active, setActive] = useState<Recording | null>(null);
   const [statusText, setStatusText] = useState('Ready to record on this device.'), [error, setError] = useState(''), [starting, setStarting] = useState(false), [audioReady, setAudioReady] = useState(false), [pauseSupported, setPauseSupported] = useState(true);
   const [elapsed, setElapsed] = useState(0), [editId, setEditId] = useState(''), [editTitle, setEditTitle] = useState(''), [expanded, setExpanded] = useState(true);
-  const [players, setPlayers] = useState<Record<string, string>>({});
+  const [players, setPlayers] = useState<Record<string, string>>({}), [anchorEditId, setAnchorEditId] = useState(''), [anchorEditLabel, setAnchorEditLabel] = useState('');
+  const playerElementsRef = useRef<Record<string, HTMLAudioElement | null>>({}), pendingSeekRef = useRef<Record<string, { offsetMs: number; play: boolean }>>({});
   const recorderRef = useRef<MediaRecorder | null>(null), streamRef = useRef<MediaStream | null>(null), sessionRef = useRef<Recording | null>(null);
-  const lockReleaseRef = useRef<(() => Promise<void>) | null>(null), writerRef = useRef<Promise<unknown>>(Promise.resolve()), sequenceRef = useRef(0), elapsedBeforeRef = useRef(0), segmentStartedRef = useRef(0);
+  const lockReleaseRef = useRef<(() => Promise<void>) | null>(null), writerRef = useRef<Promise<unknown>>(Promise.resolve()), sequenceRef = useRef(0), mediaClockRef = useRef(new ActiveMediaClock());
   const stopReasonRef = useRef<'complete' | 'interrupted' | 'failed'>('complete'), writeFailedRef = useRef(false), startingRef = useRef(false), mountedRef = useRef(true), objectUrlsRef = useRef(new Set<string>());
   const refresh = useCallback(async () => { try { const next = await repo.list(noteId); if (mountedRef.current) setRecordings(next); } catch (cause) { if (mountedRef.current) setError(cause instanceof Error ? cause.message : 'Could not read local recordings.'); } }, [noteId]);
 
@@ -66,7 +69,7 @@ export function AudioRecorder({ noteId, disabled = false, openSignal = 0, onActi
       onActivityChange?.(false);
       if (recorder && recorder.state !== 'inactive') {
         stopReasonRef.current = 'interrupted';
-        if (recorder.state === 'recording') elapsedBeforeRef.current += Math.max(0, Date.now() - segmentStartedRef.current);
+        mediaClockRef.current.pause();
         try { recorder.stop(); } catch { /* The browser may already have stopped it. */ }
       } else {
         for (const track of streamRef.current?.getTracks() ?? []) track.stop();
@@ -79,7 +82,7 @@ export function AudioRecorder({ noteId, disabled = false, openSignal = 0, onActi
 
   useEffect(() => {
     if (!active || active.status !== 'recording') return;
-    const timer = window.setInterval(() => setElapsed(elapsedBeforeRef.current + Math.max(0, Date.now() - segmentStartedRef.current)), 250);
+    const timer = window.setInterval(() => setElapsed(mediaClockRef.current.read()), 100);
     return () => window.clearInterval(timer);
   }, [active?.id, active?.status]);
 
@@ -120,25 +123,25 @@ export function AudioRecorder({ noteId, disabled = false, openSignal = 0, onActi
       const recorder = new MediaRecorder(stream, { mimeType });
       setPauseSupported(typeof recorder.pause === 'function' && typeof recorder.resume === 'function');
       streamRef.current = stream; recorderRef.current = recorder; sessionRef.current = createdSession;
-      sequenceRef.current = 0; elapsedBeforeRef.current = 0; segmentStartedRef.current = Date.now(); writeFailedRef.current = false; stopReasonRef.current = 'complete'; writerRef.current = Promise.resolve();
+      sequenceRef.current = 0; mediaClockRef.current.start(); writeFailedRef.current = false; stopReasonRef.current = 'complete'; writerRef.current = Promise.resolve();
       setElapsed(0); setActive(createdSession); onActivityChange?.(true); setStatusText('Recording — audio chunks are being saved on this device.'); void refresh();
       recorder.ondataavailable = (event) => {
         if (!event.data.size || writeFailedRef.current) return;
-        const sequence = sequenceRef.current++, duration = elapsedBeforeRef.current + (recorder.state === 'paused' ? 0 : Math.max(0, Date.now() - segmentStartedRef.current));
+        const sequence = sequenceRef.current++, duration = mediaClockRef.current.read();
         writerRef.current = writerRef.current.then(() => repo.appendChunk(createdSession.id, sequence, event.data, duration)).catch(async (cause) => {
           writeFailedRef.current = true; stopReasonRef.current = 'failed';
           if (mountedRef.current) { setError(`Audio could not be saved locally: ${cause instanceof Error ? cause.message : 'storage error'}. The saved chunks remain available as a partial recording.`); setStatusText('Storage write failed'); }
-          try { if (recorder.state !== 'inactive') { if (recorder.state === 'recording') elapsedBeforeRef.current += Math.max(0, Date.now() - segmentStartedRef.current); recorder.stop(); } } catch { /* Stop event cleanup handles the stream. */ }
+          try { if (recorder.state !== 'inactive') { mediaClockRef.current.pause(); recorder.stop(); } } catch { /* Stop event cleanup handles the stream. */ }
         });
       };
-      recorder.onerror = () => { stopReasonRef.current = 'failed'; if (recorder.state === 'recording') elapsedBeforeRef.current += Math.max(0, Date.now() - segmentStartedRef.current); if (mountedRef.current) { setError('The browser recorder failed. Any stored chunks are kept as a partial recording.'); setStatusText('Recorder failed'); } try { if (recorder.state !== 'inactive') recorder.stop(); } catch { /* Stop event cleanup handles the stream. */ } };
+      recorder.onerror = () => { stopReasonRef.current = 'failed'; mediaClockRef.current.pause(); if (mountedRef.current) { setError('The browser recorder failed. Any stored chunks are kept as a partial recording.'); setStatusText('Recorder failed'); } try { if (recorder.state !== 'inactive') recorder.stop(); } catch { /* Stop event cleanup handles the stream. */ } };
       recorder.onstop = () => {
         void (async () => {
           await writerRef.current;
           const reason = writeFailedRef.current ? 'failed' : stopReasonRef.current;
           try {
             const finalStatus = reason === 'complete' && sequenceRef.current === 0 ? 'failed' : reason;
-            const saved = await repo.setStatus(createdSession.id, finalStatus, { durationMs: elapsedBeforeRef.current });
+            const saved = await repo.setStatus(createdSession.id, finalStatus, { durationMs: mediaClockRef.current.stop() });
             if (mountedRef.current) { setActive(null); onActivityChange?.(false); setStatusText(finalStatus === 'complete' ? 'Recording saved on this device.' : reason === 'complete' ? 'No audio was captured. The empty recording was not marked saved.' : 'Recording stopped unexpectedly. Any saved audio is available as a partial recording.'); }
           } catch (cause) { if (mountedRef.current) setError(cause instanceof Error ? cause.message : 'Could not finalize recording.'); }
           finally { await lockReleaseRef.current?.(); lockReleaseRef.current = null; }
@@ -150,7 +153,7 @@ export function AudioRecorder({ noteId, disabled = false, openSignal = 0, onActi
         })();
       };
       for (const track of stream.getAudioTracks()) track.addEventListener('ended', () => {
-        if (recorder.state !== 'inactive') { stopReasonRef.current = 'interrupted'; if (recorder.state === 'recording') elapsedBeforeRef.current += Math.max(0, Date.now() - segmentStartedRef.current); try { recorder.stop(); } catch { /* Already stopped. */ } }
+        if (recorder.state !== 'inactive') { stopReasonRef.current = 'interrupted'; mediaClockRef.current.pause(); try { recorder.stop(); } catch { /* Already stopped. */ } }
       }, { once: true });
       recorder.start(1000);
       startingRef.current = false; setStarting(false);
@@ -170,7 +173,7 @@ export function AudioRecorder({ noteId, disabled = false, openSignal = 0, onActi
   function stopRecording() {
     const recorder = recorderRef.current;
     if (!recorder || recorder.state === 'inactive') return;
-    if (recorder.state === 'recording') elapsedBeforeRef.current += Math.max(0, Date.now() - segmentStartedRef.current);
+    mediaClockRef.current.stop();
     stopReasonRef.current = 'complete'; setStatusText('Finishing and saving audio chunks…');
     try { recorder.stop(); } catch (cause) { stopReasonRef.current = 'failed'; setError(cause instanceof Error ? cause.message : 'Could not stop recording.'); }
   }
@@ -178,22 +181,61 @@ export function AudioRecorder({ noteId, disabled = false, openSignal = 0, onActi
     const recorder = recorderRef.current, session = sessionRef.current;
     if (!recorder || !session) return;
     if (recorder.state === 'recording') {
-      elapsedBeforeRef.current += Math.max(0, Date.now() - segmentStartedRef.current);
-      try { recorder.pause(); const saved = await repo.setStatus(session.id, 'paused', { durationMs: elapsedBeforeRef.current }); setActive(saved); setElapsed(elapsedBeforeRef.current); setStatusText('Paused — saved chunks are retained locally.'); }
+      try { recorder.pause(); const durationMs = mediaClockRef.current.pause(); const saved = await repo.setStatus(session.id, 'paused', { durationMs }); setActive(saved); setElapsed(durationMs); setStatusText('Paused — saved chunks are retained locally.'); }
       catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not pause recording.'); }
     } else if (recorder.state === 'paused') {
-      try { recorder.resume(); segmentStartedRef.current = Date.now(); const saved = await repo.setStatus(session.id, 'recording'); setActive(saved); setStatusText('Recording — audio chunks are being saved on this device.'); }
+      try { recorder.resume(); mediaClockRef.current.resume(); const saved = await repo.setStatus(session.id, 'recording'); setActive(saved); setStatusText('Recording — audio chunks are being saved on this device.'); }
       catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not resume recording.'); }
     }
   }
-  async function playRecording(recording: Recording) {
+  async function saveAnchor(recordingId: string, offsetMs: number) {
     try {
+      const anchor = createAudioAnchor(recordingId, Math.round(offsetMs));
+      const updated = await repo.addAnchor(recordingId, anchor);
+      if (sessionRef.current?.id === recordingId) { sessionRef.current = updated; setActive(updated); }
+      await refresh(); setStatusText(`Bookmark saved at ${formatDuration(anchor.offsetMs)}.`);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not save this bookmark.'); }
+  }
+  async function addRecordingBookmark() {
+    const activeSession = sessionRef.current;
+    if (activeSession) await saveAnchor(activeSession.id, mediaClockRef.current.read());
+  }
+  function playerLoaded(recordingId: string, audio: HTMLAudioElement) {
+    const pending = pendingSeekRef.current[recordingId];
+    if (!pending || audio.readyState < 1) return;
+    audio.currentTime = Number.isFinite(audio.duration) ? Math.min(pending.offsetMs / 1000, Math.max(0, audio.duration)) : pending.offsetMs / 1000;
+    delete pendingSeekRef.current[recordingId];
+    if (pending.play) void audio.play().catch(() => setError('The browser could not start playback. Use the audio controls and try again.'));
+  }
+  async function playRecording(recording: Recording, offsetMs = 0, play = false) {
+    try {
+      const existing = playerElementsRef.current[recording.id];
+      if (players[recording.id] && existing?.readyState && existing.readyState >= 1 && Number.isFinite(existing.duration)) {
+        existing.currentTime = Math.min(offsetMs / 1000, Math.max(0, existing.duration));
+        if (play) await existing.play();
+        return;
+      }
+      pendingSeekRef.current[recording.id] = { offsetMs, play };
+      if (players[recording.id]) return;
       const rows = await repo.chunks(recording.id);
       if (!rows.length) throw new Error('No saved audio chunks are available.');
       const blob = new Blob(rows.map((row: any) => row.blob), { type: recording.mimeType });
       const url = URL.createObjectURL(blob); objectUrlsRef.current.add(url);
       setPlayers((current) => { const old = current[recording.id]; if (old) { URL.revokeObjectURL(old); objectUrlsRef.current.delete(old); } return { ...current, [recording.id]: url }; });
-    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not load audio for playback.'); }
+    } catch (cause) { if (!(cause instanceof DOMException && cause.name === 'AbortError')) setError(cause instanceof Error ? cause.message : 'Could not load audio for playback.'); }
+  }
+  async function addPlaybackBookmark(recording: Recording) {
+    const audio = playerElementsRef.current[recording.id];
+    if (!audio || !Number.isFinite(audio.currentTime)) { setError('Wait for audio playback to load before bookmarking its position.'); return; }
+    await saveAnchor(recording.id, Math.round(audio.currentTime * 1000));
+  }
+  async function renameAudioAnchor(recordingId: string, anchorId: string) {
+    try { await repo.renameAnchor(recordingId, anchorId, anchorEditLabel); setAnchorEditId(''); setAnchorEditLabel(''); await refresh(); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not rename bookmark.'); }
+  }
+  async function removeAudioAnchor(recordingId: string, anchorId: string) {
+    try { await repo.removeAnchor(recordingId, anchorId); await refresh(); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not delete bookmark.'); }
   }
   async function downloadRecording(recording: Recording) {
     try {
@@ -236,7 +278,7 @@ export function AudioRecorder({ noteId, disabled = false, openSignal = 0, onActi
     <div id="audio-panel-content" className="audio-panel-content" hidden={!expanded && !active}>
     <p className="audio-copy">Private local audio. Full Archive V2 includes recordings; Legacy JSON V1 does not. Audio is never uploaded.</p>
     <div className="audio-controls">
-      {!active ? <button className="btn btn-primary" disabled={disabled || starting || !audioReady} onClick={() => void startRecording()}>{starting ? 'Starting…' : '● Record audio'}</button> : <><span className="recording-indicator" aria-live="polite">● {active.status === 'paused' ? 'Paused' : 'Recording'} · {formatDuration(elapsed)}</span>{pauseSupported && <button className="btn" onClick={() => void pauseRecording()}>{active.status === 'paused' ? 'Resume' : 'Pause'}</button>}<button className="btn btn-danger" onClick={stopRecording}>Stop and save</button></>}
+      {!active ? <button className="btn btn-primary" disabled={disabled || starting || !audioReady} onClick={() => void startRecording()}>{starting ? 'Starting…' : '● Record audio'}</button> : <><span className="recording-indicator" aria-live="polite">● {active.status === 'paused' ? 'Paused' : 'Recording'} · {formatDuration(elapsed)}</span><button className="tool-button" onClick={() => void addRecordingBookmark()}>⚑ Bookmark</button>{pauseSupported && <button className="btn" onClick={() => void pauseRecording()}>{active.status === 'paused' ? 'Resume' : 'Pause'}</button>}<button className="btn btn-danger" onClick={stopRecording}>Stop and save</button></>}
       <span className="save-state" aria-live="polite">{statusText}</span>
     </div>
     {error && <div className="notice error" role="alert">{error}</div>}
@@ -244,7 +286,8 @@ export function AudioRecorder({ noteId, disabled = false, openSignal = 0, onActi
     {recordings.length === 0 ? <p className="audio-empty">No recordings for this note yet.</p> : <ul className="recording-list">{recordings.map((recording) => <li className="recording-item" key={recording.id}>
       <div className="recording-main"><div className="recording-title-row">{editId === recording.id ? <><label className="screen-reader" htmlFor={`recording-title-${recording.id}`}>Recording title</label><input id={`recording-title-${recording.id}`} className="searchbox recording-title-input" maxLength={120} value={editTitle} onChange={(event) => setEditTitle(event.target.value)} /><button className="tool-button" disabled={!editTitle.trim()} onClick={() => void saveRename(recording)}>Save name</button><button className="tool-button" onClick={() => setEditId('')}>Cancel</button></> : <><strong>{recording.title}</strong><span className={`recording-state recording-state-${recording.status}`}>{recordingStatus(recording.status)}</span></>}</div>
         <div className="recording-meta"><span>{formatDuration(recording.durationMs)}</span><span>{new Date(recording.createdAt).toLocaleString()}</span><span>{recording.mimeType}</span></div>
-        {players[recording.id] && <audio className="recording-player" controls preload="metadata" src={players[recording.id]} aria-label={`Play ${recording.title}`} />}
+        {players[recording.id] && <><audio ref={audio => { playerElementsRef.current[recording.id] = audio; }} onLoadedMetadata={event => playerLoaded(recording.id, event.currentTarget)} className="recording-player" controls preload="metadata" src={players[recording.id]} aria-label={`Play ${recording.title}`} /><button className="tool-button" onClick={() => void addPlaybackBookmark(recording)}>⚑ Bookmark this moment</button></>}
+        {(recording.audioAnchors?.items ?? []).length > 0 && <ol className="audio-anchor-list" aria-label={`Bookmarks for ${recording.title}`}>{recording.audioAnchors!.items.map(anchor => <li key={anchor.id} className="audio-anchor-row">{anchorEditId === anchor.id ? <><input aria-label="Bookmark label" maxLength={120} value={anchorEditLabel} onChange={event => setAnchorEditLabel(event.target.value)} /><button className="tool-button" onClick={() => void renameAudioAnchor(recording.id, anchor.id)}>Save label</button><button className="tool-button" onClick={() => setAnchorEditId('')}>Cancel</button></> : <><button className="audio-anchor-seek" onClick={() => void playRecording(recording, anchor.offsetMs, true)}><span>{formatDuration(anchor.offsetMs)}</span><span>{anchor.label || 'Bookmark'}</span></button><button className="tool-button" aria-label={`Rename bookmark at ${formatDuration(anchor.offsetMs)}`} onClick={() => { setAnchorEditId(anchor.id); setAnchorEditLabel(anchor.label); }}>Rename</button><button className="tool-button" aria-label={`Delete bookmark at ${formatDuration(anchor.offsetMs)}`} onClick={() => void removeAudioAnchor(recording.id, anchor.id)}>Delete</button></>}</li>)}</ol>}
       </div>
       <div className="recording-actions">{['recording', 'paused'].includes(recording.status) && <button className="tool-button" onClick={() => void recoverRecording(recording)}>Recover partial</button>}{recording.chunkCount > 0 && <><button className="tool-button" onClick={() => void playRecording(recording)}>{players[recording.id] ? 'Reload audio' : 'Play'}</button><button className="tool-button" onClick={() => void downloadRecording(recording)}>Export</button></>}<button className="tool-button" onClick={() => { setEditId(recording.id); setEditTitle(recording.title); }}>Rename</button><button className="tool-button" onClick={() => void removeRecording(recording)}>Delete</button></div>
     </li>)}</ul>}

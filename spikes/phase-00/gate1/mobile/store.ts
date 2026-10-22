@@ -4,12 +4,16 @@ import { normalizeTagList } from '../web/app/lib/note-organization.mjs';
 import { ArchiveOperationGate, canTransitionLifecycle, commitThenClearDraft } from './mobile-safety.mjs';
 import { commitArchiveBatch, migrateArchiveSchema } from './archive-store.mjs';
 import { commitQuickCaptureNote, commitQuickVoicePending, deleteQuickCaptureDraft, migrateQuickCaptureSchema, upsertQuickCaptureDraft } from './quick-capture-store.mjs';
+import { addSessionAudioAnchor, commitAudioAnchorSession as commitAudioAnchorSessionTxn, deleteSessionAudioAnchor, migrateAudioAnchorSchema, removeAudioAnchorSession as removeAudioAnchorSessionTxn, renameSessionAudioAnchor, saveAudioAnchorSession } from './audio-anchor-store.mjs';
+import { addAudioAnchor, deleteAudioAnchor, emptyAudioAnchorSet, renameAudioAnchor, validateAudioAnchorSet } from '../web/app/lib/audio-anchors.mjs';
 
 export type Lifecycle = 'active' | 'archived' | 'trashed';
 export type Note = { id: string; title: string; document: any; schemaVersion: number; createdAt: number; updatedAt: number; lifecycle: Lifecycle; revision: number; pinned: boolean; tags: string[]; [key: string]: any };
-export type Recording = { id: string; note_id: string; title: string; file_uri: string; status: 'complete' | 'interrupted'; created_at: number };
+export type AudioAnchor = { id: string; recordingId: string; offsetMs: number; label: string; createdAt: number };
+export type AudioAnchorSet = { version: 1; items: AudioAnchor[] };
+export type Recording = { id: string; note_id: string; title: string; file_uri: string; status: 'complete' | 'interrupted'; created_at: number; audioAnchors?: AudioAnchorSet };
 export type RecoveryDraft = { version: 1; baseRevision: number; title: string; document: any; tagsText: string; pinned: boolean };
-export type RecordingArchiveMetadata = { mimeType: string; ownerId: string; updatedAt: number; durationMs: number; durationKnown: boolean; sourcePlatform: 'ios' | 'web'; sourceRecording?: Record<string, unknown>; sourceChunkDescriptors?: unknown[]; mediaSha256?: string | null };
+export type RecordingArchiveMetadata = { mimeType: string; ownerId: string; updatedAt: number; durationMs: number; durationKnown: boolean; sourcePlatform: 'ios' | 'web'; audioAnchors?: AudioAnchorSet; sourceRecording?: Record<string, unknown>; sourceChunkDescriptors?: unknown[]; mediaSha256?: string | null };
 export class RevisionConflictError extends Error { constructor() { super('This note changed elsewhere. Reload it before saving.'); this.name = 'RevisionConflictError'; } }
 export class RecoveryConflictError extends Error { constructor() { super('A recovery draft belongs to a different note revision and was preserved.'); this.name = 'RecoveryConflictError'; } }
 
@@ -40,6 +44,7 @@ async function migrate(database: SQLite.SQLiteDatabase) {
   });
   await migrateArchiveSchema(database);
   await migrateQuickCaptureSchema(database);
+  await migrateAudioAnchorSchema(database);
 }
 function rawRecord(note: Note): string { return JSON.stringify(note); }
 function decode(row: { record_json: string }): Note {
@@ -53,8 +58,10 @@ async function getRaw(txn: SQLite.SQLiteDatabase, id: string) { return txn.getFi
 export async function listNotes(): Promise<Note[]> { const database = await db(); const rows = await database.getAllAsync<{record_json:string}>('SELECT record_json FROM notes'); return rows.map(decode); }
 export async function getNote(id: string): Promise<Note | null> { const database = await db(); const row = await database.getFirstAsync<{record_json:string}>('SELECT record_json FROM notes WHERE id = ?', id); return row ? decode(row) : null; }
 export async function exportNotes(): Promise<Note[]> { return listNotes(); }
-export async function listRecordings(noteId: string): Promise<Recording[]> { const database = await db(); return database.getAllAsync<Recording>('SELECT id,note_id,title,file_uri,status,created_at FROM recordings WHERE note_id = ? ORDER BY created_at DESC', noteId); }
-export async function listAllRecordings(): Promise<Recording[]> { const database = await db(); return database.getAllAsync<Recording>('SELECT id,note_id,title,file_uri,status,created_at FROM recordings ORDER BY id'); }
+function anchorsFromMetadata(metadataJson: string | null, recordingId: string, durationMs = 0): AudioAnchorSet { const metadata = metadataJson ? JSON.parse(metadataJson) : {}; return validateAudioAnchorSet(metadata.audioAnchors, recordingId, { durationMs: metadata.durationMs ?? durationMs, durationKnown: metadata.durationKnown === true && (metadata.durationMs ?? durationMs) > 0 } as any) as AudioAnchorSet; }
+function attachAnchors<T extends Recording & { metadata_json?: string | null }>(recording: T): Recording { const { metadata_json, ...value } = recording; return { ...value, audioAnchors: anchorsFromMetadata(metadata_json ?? null, recording.id) }; }
+export async function listRecordings(noteId: string): Promise<Recording[]> { const database = await db(); const rows = await database.getAllAsync<Recording & {metadata_json:string|null}>(`SELECT r.id,r.note_id,r.title,r.file_uri,r.status,r.created_at,m.metadata_json FROM recordings r LEFT JOIN recording_archive_metadata m ON m.recording_id=r.id WHERE r.note_id = ? ORDER BY r.created_at DESC`, noteId); return rows.map(attachAnchors); }
+export async function listAllRecordings(): Promise<Recording[]> { const database = await db(); const rows = await database.getAllAsync<Recording & {metadata_json:string|null}>(`SELECT r.id,r.note_id,r.title,r.file_uri,r.status,r.created_at,m.metadata_json FROM recordings r LEFT JOIN recording_archive_metadata m ON m.recording_id=r.id ORDER BY r.id`); return rows.map(attachAnchors); }
 
 export async function createNote(note: Note) { requireWriteableDocument(note); const database = await db(); await database.withExclusiveTransactionAsync(async txn => { await txn.runAsync('INSERT INTO notes(id,record_json,revision,lifecycle,updated_at) VALUES(?,?,?,?,?)', note.id, rawRecord(note), note.revision, note.lifecycle, note.updatedAt); }); }
 export async function createQuickCaptureNote(note: Note): Promise<{note:Note;created:boolean}> {
@@ -144,7 +151,7 @@ export async function importNotes(notes: Note[]) {
 function inferArchiveMetadata(recording: Recording): RecordingArchiveMetadata {
   const ext = recording.file_uri.split(/[?#]/u)[0].split('.').at(-1)?.toLowerCase();
   const mimeType = ({ webm: 'audio/webm', ogg: 'audio/ogg', m4a: 'audio/mp4', mp4: 'audio/mp4', wav: 'audio/wav', mp3: 'audio/mpeg', aac: 'audio/aac', flac: 'audio/flac' } as Record<string, string>)[ext ?? ''] ?? 'audio/mp4';
-  return { mimeType, ownerId: 'ios-local', updatedAt: recording.created_at, durationMs: 0, durationKnown: false, sourcePlatform: 'ios' };
+  return { mimeType, ownerId: 'ios-local', updatedAt: recording.created_at, durationMs: 0, durationKnown: false, sourcePlatform: 'ios', audioAnchors: emptyAudioAnchorSet() as AudioAnchorSet };
 }
 export function recordingArchiveMetadata(recording: Recording): RecordingArchiveMetadata { return inferArchiveMetadata(recording); }
 export async function saveRecording(recording: Recording, archiveMetadata: RecordingArchiveMetadata = inferArchiveMetadata(recording)) {
@@ -153,6 +160,41 @@ export async function saveRecording(recording: Recording, archiveMetadata: Recor
     await txn.runAsync('INSERT INTO recording_archive_metadata(recording_id,metadata_json) VALUES(?,?)', recording.id, JSON.stringify(archiveMetadata));
   });
 }
+export async function beginAudioAnchorSession(noteId: string | null, note: Note | null, recording: any, metadata: RecordingArchiveMetadata) {
+  const database = await db(); await database.withExclusiveTransactionAsync(async txn => { await saveAudioAnchorSession(txn, { noteId, note, recording, metadata }); });
+}
+export async function addRecordingSessionAnchor(recordingId: string, anchor: AudioAnchor) {
+  const database = await db(); let result!: AudioAnchorSet;
+  await database.withExclusiveTransactionAsync(async txn => { result = await addSessionAudioAnchor(txn, recordingId, anchor); }); return result;
+}
+export async function renameRecordingSessionAnchor(recordingId: string, anchorId: string, label: string) {
+  const database = await db(); let result!: AudioAnchorSet;
+  await database.withExclusiveTransactionAsync(async txn => { result = await renameSessionAudioAnchor(txn, recordingId, anchorId, label); }); return result;
+}
+export async function deleteRecordingSessionAnchor(recordingId: string, anchorId: string) {
+  const database = await db(); let result!: AudioAnchorSet;
+  await database.withExclusiveTransactionAsync(async txn => { result = await deleteSessionAudioAnchor(txn, recordingId, anchorId); }); return result;
+}
+export async function removeAudioAnchorSession(recordingId: string) { const database = await db(); await database.withExclusiveTransactionAsync(txn => removeAudioAnchorSessionTxn(txn, recordingId)); }
+export async function listAudioAnchorSessions() { const database = await db(); return database.getAllAsync<{recording_id:string;note_id:string|null;note_json:string|null;recording_json:string;metadata_json:string}>(`SELECT recording_id,note_id,note_json,recording_json,metadata_json FROM audio_anchor_sessions ORDER BY updated_at`); }
+export async function commitAudioAnchorSession(recordingId: string, note: Note | null, recording: any, metadata: RecordingArchiveMetadata) {
+  const database = await db(); let outcome!: Awaited<ReturnType<typeof commitAudioAnchorSessionTxn>>;
+  await database.withExclusiveTransactionAsync(async txn => { await saveAudioAnchorSession(txn, { noteId: note ? null : recording.note_id, note, recording, metadata }); outcome = await commitAudioAnchorSessionTxn(txn, recordingId); }); return outcome;
+}
+async function updateRecordingAnchors(recordingId: string, update: (anchors: AudioAnchorSet, metadata: any) => AudioAnchorSet) {
+  const database = await db(); let result!: AudioAnchorSet;
+  await database.withExclusiveTransactionAsync(async txn => {
+    const row = await txn.getFirstAsync<{metadata_json:string}>('SELECT metadata_json FROM recording_archive_metadata WHERE recording_id=?', recordingId);
+    if (!row) throw new Error('Recording metadata no longer exists.');
+    const metadata = JSON.parse(row.metadata_json), current = anchorsFromMetadata(row.metadata_json, recordingId);
+    metadata.audioAnchors = update(current, metadata);
+    await txn.runAsync('UPDATE recording_archive_metadata SET metadata_json=? WHERE recording_id=?', JSON.stringify(metadata), recordingId);
+    result = metadata.audioAnchors;
+  }); return result;
+}
+export async function addRecordingAnchor(recordingId: string, anchor: AudioAnchor) { return await updateRecordingAnchors(recordingId, (current, metadata) => addAudioAnchor(current, anchor, recordingId, { durationMs: metadata.durationMs, durationKnown: metadata.durationKnown === true && metadata.durationMs > 0 } as any) as AudioAnchorSet); }
+export async function renameRecordingAnchor(recordingId: string, anchorId: string, label: string) { return await updateRecordingAnchors(recordingId, (current, metadata) => renameAudioAnchor(current, anchorId, label, recordingId, { durationMs: metadata.durationMs, durationKnown: metadata.durationKnown === true && metadata.durationMs > 0 } as any) as AudioAnchorSet); }
+export async function deleteRecordingAnchor(recordingId: string, anchorId: string) { return await updateRecordingAnchors(recordingId, current => deleteAudioAnchor(current, anchorId, recordingId) as AudioAnchorSet); }
 /** Snapshot all note and recording metadata in one short SQLite transaction. File bytes are read only after this transaction closes. */
 export async function snapshotFullArchive() {
   const database = await db(); let notes: Note[] = [], recordings: (Recording & { archiveMetadata: RecordingArchiveMetadata })[] = [];

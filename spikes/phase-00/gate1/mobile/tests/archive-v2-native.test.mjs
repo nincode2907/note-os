@@ -5,7 +5,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { createEmptyCanonicalDocument } from '../../web/packages/document-engine/src/index.js';
 import { createTar, readTar } from '../../web/app/lib/archive-tar.mjs';
 import { exportArchive, verifyArchive } from '../../web/app/lib/archive-v2.mjs';
-import { assertAvailableSpace, buildArchivePlan, planArchiveImport, streamVerifiedMedia, verifyArchiveStream, writeArchivePlan } from '../archive-v2-native.mjs';
+import { createAudioAnchor } from '../../web/app/lib/audio-anchors.mjs';
+import { adaptArchiveRecording, assertAvailableSpace, buildArchivePlan, planArchiveImport, streamVerifiedMedia, verifyArchiveStream, writeArchivePlan } from '../archive-v2-native.mjs';
 import { ARCHIVE_SCHEMA_V3_SQL, commitArchiveBatch, migrateArchiveSchema } from '../archive-store.mjs';
 import { reconcileImportJournals } from '../archive-reconcile.mjs';
 
@@ -90,6 +91,19 @@ test('Web V2 export → iPhone verification and staging preserves exact concaten
   const expected = new Uint8Array([0, 1, 2, 255, 7]);
   assert.deepEqual(await bytesOf(target.blob().stream()), expected);
   assert.equal(await hash(await target.blob().arrayBuffer()), await hash(expected));
+});
+
+test('audioAnchors extension survives Web V2 → iPhone import and iPhone V2 export unchanged', async () => {
+  const anchor = createAudioAnchor('rec-1', 345, 'Visão — 東京', { id: 'bookmark-cross-platform', createdAt: 222 });
+  const snapshot = fixtureWebArchive(); snapshot.recordings[0].audioAnchors = { version: 1, items: [anchor] };
+  const web = await webArchive(snapshot); const verifiedWeb = await verifyArchiveStream(web.stream());
+  assert.deepEqual(verifiedWeb.recordingRows[0].recording.audioAnchors.items[0], anchor);
+  const nativeMetadata = adaptArchiveRecording(verifiedWeb.recordingRows[0], { archiveMetadata: { sourcePlatform: 'web' } }, 'web');
+  assert.deepEqual(nativeMetadata.audioAnchors.items[0], anchor);
+  const toIos = await buildArchivePlan({ notes: [note()], recordings: [{ id: 'rec-1', note_id: 'note-1', title: 'Audio', file_uri: 'memory://audio', status: 'complete', created_at: 110, archiveMetadata: { ...nativeMetadata, durationKnown: true } }], readStream: () => new Blob([new Uint8Array([1])]).stream(), stat: () => ({ exists: true, size: 1 }), exportedAt: '2026-10-22T00:00:00.000Z' });
+  const exported = JSON.parse(new TextDecoder().decode(toIos.recordingsBytes))[0].recording.audioAnchors.items[0];
+  assert.equal(exported.label, anchor.label); assert.equal(exported.offsetMs, anchor.offsetMs); assert.equal(exported.recordingId, 'rec-1');
+  await assert.rejects(buildArchivePlan({ notes: [note()], recordings: [{ id: 'bad', note_id: 'note-1', title: 'Bad', file_uri: 'memory://audio', status: 'complete', created_at: 1, archiveMetadata: { mimeType: 'audio/mp4', ownerId: 'ios-local', updatedAt: 2, durationMs: 900, durationKnown: true, sourcePlatform: 'ios', audioAnchors: { version: 1, items: [{ ...anchor, recordingId: 'bad', offsetMs: 901 }] } } }], readStream: () => new Blob([new Uint8Array([1])]).stream(), stat: () => ({ exists: true, size: 1 }) }), /duration/u);
 });
 
 test('iPhone V2 export → Web V2 reader accepts the unchanged logical V2 structure and normalizes audio to one chunk', async () => {

@@ -44,6 +44,7 @@ export async function commitArchiveBatch(txn, { importId, notes, rows, acceptedF
       mimeType: incoming.mimeType, ownerId: incoming.ownerId, updatedAt: incoming.updatedAt, durationMs: incoming.durationMs,
       durationKnown: typeof incoming.nativeProvenance?.durationKnown === 'boolean' ? incoming.nativeProvenance.durationKnown : true,
       sourcePlatform, sourceRecording: incoming, sourceChunkDescriptors: row.chunks,
+      ...(incoming.audioAnchors ? { audioAnchors: incoming.audioAnchors } : {}),
       mediaSha256: mediaFile?.sha256 ?? null,
     };
     await txn.runAsync('INSERT INTO recording_archive_metadata(recording_id,metadata_json) VALUES(?,?)', recording.id, JSON.stringify(metadata));

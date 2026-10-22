@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { acquireNativeRecordingSession, ArchiveOperationGate, canEditNativeNote, canTransitionLifecycle, commitThenClearDraft, discardDraftSafely, LatestDraftWriter, normalizeNoteView, recoveryDecision, RecordingSessionGate } from '../mobile-safety.mjs';
 import { normalizeTagList, sortNotes } from '../../web/app/lib/mvp-utils.mjs';
 
@@ -44,6 +45,23 @@ test('background requested while recording is best effort and start lock remains
   assert.equal(gate.backgroundRequested, true);
   assert.equal(gate.phase, 'requesting');
   assert.equal(gate.beginStart(), false);
+});
+
+test('recording can pause and resume without unlocking navigation or background finalization', () => {
+  const gate = new RecordingSessionGate(); gate.beginStart(); gate.move('requesting', 'starting'); gate.move('starting', 'recording');
+  assert.equal(gate.pause(), true); assert.equal(gate.canNavigate(), false); assert.equal(gate.beginStop(), true);
+  gate.finish(); gate.beginStart(); gate.move('requesting', 'starting'); gate.move('starting', 'recording'); assert.equal(gate.pause(), true); assert.equal(gate.resume(), true);
+  assert.equal(gate.requestBackgroundStop(), true); assert.equal(gate.beginStop(), true);
+});
+
+test('Quick Voice permission denial returns before creating a note or bookmark session', () => {
+  const source = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8');
+  const flow = source.slice(source.indexOf('async function startQuickVoice()'), source.indexOf('async function addQuickVoiceBookmark()'));
+  const permission = flow.indexOf('requestRecordingPermissionsAsync()'), denied = flow.indexOf('if (!permission.granted)');
+  const session = flow.indexOf('beginAudioAnchorSession(');
+  assert.ok(permission >= 0 && denied > permission && session > denied);
+  assert.match(flow.slice(denied, session), /No note was created/u);
+  assert.doesNotMatch(flow.slice(denied, session), /beginAudioAnchorSession|createAudioAnchor/u);
 });
 
 test('trashed notes cannot transition directly to archived', () => {

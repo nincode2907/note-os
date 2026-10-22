@@ -1,0 +1,4 @@
+Command: npx --yes expo-doctor
+Result: 21/21 checks passed. No issues detected.
+
+An earlier invocation was affected by transient timeouts to Expo metadata endpoints. The final sequential rerun passed all checks.

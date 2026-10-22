@@ -1,0 +1,2 @@
+Command: npm run expo-check
+Result: Dependencies are up to date.

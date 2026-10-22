@@ -3,8 +3,10 @@ export class RecordingSessionGate {
   backgroundRequested = false;
   beginStart() { if (this.phase !== 'idle') return false; this.phase = 'requesting'; this.backgroundRequested = false; return true; }
   move(expected, next) { if (this.phase !== expected) return false; this.phase = next; return true; }
-  beginStop() { if (!['recording', 'starting'].includes(this.phase)) return false; this.phase = 'stopping'; return true; }
-  requestBackgroundStop() { this.backgroundRequested = true; return this.phase === 'recording'; }
+  pause() { if (this.phase !== 'recording') return false; this.phase = 'paused'; return true; }
+  resume() { if (this.phase !== 'paused') return false; this.phase = 'recording'; return true; }
+  beginStop() { if (!['recording', 'paused', 'starting'].includes(this.phase)) return false; this.phase = 'stopping'; return true; }
+  requestBackgroundStop() { this.backgroundRequested = true; return ['recording', 'paused'].includes(this.phase); }
   canNavigate() { return this.phase === 'idle'; }
   finish() { this.phase = 'idle'; this.backgroundRequested = false; }
 }

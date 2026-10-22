@@ -1,6 +1,7 @@
 import { assertNoteRecord, validateNoteDocument } from './note-validation.mjs';
 import { normalizeTagList } from './note-organization.mjs';
 import { requireVerifiedArchive } from './archive-v2.mjs';
+import { addAudioAnchor, deleteAudioAnchor, emptyAudioAnchorSet, renameAudioAnchor, validateAudioAnchorSet } from './audio-anchors.mjs';
 export { NoteDocumentError } from './note-validation.mjs';
 
 const DATABASE_NAME = 'noteos-mvp-01';
@@ -473,6 +474,30 @@ export function createAudioRepository(indexedDBFactory = globalThis.indexedDB, d
     const rows = await run(tx, tx.objectStore(RECORDING_CHUNKS_STORE).index('recordingSequence').getAll(IDBKeyRange.bound([recordingId, 0], [recordingId, Number.MAX_SAFE_INTEGER])));
     return rows.sort((a, b) => a.sequence - b.sequence);
   }
+  async function updateAnchors(recordingId, update) {
+    const database = await openDatabase(), tx = database.transaction(RECORDINGS_STORE, 'readwrite'), done = transactionResult(tx), store = tx.objectStore(RECORDINGS_STORE);
+    try {
+      const recording = await requestResult(store.get(recordingId));
+      if (!recording) throw abort(tx, new NoteNotFoundError(recordingId));
+      const current = validateAudioAnchorSet(recording.audioAnchors, recordingId, { durationMs: recording.durationMs, durationKnown: !['recording', 'paused'].includes(recording.status) && recording.durationMs > 0 && recording.nativeProvenance?.durationKnown !== false });
+      const audioAnchors = update(current, recording);
+      const updated = { ...recording, audioAnchors };
+      store.put(updated); await done; return updated;
+    } catch (error) { try { await done; } catch { /* Consume transaction abort before returning the original error. */ } throw error; }
+  }
+  async function listAnchors(recordingId) {
+    const recording = await get(recordingId);
+    return recording ? validateAudioAnchorSet(recording.audioAnchors, recordingId, { durationMs: recording.durationMs, durationKnown: !['recording', 'paused'].includes(recording.status) && recording.durationMs > 0 && recording.nativeProvenance?.durationKnown !== false }).items : [];
+  }
+  async function addAnchor(recordingId, anchor) {
+    return updateAnchors(recordingId, (current, recording) => addAudioAnchor(current, anchor, recordingId, { durationMs: recording.durationMs, durationKnown: !['recording', 'paused'].includes(recording.status) && recording.durationMs > 0 && recording.nativeProvenance?.durationKnown !== false }));
+  }
+  async function renameAnchor(recordingId, anchorId, label) {
+    return updateAnchors(recordingId, (current, recording) => renameAudioAnchor(current, anchorId, label, recordingId, { durationMs: recording.durationMs, durationKnown: !['recording', 'paused'].includes(recording.status) && recording.durationMs > 0 && recording.nativeProvenance?.durationKnown !== false }));
+  }
+  async function removeAnchor(recordingId, anchorId) {
+    return updateAnchors(recordingId, current => deleteAudioAnchor(current, anchorId, recordingId));
+  }
   async function remove(recordingId) {
     const database = await openDatabase(), tx = database.transaction([RECORDINGS_STORE, RECORDING_CHUNKS_STORE], 'readwrite'), done = transactionResult(tx);
     const recordings = tx.objectStore(RECORDINGS_STORE), chunkStore = tx.objectStore(RECORDING_CHUNKS_STORE);
@@ -499,5 +524,5 @@ export function createAudioRepository(indexedDBFactory = globalThis.indexedDB, d
       return next;
     } catch (error) { try { await done; } catch { /* Consume transaction abort. */ } throw error; }
   }
-  return { list, listUnfinished, get, create, appendChunk, setStatus, rename, chunks, remove, recover };
+  return { list, listUnfinished, get, create, appendChunk, setStatus, rename, chunks, listAnchors, addAnchor, renameAnchor, removeAnchor, remove, recover };
 }

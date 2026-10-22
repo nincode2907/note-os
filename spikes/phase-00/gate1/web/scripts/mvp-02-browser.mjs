@@ -10,7 +10,7 @@ const { chromium } = require(require.resolve('playwright', { paths: [lens] }));
 const baseUrl = process.env.NOTEOS_TEST_URL ?? 'http://127.0.0.1:3000';
 await mkdir(evidence, { recursive: true });
 const browser = await chromium.launch({ args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'] });
-const results = [], diagnostics = { consoleErrors: [], pageErrors: [], externalRequests: [] };
+const results = [], diagnostics = { consoleErrors: [], pageErrors: [], externalRequests: [], anchorPauseDeltaMs: null, anchorOffsetsMs: null, recordingDurationMs: null, playbackDurationMs: null, playbackBookmarkDeltaMs: null };
 function check(ok, message) { if (!ok) throw new Error(message); }
 async function noteAction(page, action) { await page.getByRole('button', { name: 'More note actions' }).click(); await page.getByRole('menuitem', { name: action, exact: true }).click(); }
 async function scenario(name, run, setup = {}) {
@@ -34,7 +34,7 @@ async function scenario(name, run, setup = {}) {
   finally { await context.close(); }
 }
 async function openNote(page) {
-  await page.goto(baseUrl); await page.getByRole('button', { name: /New note/ }).first().click();
+  await page.goto(baseUrl); await page.getByRole('button', { name: /Create your first note|Open full editor|New note/ }).first().click();
   await page.locator('#note-title').waitFor();
   const id = new URL(page.url()).pathname.split('/').pop();
   return { id, url: page.url() };
@@ -97,6 +97,48 @@ try {
     await page.getByRole('button', { name: 'Play', exact: true }).click(); await page.locator('audio.recording-player').waitFor();
     await page.getByRole('button', { name: 'Rename' }).click(); const input = page.getByLabel('Recording title'); await input.fill('Field notes'); await page.getByRole('button', { name: 'Save name' }).click();
     await page.getByText('Field notes', { exact: true }).waitFor(); check(page.url() === url, 'Audio management navigated away from its note.');
+  });
+  await scenario('recording-and-playback-audio-anchors', async (page, context) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await context.grantPermissions(['microphone'], { origin: baseUrl });
+    const { id } = await openNote(page); await start(page); await waitForChunks(page, id);
+    await page.getByRole('button', { name: '⚑ Bookmark', exact: true }).click();
+    await page.getByText(/Bookmark saved at/u).waitFor();
+    await page.getByRole('button', { name: 'Pause', exact: true }).click();
+    await page.getByText('Paused — saved chunks are retained locally.').waitFor();
+    const pausedTime = await page.locator('.recording-indicator').textContent();
+    await new Promise(resolve => setTimeout(resolve, 800));
+    check(await page.locator('.recording-indicator').textContent() === pausedTime, 'Paused media time continued advancing.');
+    await page.getByRole('button', { name: '⚑ Bookmark', exact: true }).click(); await page.getByText(/Bookmark saved at/u).waitFor();
+    await page.getByRole('button', { name: 'Resume', exact: true }).click(); await page.getByText('Recording — audio chunks are being saved on this device.').waitFor();
+    await new Promise(resolve => setTimeout(resolve, 600)); await page.getByRole('button', { name: '⚑ Bookmark', exact: true }).click();
+    await page.getByText(/Bookmark saved at/u).waitFor(); await stop(page);
+    let rows = await records(page, id); const anchors = rows[0]?.audioAnchors?.items ?? [];
+    check(anchors.length === 3, 'Recording-time anchors were not committed with the recording.');
+    diagnostics.anchorPauseDeltaMs = Math.abs(anchors[0].offsetMs - anchors[1].offsetMs); diagnostics.anchorOffsetsMs = anchors.map(anchor => anchor.offsetMs);
+    diagnostics.recordingDurationMs = rows[0].durationMs;
+    check(diagnostics.anchorPauseDeltaMs <= 250, `Pause bookmark moved by ${diagnostics.anchorPauseDeltaMs}ms before the paused state settled.`);
+    check(anchors[2].offsetMs > anchors[1].offsetMs, 'Recording resume time did not advance beyond the paused position.');
+    await page.getByRole('button', { name: 'Play', exact: true }).click(); const player = page.locator('audio.recording-player'); await player.waitFor();
+    diagnostics.playbackDurationMs = await player.evaluate(audio => Math.round(audio.duration * 1000));
+    const targetMs = anchors[0].offsetMs;
+    await page.locator('.audio-anchor-seek').first().click();
+    await page.waitForFunction(target => { const audio = document.querySelector('audio.recording-player'); const expected = Math.min(target / 1000, Number.isFinite(audio?.duration) ? audio.duration : target / 1000); return audio?.readyState >= 1 && Math.abs(audio.currentTime - expected) <= 0.3; }, targetMs);
+    const playbackPositionMs = await player.evaluate(audio => { audio.pause(); audio.currentTime = Math.min(.25, audio.duration / 2); return Math.round(audio.currentTime * 1000); });
+    await page.getByRole('button', { name: '⚑ Bookmark this moment', exact: true }).click(); await page.getByText(/Bookmark saved at/u).waitFor();
+    rows = await records(page, id); check(rows[0].audioAnchors.items.length === 4, 'Playback-position bookmark was not persisted.');
+    diagnostics.playbackBookmarkDeltaMs = Math.min(...rows[0].audioAnchors.items.map(anchor => Math.abs(anchor.offsetMs - playbackPositionMs)));
+    check(diagnostics.playbackBookmarkDeltaMs <= 250, `Playback bookmark missed the player time by ${diagnostics.playbackBookmarkDeltaMs}ms.`);
+    await page.getByRole('button', { name: /Rename bookmark at/u }).first().click();
+    await page.getByRole('textbox', { name: 'Bookmark label' }).fill('Ghi chú 東京'); await page.getByRole('button', { name: 'Save label' }).click();
+    await page.getByRole('button', { name: /Ghi chú 東京/u }).waitFor();
+    await page.getByRole('button', { name: /Delete bookmark at/u }).first().click();
+    rows = await records(page, id); check(rows[0].audioAnchors.items.length === 3, 'Deleting an anchor changed recording ownership or removed the wrong count.');
+    await page.screenshot({ path: `${evidence}/phase06-audio-anchors-mobile-width.png`, fullPage: true });
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.screenshot({ path: `${evidence}/phase06-audio-anchors-desktop.png` });
+    const note = await page.evaluate(async noteId => new Promise((resolve, reject) => { const request = indexedDB.open('noteos-mvp-01'); request.onerror = () => reject(request.error); request.onsuccess = () => { const db = request.result, tx = db.transaction('notes', 'readonly'), get = tx.objectStore('notes').get(noteId); get.onsuccess = () => resolve(get.result); tx.oncomplete = () => db.close(); }; }), id);
+    check(note.revision === 0, 'Bookmark operations changed the note revision.');
   });
   await scenario('multiple-recordings-and-explicit-delete', async (page, context) => {
     await context.grantPermissions(['microphone'], { origin: baseUrl }); const { id } = await openNote(page);
