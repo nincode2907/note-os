@@ -282,3 +282,20 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 
 .archive-recommended { border-top: 3px solid var(--accent); }
 .backup-panel .backup-limit { font-size: 12px; }
+
+.sync-origin { overflow-wrap: anywhere; }
+.sync-pair-form { display: grid; gap: 12px; margin-top: 18px; }
+.sync-pair-form label { display: grid; gap: 6px; color: var(--muted); font-size: 13px; }
+.sync-pair-form .btn { justify-self: start; }
+.sync-preview dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin: 20px 0; }
+.sync-preview dl > div { padding: 12px; border: 1px solid var(--line); border-radius: 8px; }
+.sync-preview dt { color: var(--muted); font-size: 12px; }
+.sync-preview dd { margin: 5px 0 0; font-size: 24px; }
+
+/* iOS Safari focuses inputs below 16px by zooming. Preserve user pinch zoom. */
+@media (max-width: 720px), (hover: none) and (pointer: coarse) {
+  input:not(.editor-title):not([type="checkbox"]):not([type="radio"]), textarea, select,
+  .tag-entry .searchbox, .sort-control select, .sync-pair-form input {
+    font-size: max(16px, 1em);
+  }
+}

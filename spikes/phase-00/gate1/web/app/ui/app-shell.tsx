@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
 
 const links = [
-  ['/', '⌂', 'Notes'], ['/archive', '▤', 'Archive'], ['/trash', '⌫', 'Trash'], ['/backup', '↥', 'Backup'],
+  ['/', '⌂', 'Notes'], ['/archive', '▤', 'Archive'], ['/trash', '⌫', 'Trash'], ['/backup', '↥', 'Backup'], ['/sync', '⇄', 'Sync Setup'],
 ];
 
 function NavLinks({ pathname }: { pathname: string }) {
@@ -31,7 +31,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <Link href="/" className="brand"><span className="brand-mark">n</span>noteOS</Link>
       <nav className="nav-group" aria-label="Main navigation"><NavLinks pathname={pathname} /></nav>
       <div className="nav-bottom">
-        <div className="privacy-card"><strong><span aria-hidden="true">● </span>Private by default</strong><p>Your notes live in this browser on this device. Nothing is sent to a server.</p></div>
+        <div className="privacy-card"><strong><span aria-hidden="true">● </span>Private by default</strong><p>Your notes live in this browser. Sync Setup sends permitted summaries only when you request a preview.</p></div>
         <p className="storage-caption">{usage}</p>
       </div>
     </aside>

@@ -1,0 +1,3 @@
+export function note(id, title=id, extra={}) { return {id,title,document:{schemaVersion:1,type:'doc',content:[{type:'paragraph',content:[{type:'text',text:'Synthetic Phase 08.1 fixture'}]}]},schemaVersion:1,createdAt:1,updatedAt:1,lifecycle:'active',revision:0,pinned:false,tags:[],privacy:'PRIVATE_SERVER',...extra}; }
+export const localNotes=[note('equal'),note('changed','Local synthetic version'),note('new-local'),note('audio'),note('device-only','Excluded synthetic note',{privacy:'DEVICE_ONLY'})];
+export const serverNotes=[note('equal'),note('changed','Server synthetic version'),note('remote-only'),note('audio')];

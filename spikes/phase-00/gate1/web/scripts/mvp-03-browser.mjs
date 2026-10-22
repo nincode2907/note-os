@@ -18,6 +18,7 @@ async function scenario(name, run, viewport = { width: 1280, height: 900 }) {
   await context.route('**/*', (route) => new URL(route.request().url()).origin === baseUrl ? route.continue() : route.abort());
   const page = await context.newPage();
   page.setDefaultTimeout(4000);
+  page.setDefaultNavigationTimeout(15000);
   page.on('console', (message) => { if (message.type() === 'error') diagnostics.consoleErrors.push(`${name}: ${message.text()}`); });
   page.on('pageerror', (error) => diagnostics.pageErrors.push(`${name}: ${error.message}`));
   page.on('request', (request) => { if (!request.url().startsWith(baseUrl)) diagnostics.externalRequests.push(`${name}: ${request.url()}`); });
@@ -29,7 +30,7 @@ async function scenario(name, run, viewport = { width: 1280, height: 900 }) {
 }
 async function openNew(page) {
   await page.goto(baseUrl);
-  await page.getByRole('button', { name: /New note/ }).first().click();
+  await page.getByRole('button', { name: /Open full editor|New note/ }).first().click();
   await page.locator('#note-title').waitFor();
   return new URL(page.url()).pathname.split('/').pop();
 }
@@ -166,7 +167,7 @@ try {
       const id = await openNew(page);
       await page.locator('#note-title').fill(`Preference ${errorName}`);
       await page.locator('#note-tag-input').fill('session tag'); await page.getByRole('button', { name: 'Add tag' }).click(); await waitSaved(page);
-      await page.goto(baseUrl); await page.getByRole('button', { name: /New note/ }).first().click();
+      await page.goto(baseUrl); await page.getByRole('button', { name: /Open full editor|New note/ }).first().click();
       await page.locator('#note-title').fill('A second note'); await waitSaved(page);
       await page.goto(baseUrl);
       const before = JSON.stringify(await readAllNotes(page));

@@ -8,6 +8,7 @@
     "start": "next start -H 0.0.0.0 -p 3000",
     "typecheck": "tsc --noEmit",
     "test:mvp": "node --test app/lib/*.test.mjs",
+    "test:sync": "node --test sync-server/*.test.mjs",
     "test:quick-capture-browser": "node scripts/mvp-05-quick-capture-browser.mjs",
     "test:mvp03-browser": "node scripts/mvp-03-browser.mjs",
     "test:audio-browser": "node scripts/mvp-02-browser.mjs",

@@ -8,6 +8,11 @@ services:
     image: noteos-web-local
     environment:
       NEXT_TELEMETRY_DISABLED: "1"
+      NOTEOS_SYNC_ENABLED: "0"
+      NOTEOS_SYNC_STORAGE: /var/lib/noteos-sync
+      NOTEOS_SYNC_ALLOWED_ORIGINS: ""
+    volumes:
+      - noteos_sync:/var/lib/noteos-sync
     ports:
       - "127.0.0.1:${NOTEOS_WEB_PORT:-15700}:3000"
     healthcheck:
@@ -15,3 +20,6 @@ services:
       interval: 10s
       timeout: 3s
       retries: 12
+
+volumes:
+  noteos_sync:
