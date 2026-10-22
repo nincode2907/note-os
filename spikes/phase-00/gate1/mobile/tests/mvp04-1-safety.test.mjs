@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { canEditNativeNote, canTransitionLifecycle, commitThenClearDraft, discardDraftSafely, LatestDraftWriter, normalizeNoteView, recoveryDecision, RecordingSessionGate } from '../mobile-safety.mjs';
+import { ArchiveOperationGate, canEditNativeNote, canTransitionLifecycle, commitThenClearDraft, discardDraftSafely, LatestDraftWriter, normalizeNoteView, recoveryDecision, RecordingSessionGate } from '../mobile-safety.mjs';
 import { normalizeTagList, sortNotes } from '../../web/app/lib/mvp-utils.mjs';
 
 test('recording gate locks double start/stop and navigation until verified persistence finishes', () => {
@@ -17,6 +17,14 @@ test('recording gate locks double start/stop and navigation until verified persi
   assert.equal(gate.canNavigate(), false);
   gate.finish();
   assert.equal(gate.canNavigate(), true);
+});
+
+test('Full Archive export and recording finalization cannot overlap', () => {
+  const gate = new ArchiveOperationGate(); const releaseFinalize = gate.beginFinalization();
+  assert.throws(() => gate.beginExport(), /being finalized/u);
+  releaseFinalize(); const releaseExport = gate.beginExport();
+  assert.throws(() => gate.beginFinalization(), /Full Archive/u);
+  releaseExport(); const releaseAgain = gate.beginExport(); releaseAgain(); releaseAgain();
 });
 
 test('background requested while recording is best effort and start lock remains held', () => {

@@ -1,16 +1,21 @@
 import * as SQLite from 'expo-sqlite';
 import { assertNoteRecord, validateNoteDocument } from '../web/app/lib/note-validation.mjs';
 import { normalizeTagList } from '../web/app/lib/note-organization.mjs';
-import { canTransitionLifecycle, commitThenClearDraft } from './mobile-safety.mjs';
+import { ArchiveOperationGate, canTransitionLifecycle, commitThenClearDraft } from './mobile-safety.mjs';
+import { commitArchiveBatch, migrateArchiveSchema } from './archive-store.mjs';
 
 export type Lifecycle = 'active' | 'archived' | 'trashed';
 export type Note = { id: string; title: string; document: any; schemaVersion: number; createdAt: number; updatedAt: number; lifecycle: Lifecycle; revision: number; pinned: boolean; tags: string[]; [key: string]: any };
 export type Recording = { id: string; note_id: string; title: string; file_uri: string; status: 'complete' | 'interrupted'; created_at: number };
 export type RecoveryDraft = { version: 1; baseRevision: number; title: string; document: any; tagsText: string; pinned: boolean };
+export type RecordingArchiveMetadata = { mimeType: string; ownerId: string; updatedAt: number; durationMs: number; durationKnown: boolean; sourcePlatform: 'ios' | 'web'; sourceRecording?: Record<string, unknown>; sourceChunkDescriptors?: unknown[]; mediaSha256?: string | null };
 export class RevisionConflictError extends Error { constructor() { super('This note changed elsewhere. Reload it before saving.'); this.name = 'RevisionConflictError'; } }
 export class RecoveryConflictError extends Error { constructor() { super('A recovery draft belongs to a different note revision and was preserved.'); this.name = 'RecoveryConflictError'; } }
 
 let dbPromise: Promise<SQLite.SQLiteDatabase> | undefined;
+const archiveOperationGate = new ArchiveOperationGate();
+export const beginRecordingFinalization = () => archiveOperationGate.beginFinalization();
+export const beginFullArchiveOperation = () => archiveOperationGate.beginExport();
 const db = () => dbPromise ??= SQLite.openDatabaseAsync('noteos-mvp04.db').then(async value => { await value.execAsync('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;'); await migrate(value); return value; }).catch(error => { dbPromise = undefined; throw error; });
 
 async function migrate(database: SQLite.SQLiteDatabase) {
@@ -32,6 +37,7 @@ async function migrate(database: SQLite.SQLiteDatabase) {
     await txn.execAsync(`CREATE TABLE IF NOT EXISTS recovery_drafts (note_id TEXT PRIMARY KEY NOT NULL, base_revision INTEGER NOT NULL, draft_json TEXT NOT NULL, updated_at INTEGER NOT NULL, version INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS file_cleanup (file_uri TEXT PRIMARY KEY NOT NULL, created_at INTEGER NOT NULL); PRAGMA user_version = 2;`);
   });
+  await migrateArchiveSchema(database);
 }
 function rawRecord(note: Note): string { return JSON.stringify(note); }
 function decode(row: { record_json: string }): Note {
@@ -46,6 +52,7 @@ export async function listNotes(): Promise<Note[]> { const database = await db()
 export async function getNote(id: string): Promise<Note | null> { const database = await db(); const row = await database.getFirstAsync<{record_json:string}>('SELECT record_json FROM notes WHERE id = ?', id); return row ? decode(row) : null; }
 export async function exportNotes(): Promise<Note[]> { return listNotes(); }
 export async function listRecordings(noteId: string): Promise<Recording[]> { const database = await db(); return database.getAllAsync<Recording>('SELECT id,note_id,title,file_uri,status,created_at FROM recordings WHERE note_id = ? ORDER BY created_at DESC', noteId); }
+export async function listAllRecordings(): Promise<Recording[]> { const database = await db(); return database.getAllAsync<Recording>('SELECT id,note_id,title,file_uri,status,created_at FROM recordings ORDER BY id'); }
 
 export async function createNote(note: Note) { requireWriteableDocument(note); const database = await db(); await database.withExclusiveTransactionAsync(async txn => { await txn.runAsync('INSERT INTO notes(id,record_json,revision,lifecycle,updated_at) VALUES(?,?,?,?,?)', note.id, rawRecord(note), note.revision, note.lifecycle, note.updatedAt); }); }
 export async function saveNote(note: Note, expectedRevision: number): Promise<{ note: Note; recoveryJournalCleared: boolean; recoveryJournalError?: string }> {
@@ -88,8 +95,53 @@ export async function importNotes(notes: Note[]) {
   const clean = notes.map(note => { assertNoteRecord(note, { allowUnsupported: true }); return note; }); const ids = new Set<string>(); for (const note of clean) { if (ids.has(note.id)) throw new Error(`Backup contains duplicate note ID ${note.id}.`); ids.add(note.id); }
   const database = await db(); await database.withExclusiveTransactionAsync(async txn => { for (const note of clean) { const exists = await txn.getFirstAsync('SELECT id FROM notes WHERE id=?', note.id); if (exists) throw new Error(`A note with ID ${note.id} already exists. Import was rolled back.`); } for (const note of clean) await txn.runAsync('INSERT INTO notes(id,record_json,revision,lifecycle,updated_at) VALUES(?,?,?,?,?)', note.id, rawRecord(note), note.revision, note.lifecycle, note.updatedAt); });
 }
-export async function saveRecording(recording: Recording) { const database = await db(); await database.withExclusiveTransactionAsync(async txn => { await txn.runAsync('INSERT INTO recordings(id,note_id,title,file_uri,status,created_at) VALUES(?,?,?,?,?,?)', recording.id, recording.note_id, recording.title, recording.file_uri, recording.status, recording.created_at); }); }
-export async function renameRecording(id: string, title: string) { const database = await db(); const result = await database.runAsync('UPDATE recordings SET title=? WHERE id=?', title, id); if (result.changes !== 1) throw new Error('Recording no longer exists.'); }
+function inferArchiveMetadata(recording: Recording): RecordingArchiveMetadata {
+  const ext = recording.file_uri.split(/[?#]/u)[0].split('.').at(-1)?.toLowerCase();
+  const mimeType = ({ webm: 'audio/webm', ogg: 'audio/ogg', m4a: 'audio/mp4', mp4: 'audio/mp4', wav: 'audio/wav', mp3: 'audio/mpeg', aac: 'audio/aac', flac: 'audio/flac' } as Record<string, string>)[ext ?? ''] ?? 'audio/mp4';
+  return { mimeType, ownerId: 'ios-local', updatedAt: recording.created_at, durationMs: 0, durationKnown: false, sourcePlatform: 'ios' };
+}
+export async function saveRecording(recording: Recording, archiveMetadata: RecordingArchiveMetadata = inferArchiveMetadata(recording)) {
+  const database = await db(); await database.withExclusiveTransactionAsync(async txn => {
+    await txn.runAsync('INSERT INTO recordings(id,note_id,title,file_uri,status,created_at) VALUES(?,?,?,?,?,?)', recording.id, recording.note_id, recording.title, recording.file_uri, recording.status, recording.created_at);
+    await txn.runAsync('INSERT INTO recording_archive_metadata(recording_id,metadata_json) VALUES(?,?)', recording.id, JSON.stringify(archiveMetadata));
+  });
+}
+/** Snapshot all note and recording metadata in one short SQLite transaction. File bytes are read only after this transaction closes. */
+export async function snapshotFullArchive() {
+  const database = await db(); let notes: Note[] = [], recordings: (Recording & { archiveMetadata: RecordingArchiveMetadata })[] = [];
+  await database.withExclusiveTransactionAsync(async txn => {
+    const noteRows = await txn.getAllAsync<{record_json:string}>('SELECT record_json FROM notes');
+    const recordingRows = await txn.getAllAsync<Recording & { metadata_json?: string }>(`SELECT r.id,r.note_id,r.title,r.file_uri,r.status,r.created_at,m.metadata_json
+      FROM recordings r LEFT JOIN recording_archive_metadata m ON m.recording_id=r.id ORDER BY r.id`);
+    notes = noteRows.map(row => { const note = JSON.parse(row.record_json); assertNoteRecord(note, { allowUnsupported: true }); return note; });
+    recordings = recordingRows.map(row => { const { metadata_json, ...recording } = row; return { ...recording, archiveMetadata: metadata_json ? JSON.parse(metadata_json) : inferArchiveMetadata(recording) }; });
+  });
+  return { notes, recordings };
+}
+export async function listArchiveImports(): Promise<{importId:string;state:'staged'|'committed';files:Array<{stagedUri:string;finalUri:string;recordingId:string;size:number;sha256:string}>}[]> {
+  const database = await db(); const rows = await database.getAllAsync<{import_id:string;state:'staged'|'committed';files_json:string}>('SELECT import_id,state,files_json FROM archive_imports ORDER BY created_at');
+  return rows.map(row => ({ importId: row.import_id, state: row.state, files: JSON.parse(row.files_json) }));
+}
+export async function recordArchiveImport(importId: string, files: Array<{stagedUri:string;finalUri:string;recordingId:string;size:number;sha256:string}>) {
+  const database = await db(); await database.withExclusiveTransactionAsync(async txn => { await txn.runAsync('INSERT INTO archive_imports(import_id,state,files_json,created_at) VALUES(?,?,?,?)', importId, 'staged', JSON.stringify(files), Date.now()); });
+}
+export async function finishArchiveImport(importId: string) { const database = await db(); await database.withExclusiveTransactionAsync(async txn => { await txn.runAsync('DELETE FROM archive_imports WHERE import_id=?', importId); }); }
+export async function commitFullArchiveImport(importId: string, notes: Note[], rows: Array<{recording:Record<string,any>;file:string|null;chunks:unknown[]}>, acceptedFiles: Array<{recordingId:string;finalUri:string;sha256:string;size:number}>, sourcePlatform: 'ios'|'web') {
+  const database = await db(); await database.withExclusiveTransactionAsync(txn => commitArchiveBatch(txn, { importId, notes, rows, acceptedFiles, sourcePlatform }));
+}
+export async function renameRecording(id: string, title: string) {
+  if (typeof title !== 'string' || !title.trim() || title.trim().length > 120) throw new Error('Recording title must contain 1–120 characters.');
+  const database = await db(); await database.withExclusiveTransactionAsync(async txn => {
+    const result = await txn.runAsync('UPDATE recordings SET title=? WHERE id=?', title.trim(), id);
+    if (result.changes !== 1) throw new Error('Recording no longer exists.');
+    const row = await txn.getFirstAsync<{metadata_json:string}>('SELECT metadata_json FROM recording_archive_metadata WHERE recording_id=?', id);
+    if (row) {
+      const metadata = JSON.parse(row.metadata_json); metadata.updatedAt = Date.now();
+      if (metadata.sourceRecording) metadata.sourceRecording = { ...metadata.sourceRecording, title: title.trim(), updatedAt: metadata.updatedAt };
+      await txn.runAsync('UPDATE recording_archive_metadata SET metadata_json=? WHERE recording_id=?', JSON.stringify(metadata), id);
+    }
+  });
+}
 export async function removeRecording(id: string): Promise<string> {
   const database = await db(); let uri = '';
   await database.withExclusiveTransactionAsync(async txn => { const row = await txn.getFirstAsync<{file_uri:string}>('SELECT file_uri FROM recordings WHERE id=?', id); if (!row) throw new Error('Recording no longer exists.'); uri = row.file_uri; await txn.runAsync('INSERT OR IGNORE INTO file_cleanup(file_uri,created_at) VALUES(?,?)', uri, Date.now()); const result = await txn.runAsync('DELETE FROM recordings WHERE id=?', id); if (result.changes !== 1) throw new Error('Recording metadata changed before deletion.'); }); return uri;

@@ -10,11 +10,12 @@ import * as Sharing from 'expo-sharing';
 import { makeBackup, parseBackup, filterNotes, sortNotes } from '../web/app/lib/mvp-utils.mjs';
 import { normalizeTagList } from '../web/app/lib/note-organization.mjs';
 import { canonicalToPlainText, createEmptyCanonicalDocument, validateCanonicalDocument } from '../web/packages/document-engine/src/index.js';
-import { createNote, discardRecoveryDraft, exportNotes, getNote, getRecoveryDraft, importNotes, listNotes, listPendingFileCleanups, listRecordings, markFileCleanupDone, Note, permanentlyDeleteNote, RecoveryDraft, Recording, removeRecording, renameRecording, RevisionConflictError, saveNote, saveRecording, saveRecoveryDraft, setLifecycle, setPinned } from './store';
+import { beginRecordingFinalization, createNote, discardRecoveryDraft, exportNotes, getNote, getRecoveryDraft, importNotes, listNotes, listPendingFileCleanups, listRecordings, markFileCleanupDone, Note, permanentlyDeleteNote, RecoveryDraft, Recording, removeRecording, renameRecording, RevisionConflictError, saveNote, saveRecording, saveRecoveryDraft, setLifecycle, setPinned } from './store';
 import { canEditNativeNote, discardDraftSafely, LatestDraftWriter, recoveryDecision, RecordingSessionGate, SingleSaveGate } from './mobile-safety.mjs';
 import { documentToNativeModel, nativeModelToDocument } from './document-subset';
 import { CanonicalEditor, CanonicalEditorHandle } from './CanonicalEditor';
 import { createEditorSession, validateEditorEnvelope } from './editor-bridge.mjs';
+import { createFullArchive, reconcileArchiveImports, restoreFullArchive } from './full-archive';
 
 type RootStack = { Home: undefined; Editor: { id: string } };
 const Stack = createNativeStackNavigator<RootStack>();
@@ -23,24 +24,25 @@ const timeNow = () => Date.now();
 
 function HomeScreen({ navigation }: any) {
   const [notes, setNotes] = useState<Note[]>([]); const [query, setQuery] = useState('');
-  const [lifecycle, setLifecycleFilter] = useState<'active' | 'archived' | 'trashed'>('active'); const [status, setStatus] = useState('');
+  const [lifecycle, setLifecycleFilter] = useState<'active' | 'archived' | 'trashed'>('active'); const [status, setStatus] = useState(''); const [backupBusy, setBackupBusy] = useState(false); const [backupStatus, setBackupStatus] = useState('');
   const pendingPins = useRef(new Set<string>());
   const refresh = useCallback(async () => { setNotes(await listNotes()); const pending = await listPendingFileCleanups(); for (const uri of pending) { try { const file = new File(uri); if (file.exists) file.delete(); await markFileCleanupDone(uri); } catch (error) { setStatus(`File cleanup is pending retry: ${String(error)}`); } } }, []);
-  async function togglePin(item: Note) { if (pendingPins.current.has(item.id)) return; pendingPins.current.add(item.id); try { await setPinned(item.id, !item.pinned, item.revision); await refresh(); } catch (error) { setStatus(String(error)); } finally { pendingPins.current.delete(item.id); } }
-  useEffect(() => { void refresh().catch(error => setStatus(String(error))); }, [refresh]);
+  async function togglePin(item: Note) { if (backupBusy || pendingPins.current.has(item.id)) return; pendingPins.current.add(item.id); try { await setPinned(item.id, !item.pinned, item.revision); await refresh(); } catch (error) { setStatus(String(error)); } finally { pendingPins.current.delete(item.id); } }
+  useEffect(() => { void (async () => { const unresolved = await reconcileArchiveImports(); if (unresolved.length) setStatus(`Archive recovery needs attention: ${unresolved.join(' ')}`); await refresh(); })().catch(error => setStatus(String(error))); }, [refresh]);
   useEffect(() => { const unsubscribe = navigation.addListener('focus', () => { void refresh(); }); return unsubscribe; }, [navigation, refresh]);
   const visible = useMemo(() => sortNotes(filterNotes(notes, query, lifecycle) as Note[]), [notes, query, lifecycle]);
   async function create() {
+    if (backupBusy) return;
     const now = timeNow();
     const note: Note = { id: makeId(), title: 'Untitled note', document: createEmptyCanonicalDocument(), schemaVersion: 1, createdAt: now, updatedAt: now, lifecycle: 'active', revision: 0, pinned: false, tags: [] };
     try { await createNote(note); navigation.navigate('Editor', { id: note.id }); } catch (error) { setStatus(String(error)); }
   }
-  async function backupExport() {
+  async function backupExportLegacy() {
     try {
       const data = makeBackup(await exportNotes());
       const file = new File(Paths.cache, `noteos-backup-${new Date().toISOString().slice(0, 10)}.json`);
       if (file.exists) file.delete(); file.create(); await file.write(JSON.stringify(data, null, 2));
-      if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(file.uri, { mimeType: 'application/json', dialogTitle: 'Export noteOS notes backup' });
+      if (await Sharing.isAvailableAsync()) { await Sharing.shareAsync(file.uri, { mimeType: 'application/json', dialogTitle: 'Export noteOS Legacy JSON V1' }); setBackupStatus('Share sheet closed. noteOS cannot confirm whether the file was saved.'); try { if (file.exists) file.delete(); } catch {} }
       else setStatus(`Backup prepared at ${file.uri}; sharing is unavailable on this device.`);
     } catch (error) { setStatus(error instanceof Error ? error.message : 'Could not export notes.'); }
   }
@@ -50,17 +52,54 @@ function HomeScreen({ navigation }: any) {
       if (picked.canceled) return;
       const text = new File(picked.assets[0].uri).textSync();
       const bundle = parseBackup(text);
-      await importNotes(bundle.notes as Note[]); await refresh(); setStatus(`Imported ${bundle.notes.length} notes. Audio is not part of this backup.`);
+      await importNotes(bundle.notes as Note[]); await refresh(); setBackupStatus(`Imported ${bundle.notes.length} notes. Legacy JSON V1 does not contain audio.`);
     } catch (error) { setStatus(error instanceof Error ? error.message : 'Could not import this backup.'); }
   }
+  async function backupExportFull() {
+    if (backupBusy) return; setBackupBusy(true); setBackupStatus('Preparing Full Archive V2…');
+    let archiveFile: File | null = null;
+    try {
+      const result = await createFullArchive(setBackupStatus);
+      archiveFile = result.file;
+      if (!(await Sharing.isAvailableAsync())) { setBackupStatus(`Archive was generated at ${result.file.uri}; sharing is unavailable and noteOS cannot confirm a Files save.`); return; }
+      setBackupStatus('Archive is ready. Choose Save to Files or another destination in the iOS share sheet.');
+      await Sharing.shareAsync(result.file.uri, { mimeType: 'application/x-tar', dialogTitle: 'Export noteOS Full Archive V2' });
+      setBackupStatus('Share sheet closed. noteOS cannot confirm whether the archive was saved.');
+      try { if (result.file.exists) result.file.delete(); } catch {}
+    } catch (error) { setBackupStatus(`${archiveFile ? 'Archive was generated but sharing failed; no Files save is confirmed.' : 'Could not create the Full Archive V2.'} ${error instanceof Error ? error.message : ''}`.trim()); }
+    finally { setBackupBusy(false); }
+  }
+  function chooseArchiveMode() {
+    Alert.alert('Restore Full Archive V2', 'Merge adds only non-conflicting note groups. Skip stops the entire import if any note or recording ID already exists.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Skip on collisions', onPress: () => void backupImportFull('skip') },
+      { text: 'Merge', onPress: () => void backupImportFull('merge') },
+    ]);
+  }
+  async function backupImportFull(mode: 'merge'|'skip') {
+    if (backupBusy) return; setBackupBusy(true); setBackupStatus('Choose a TAR archive in Files…');
+    let pickedUri = '';
+    try {
+      const picked = await DocumentPicker.getDocumentAsync({ type: ['application/x-tar', 'application/octet-stream', '*/*'], copyToCacheDirectory: true });
+      if (picked.canceled) { setBackupStatus('Import cancelled. No note or recording data changed.'); return; }
+      pickedUri = picked.assets[0].uri;
+      const result = await restoreFullArchive(new File(pickedUri), mode, setBackupStatus);
+      await refresh();
+      setBackupStatus(`Restore complete: ${result.importedNotes} notes and ${result.importedRecordings} recordings imported; ${result.skippedNotes} notes and ${result.skippedRecordings} recordings skipped.${result.warnings.length ? ` ${result.warnings.length} interrupted or partial recording warning(s).` : ''}`);
+    } catch (error) { setBackupStatus(error instanceof Error ? error.message : 'Could not restore this archive. Existing data was preserved.'); }
+    finally { if (pickedUri) { try { const selected = new File(pickedUri); if (selected.exists) selected.delete(); } catch {} } setBackupBusy(false); }
+  }
   async function changeLifecycle(note: Note, next: 'active' | 'archived' | 'trashed') {
+    if (backupBusy) return;
     try { await setLifecycle(note.id, next, note.revision); await refresh(); }
     catch (error) { setStatus(error instanceof Error ? error.message : 'Could not update note.'); }
   }
   function deleteForever(note: Note) {
+    if (backupBusy) return;
     Alert.alert('Delete permanently?', `“${note.title || 'Untitled note'}” and its local recordings will be removed from this device. Notes backup does not include audio.`, [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: () => { void (async () => {
+        if (backupBusy) return;
         try {
           const uris = await permanentlyDeleteNote(note.id, note.revision); await refresh();
           for (const uri of uris) { const file = new File(uri); if (file.exists) file.delete(); await markFileCleanupDone(uri); }
@@ -69,13 +108,13 @@ function HomeScreen({ navigation }: any) {
     ]);
   }
   return <SafeAreaView style={styles.screen} edges={['top', 'left', 'right', 'bottom']}>
-    <View style={styles.homeHeader}><View><Text style={styles.eyebrow}>PRIVATE · ON THIS DEVICE</Text><Text style={styles.heading}>Your notes</Text></View><Pressable style={styles.primary} onPress={() => void create()}><Text style={styles.primaryText}>＋ New note</Text></Pressable></View>
+    <View style={styles.homeHeader}><View><Text style={styles.eyebrow}>PRIVATE · ON THIS DEVICE</Text><Text style={styles.heading}>Your notes</Text></View><Pressable disabled={backupBusy} style={styles.primary} onPress={() => void create()}><Text style={styles.primaryText}>＋ New note</Text></Pressable></View>
     <TextInput style={styles.search} placeholder="Search notes and tags" value={query} onChangeText={setQuery} returnKeyType="search" />
     <View style={styles.segmentRow}>{(['active', 'archived', 'trashed'] as const).map(value => <Pressable key={value} onPress={() => setLifecycleFilter(value)} style={[styles.segment, lifecycle === value && styles.segmentActive]}><Text style={[styles.segmentText, lifecycle === value && styles.segmentTextActive]}>{value === 'active' ? 'Notes' : value === 'archived' ? 'Archive' : 'Trash'}</Text></Pressable>)}</View>
     {status ? <Text accessibilityRole="alert" style={styles.status}>{status}</Text> : null}
-    <FlatList data={visible} keyExtractor={item => item.id} contentContainerStyle={styles.listContent} ListEmptyComponent={<Text style={styles.empty}>Nothing here yet. Create a note or import a Web backup.</Text>} renderItem={({ item }) => {
+    <FlatList data={visible} keyExtractor={item => item.id} scrollEnabled={!backupBusy} contentContainerStyle={styles.listContent} ListEmptyComponent={<Text style={styles.empty}>Nothing here yet. Create a note or import a Web backup.</Text>} renderItem={({ item }) => {
       const body = canonicalToPlainText(item.document); const preview = body.status === 'projected' ? body.text : 'Rich content · opens read-only';
-      return <Pressable style={styles.noteCard} onPress={() => navigation.navigate('Editor', { id: item.id })}>
+      return <Pressable disabled={backupBusy} style={styles.noteCard} onPress={() => navigation.navigate('Editor', { id: item.id })}>
         <View style={styles.noteTitleRow}><Text style={styles.noteTitle} numberOfLines={1}>{item.pinned ? '◆ ' : ''}{item.title || 'Untitled note'}</Text><Text style={styles.noteTime}>{new Date(item.updatedAt).toLocaleDateString()}</Text></View>
         <Text style={styles.preview} numberOfLines={2}>{preview || 'No text yet'}</Text>
         {!!item.tags?.length && <Text style={styles.tags}>{item.tags.map((tag: string) => `#${tag}`).join('   ')}</Text>}
@@ -84,12 +123,17 @@ function HomeScreen({ navigation }: any) {
         </View>
       </Pressable>;
     }} />
-    <View style={styles.backupRow}><Text style={styles.subtle}>Manual transfer · notes only</Text><Pressable onPress={() => void backupImport()}><Text style={styles.action}>Import</Text></Pressable><Pressable onPress={() => void backupExport()}><Text style={styles.action}>Export</Text></Pressable></View>
+    <View style={styles.backupPanel}>
+      <View style={styles.segmentRow}><View><Text style={styles.sectionLabel}>DATA & BACKUP</Text><Text style={styles.subtle}>Local manual transfer · archives are unencrypted</Text></View><Text style={styles.subtle}>V2</Text></View>
+      <View style={styles.backupActions}><Text style={styles.subtle}>Full Archive V2 · notes + audio</Text><Pressable disabled={backupBusy} onPress={chooseArchiveMode}><Text style={styles.action}>Restore</Text></Pressable><Pressable disabled={backupBusy} onPress={() => void backupExportFull()}><Text style={styles.action}>Export</Text></Pressable></View>
+      <View style={styles.backupActions}><Text style={styles.subtle}>Legacy JSON V1 · notes only</Text><Pressable disabled={backupBusy} onPress={() => void backupImport()}><Text style={styles.action}>Import</Text></Pressable><Pressable disabled={backupBusy} onPress={() => void backupExportLegacy()}><Text style={styles.action}>Export</Text></Pressable></View>
+      {backupBusy || backupStatus ? <Text accessibilityRole="alert" style={styles.backupStatus}>{backupBusy ? 'Working · ' : ''}{backupStatus}</Text> : null}
+    </View>
   </SafeAreaView>;
 }
 
 function AudioItem({ item, onPlay, onRename, onDelete }: { item: Recording; onPlay: (item: Recording) => void; onRename: (item: Recording) => void; onDelete: (item: Recording) => void }) {
-  return <View style={styles.audioRow}><View style={{ flex: 1 }}><Text style={styles.audioTitle}>{item.title}</Text><Text style={styles.subtle}>{item.status === 'complete' ? 'Saved locally' : 'Interrupted · recovery available'}</Text></View><Pressable onPress={() => onPlay(item)} style={styles.smallButton}><Text style={styles.smallButtonText}>Play</Text></Pressable><Pressable onPress={() => onRename(item)}><Text style={styles.action}>Rename</Text></Pressable><Pressable onPress={() => onDelete(item)}><Text style={styles.dangerAction}>Delete</Text></Pressable></View>;
+  return <View style={styles.audioRow}><View style={{ flex: 1 }}><Text style={styles.audioTitle}>{item.title}</Text><Text style={styles.subtle}>{item.file_uri ? item.status === 'complete' ? 'Saved locally' : 'Interrupted · recovery available' : 'Metadata preserved · no audio bytes available'}</Text></View><Pressable disabled={!item.file_uri} onPress={() => onPlay(item)} style={[styles.smallButton, !item.file_uri && { opacity: .45 }]}><Text style={styles.smallButtonText}>Play</Text></Pressable><Pressable onPress={() => onRename(item)}><Text style={styles.action}>Rename</Text></Pressable><Pressable onPress={() => onDelete(item)}><Text style={styles.dangerAction}>Delete</Text></Pressable></View>;
 }
 
 function AudioPlayback({ uri, onClose }: { uri: string; onClose: () => void }) { const player = useAudioPlayer(uri); useEffect(() => { player.play(); return () => { try { player.pause(); } catch {} }; }, [player]); return <Pressable onPress={onClose}><Text style={styles.action}>Playing audio · tap to stop</Text></Pressable>; }
@@ -214,7 +258,11 @@ function EditorScreen({ route, navigation }: any) {
     } catch (error) { gate.finish(); setRecordingPhase(gate.phase); setStatus(`Recording could not start: ${String(error)}`); }
   }
   async function finishRecording(interrupted = false) {
-    const gate = gateRef.current; if (!gate.beginStop() || !note) return; setRecordingPhase(gate.phase);
+    const gate = gateRef.current; if (!note) return;
+    let releaseFinalization: (() => void) | null = null;
+    try { releaseFinalization = beginRecordingFinalization(); }
+    catch (error) { setStatus(error instanceof Error ? error.message : 'Wait for backup to finish before stopping the recording.'); return; }
+    if (!gate.beginStop()) { releaseFinalization(); return; } setRecordingPhase(gate.phase);
     try {
       await recorder.stop();
       gate.move('stopping', 'finalizing'); setRecordingPhase(gate.phase);
@@ -227,18 +275,19 @@ function EditorScreen({ route, navigation }: any) {
       setRecordings(await listRecordings(note.id));
       setStatus(interrupted ? 'Recording stopped when the app left the foreground and was kept as interrupted for recovery.' : 'Recording finalized, verified and saved locally.');
     } catch (error) { setStatus(`Audio save state is unknown. Any recorder file was left in place for recovery: ${String(error)}`); }
-    finally { gate.finish(); setRecordingPhase(gate.phase); }
+    finally { gate.finish(); setRecordingPhase(gate.phase); releaseFinalization(); }
   }
   useEffect(() => {
     const sub = AppState.addEventListener('change', state => { if (state === 'active') return; const gate = gateRef.current; if (gate.requestBackgroundStop()) void finishRecording(true); });
     return () => sub.remove();
   }, [note]);
-  async function finishFileCleanup(uri: string) { const file = new File(uri); if (file.exists) file.delete(); await markFileCleanupDone(uri); }
+  async function finishFileCleanup(uri: string) { if (uri) { const file = new File(uri); if (file.exists) file.delete(); } await markFileCleanupDone(uri); }
   function deleteRecording(item: Recording) {
     Alert.alert('Delete recording?', `“${item.title}” will be removed from this device.`, [{ text: 'Cancel', style: 'cancel' }, { text: 'Delete', style: 'destructive', onPress: () => { void (async () => { try { const uri = await removeRecording(item.id); setRecordings(await listRecordings(item.note_id)); await finishFileCleanup(uri); } catch (error) { setStatus(`Recording metadata may be removed; queued file cleanup will retry: ${String(error)}`); } })(); } }]);
   }
   function rename(item: Recording) { Alert.prompt('Rename recording', 'Enter a new title.', value => { if (value?.trim()) void renameRecording(item.id, value.trim()).then(() => listRecordings(item.note_id)).then(setRecordings).catch(error => setStatus(`Rename failed: ${String(error)}`)); }, 'plain-text', item.title); }
   async function shareAudio(item: Recording) {
+    if (!item.file_uri) { setStatus('This recording’s metadata was preserved, but it contains no audio bytes to export.'); return; }
     const file = new File(item.file_uri);
     if (!file.exists || file.size <= 0) { setStatus('This audio file is missing or empty.'); return; }
     try { if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(file.uri, { dialogTitle: `Export ${item.title}` }); else setStatus('Audio file exists but sharing is unavailable on this device.'); }
@@ -260,10 +309,10 @@ function EditorScreen({ route, navigation }: any) {
       </> : <ReadOnlyDocument document={note.document} />}
       {editable && !recoveryHeld ? <Pressable disabled={saving || (!dirty && !editorReady)} style={[styles.primaryWide, saving && { opacity: .65 }]} onPress={() => void save()}><Text style={styles.primaryText}>{saving ? 'Saving…' : dirty ? 'Save changes' : editorReady ? 'Saved' : 'Opening editor…'}</Text></Pressable> : null}
       {note.lifecycle === 'active' && editable && !recoveryHeld ? <View style={styles.audioPanel}>
-        <View style={styles.segmentRow}><Text style={styles.sectionLabel}>LOCAL AUDIO</Text><Text style={styles.subtle}>Not included in notes backup</Text></View>
+        <View style={styles.segmentRow}><Text style={styles.sectionLabel}>LOCAL AUDIO</Text><Text style={styles.subtle}>Included in Full Archive V2</Text></View>
         <Text style={styles.subtle}>On-device recordings only · recording stops when the app leaves the foreground.</Text>
         {recordingPhase === 'idle' ? <Pressable style={styles.recordButton} onPress={() => void startRecording()}><Text style={styles.recordButtonText}>●  Record</Text></Pressable> : recordingPhase === 'recording' ? <Pressable style={styles.stopButton} onPress={() => void finishRecording(false)}><Text style={styles.stopText}>■  Stop & save · {Math.round(recorderState.durationMillis / 1000)}s</Text></Pressable> : <Text style={styles.subtle}>Recording {recordingPhase}…</Text>}
-        {recordings.map(item => <View key={item.id} style={styles.audioWithShare}><AudioItem item={item} onPlay={recording => { const f = new File(recording.file_uri); if (!f.exists || f.size <= 0) { Alert.alert('File unavailable', 'This recording’s file is missing or empty.'); return; } setPlayingUri(recording.file_uri); }} onRename={rename} onDelete={deleteRecording} /><Pressable onPress={() => void shareAudio(item)}><Text style={styles.action}>Export</Text></Pressable></View>)}
+        {recordings.map(item => <View key={item.id} style={styles.audioWithShare}><AudioItem item={item} onPlay={recording => { const f = new File(recording.file_uri); if (!f.exists || f.size <= 0) { Alert.alert('File unavailable', 'This recording’s file is missing or empty.'); return; } setPlayingUri(recording.file_uri); }} onRename={rename} onDelete={deleteRecording} />{item.file_uri ? <Pressable onPress={() => void shareAudio(item)}><Text style={styles.action}>Export</Text></Pressable> : null}</View>)}
         {playingUri ? <AudioPlayback uri={playingUri} onClose={() => setPlayingUri('')} /> : null}
       </View> : null}
       {status ? <Text accessibilityRole="alert" style={styles.status}>{status}</Text> : null}
@@ -295,7 +344,7 @@ const styles = StyleSheet.create({
   homeHeader: { paddingHorizontal: 22, paddingTop: 20, paddingBottom: 14, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' }, eyebrow: { fontSize: 10, letterSpacing: 1.7, color: '#6F705F', fontWeight: '700' }, heading: { fontSize: 32, fontWeight: '700', color: '#202019', marginTop: 4 },
   primary: { backgroundColor: '#344D3F', paddingHorizontal: 15, paddingVertical: 11, borderRadius: 22 }, primaryWide: { backgroundColor: '#344D3F', borderRadius: 14, padding: 15, alignItems: 'center', marginVertical: 18 }, primaryText: { color: 'white', fontSize: 14, fontWeight: '700' },
   search: { backgroundColor: '#ECEAE2', marginHorizontal: 20, borderRadius: 13, paddingHorizontal: 14, paddingVertical: 12, color: '#202019' }, segmentRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 7, marginHorizontal: 20, marginTop: 13, marginBottom: 7 }, segment: { flex: 1, paddingVertical: 9, alignItems: 'center', borderRadius: 18 }, segmentActive: { backgroundColor: '#DCE4DA' }, segmentText: { color: '#77786F', fontSize: 13, fontWeight: '600' }, segmentTextActive: { color: '#344D3F' },
-  status: { color: '#77562D', backgroundColor: '#F0E6D1', padding: 10, marginHorizontal: 20, borderRadius: 9, overflow: 'hidden', marginVertical: 5 }, listContent: { paddingHorizontal: 18, paddingBottom: 16, flexGrow: 1 }, empty: { textAlign: 'center', color: '#88877F', padding: 36, lineHeight: 22 }, noteCard: { backgroundColor: '#FFFEFC', padding: 16, borderRadius: 16, marginTop: 10, borderWidth: 1, borderColor: '#EBE8E0' }, noteTitleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, noteTitle: { color: '#272820', fontWeight: '700', fontSize: 16, flex: 1 }, noteTime: { color: '#99978E', fontSize: 11, marginLeft: 6 }, preview: { color: '#77776E', lineHeight: 19, marginTop: 7 }, tags: { color: '#647D6C', fontSize: 12, marginTop: 8 }, cardActions: { borderTopColor: '#F0EEE9', borderTopWidth: 1, marginTop: 12, paddingTop: 10, flexDirection: 'row', gap: 17 }, action: { color: '#42644F', fontWeight: '600', paddingVertical: 4 }, dangerAction: { color: '#A04F3D', fontWeight: '600', paddingVertical: 4 }, backupRow: { borderTopColor: '#E5E2D9', borderTopWidth: 1, paddingHorizontal: 20, paddingVertical: 13, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, subtle: { color: '#8B8980', fontSize: 11 },
+  status: { color: '#77562D', backgroundColor: '#F0E6D1', padding: 10, marginHorizontal: 20, borderRadius: 9, overflow: 'hidden', marginVertical: 5 }, listContent: { paddingHorizontal: 18, paddingBottom: 16, flexGrow: 1 }, empty: { textAlign: 'center', color: '#88877F', padding: 36, lineHeight: 22 }, noteCard: { backgroundColor: '#FFFEFC', padding: 16, borderRadius: 16, marginTop: 10, borderWidth: 1, borderColor: '#EBE8E0' }, noteTitleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, noteTitle: { color: '#272820', fontWeight: '700', fontSize: 16, flex: 1 }, noteTime: { color: '#99978E', fontSize: 11, marginLeft: 6 }, preview: { color: '#77776E', lineHeight: 19, marginTop: 7 }, tags: { color: '#647D6C', fontSize: 12, marginTop: 8 }, cardActions: { borderTopColor: '#F0EEE9', borderTopWidth: 1, marginTop: 12, paddingTop: 10, flexDirection: 'row', gap: 17 }, action: { color: '#42644F', fontWeight: '600', paddingVertical: 4 }, dangerAction: { color: '#A04F3D', fontWeight: '600', paddingVertical: 4 }, backupRow: { borderTopColor: '#E5E2D9', borderTopWidth: 1, paddingHorizontal: 20, paddingVertical: 13, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, backupPanel: { borderTopColor: '#E5E2D9', borderTopWidth: 1, paddingHorizontal: 16, paddingBottom: 10 }, backupActions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, paddingVertical: 6, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#EBE8E0' }, backupStatus: { color: '#77562D', fontSize: 12, lineHeight: 17, paddingVertical: 8 }, subtle: { color: '#8B8980', fontSize: 11 },
   editorContent: { paddingHorizontal: 21, paddingTop: 18, paddingBottom: 50 }, readOnly: { padding: 13, borderRadius: 12, backgroundColor: '#F0E6D1', marginBottom: 14 }, readOnlyTitle: { color: '#74502A', fontWeight: '700' }, readOnlyText: { color: '#74502A', marginTop: 4, lineHeight: 19 }, titleInput: { fontSize: 29, fontWeight: '700', color: '#22231D', paddingHorizontal: 0, paddingVertical: 8, marginBottom: 16 }, sectionLabel: { fontSize: 10, fontWeight: '800', letterSpacing: 1.4, color: '#797B6C', marginTop: 15, marginBottom: 7 }, bodyInput: { minHeight: 150, padding: 14, borderRadius: 13, backgroundColor: '#FFFEFC', color: '#25251F', fontSize: 16, lineHeight: 24, borderColor: '#EBE8E0', borderWidth: 1 }, field: { backgroundColor: '#FFFEFC', borderColor: '#EBE8E0', borderWidth: 1, borderRadius: 12, padding: 13, color: '#272820' }, pinRow: { alignSelf: 'flex-start', marginTop: 10 }, taskRow: { flexDirection: 'row', alignItems: 'center', gap: 9, paddingVertical: 5 }, checkbox: { width: 23, height: 23, borderRadius: 7, borderWidth: 1.5, borderColor: '#9A9A8C', alignItems: 'center', justifyContent: 'center' }, checked: { backgroundColor: '#496A52', borderColor: '#496A52' }, checkMark: { color: 'white', fontWeight: '800' }, taskInput: { flex: 1, paddingVertical: 8, color: '#272820', fontSize: 15 }, taskDone: { textDecorationLine: 'line-through', color: '#99978E' }, revision: { color: '#9B998F', fontSize: 11, textAlign: 'center', marginVertical: 22 }, readOnlyBody: { backgroundColor: '#FFFEFC', borderRadius: 13, padding: 15, borderColor: '#EBE8E0', borderWidth: 1, marginTop: 12 }, readBlock: { paddingVertical: 5, flexDirection: 'row', flexWrap: 'wrap' },
   audioPanel: { backgroundColor: '#FFFEFC', marginTop: 17, padding: 15, borderRadius: 15, borderColor: '#EBE8E0', borderWidth: 1 }, recordButton: { backgroundColor: '#F4E6E0', borderRadius: 12, padding: 13, alignItems: 'center', marginVertical: 12 }, recordButtonText: { color: '#A04435', fontWeight: '700' }, stopButton: { backgroundColor: '#A04435', borderRadius: 12, padding: 13, alignItems: 'center', marginVertical: 12 }, stopText: { color: 'white', fontWeight: '700' }, audioRow: { flexDirection: 'row', alignItems: 'center', gap: 9, borderTopColor: '#EFEDE7', borderTopWidth: 1, paddingVertical: 10 }, audioWithShare: { flexDirection: 'row', alignItems: 'center', gap: 3 }, audioTitle: { color: '#272820', fontWeight: '600' }, smallButton: { backgroundColor: '#E3EADF', borderRadius: 9, paddingHorizontal: 10, paddingVertical: 7 }, smallButtonText: { color: '#344D3F', fontWeight: '700', fontSize: 12 },
 });

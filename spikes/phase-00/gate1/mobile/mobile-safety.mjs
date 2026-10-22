@@ -15,6 +15,20 @@ export class SingleSaveGate {
   finish() { this.active = false; }
 }
 
+export class ArchiveOperationGate {
+  constructor() { this.exporting = false; this.finalizations = 0; }
+  beginExport() {
+    if (this.exporting || this.finalizations > 0) throw new Error('A recording is being finalized. Wait for it to finish before exporting a Full Archive.');
+    this.exporting = true; let released = false;
+    return () => { if (!released) { released = true; this.exporting = false; } };
+  }
+  beginFinalization() {
+    if (this.exporting) throw new Error('A Full Archive is being prepared. Wait for it to finish before finalizing a recording.');
+    this.finalizations++; let released = false;
+    return () => { if (!released) { released = true; this.finalizations = Math.max(0, this.finalizations - 1); } };
+  }
+}
+
 export class LatestDraftWriter {
   constructor(write) { this.write = write; this.pending = null; this.running = null; this.closed = false; }
   enqueue(value) { if (!this.closed) this.pending = value; }

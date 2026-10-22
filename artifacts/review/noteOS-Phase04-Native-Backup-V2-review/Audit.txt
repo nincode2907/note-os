@@ -1,0 +1,30 @@
+UTF-8 audit: PASS
+Files checked: 25
+All packaged files decode as UTF-8.
+
+Checked files:
+README.md
+evidence/editor-browser.log
+evidence/editor-build.log
+evidence/expo-check.log
+evidence/expo-doctor.log
+evidence/ios-export.log
+evidence/mobile-tests.log
+evidence/typecheck.log
+evidence/web-tests.log
+implementation.diff
+report.md
+source/docs/phase-04/native-backup-v2-compatibility.md
+source/spikes/phase-00/gate1/mobile/App.tsx
+source/spikes/phase-00/gate1/mobile/archive-reconcile.mjs
+source/spikes/phase-00/gate1/mobile/archive-store.mjs
+source/spikes/phase-00/gate1/mobile/archive-v2-native.mjs
+source/spikes/phase-00/gate1/mobile/full-archive.ts
+source/spikes/phase-00/gate1/mobile/mobile-safety.mjs
+source/spikes/phase-00/gate1/mobile/package-lock.json
+source/spikes/phase-00/gate1/mobile/package.json
+source/spikes/phase-00/gate1/mobile/store.ts
+source/spikes/phase-00/gate1/mobile/tests/archive-v2-native.test.mjs
+source/spikes/phase-00/gate1/mobile/tests/mvp04-1-safety.test.mjs
+source/spikes/phase-00/gate1/web/app/lib/archive-v2.mjs
+source/spikes/phase-00/gate1/web/app/lib/archive-v2.test.mjs

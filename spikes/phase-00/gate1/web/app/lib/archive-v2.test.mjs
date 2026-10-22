@@ -52,6 +52,16 @@ test('notes plus two recordings round trip preserves Unicode, lifecycle, revisio
   assert.equal(await sha256Blob(before.chunks[0].blob), await digest(before.chunks[0].blob));
   await assertUnchanged(source, before);
 });
+test('Web V2 reader accepts an iPhone source platform with the unchanged V2 manifest and recording contract', async () => {
+  const source = await fixture();
+  const iosArchive = await rewrite(await archive(source), (_entries, manifest) => { manifest.sourcePlatform = 'ios'; });
+  const verified = await verifyArchive(iosArchive);
+  assert.equal(verified.manifest.version, 2);
+  assert.equal(verified.manifest.sourcePlatform, 'ios');
+  assert.equal(verified.notes.length, 3);
+  assert.equal(verified.recordings.length, 2);
+  assert.equal(verified.chunks.length, 4);
+});
 test('fixed timestamp exports are deterministic and do not modify revisions, metadata or partial status', async () => {
   const source = await fixture(), before = await source.notes.snapshotArchive();
   assert.equal(await digest(await archive(source)), await digest(await archive(source)));
