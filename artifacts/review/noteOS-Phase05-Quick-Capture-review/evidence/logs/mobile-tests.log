@@ -1,0 +1,66 @@
+
+> test
+> node --experimental-strip-types --test tests/*.test.mjs
+
+✔ iPhone export → iPhone restore preserves canonical JSON, multilingual text, lifecycle and exact concatenated audio bytes (196.835583ms)
+✔ Web V2 export → iPhone verification and staging preserves exact concatenated audio SHA-256 and source metadata (16.252125ms)
+✔ iPhone V2 export → Web V2 reader accepts the unchanged logical V2 structure and normalizes audio to one chunk (4.212667ms)
+✔ supported rich-text structures and unsupported future note JSON remain unchanged in the archive (10.125666ms)
+✔ snapshot archive contains active, archived and trashed notes without lifecycle filtering (111.739541ms)
+✔ completed audio requires existing nonzero bytes; missing and zero-byte files block full export (3.758958ms)
+✔ storage estimate blocks insufficient space, accepts safe space and reports an unavailable estimate without pretending it was checked (0.209292ms)
+✔ interrupted recordings preserve metadata when no audio was finalized without claiming measured duration (9.3845ms)
+✔ portable iPhone recording metadata never exports an absolute native file URI (3.599875ms)
+✔ Skip aborts ID collisions; Merge skips an existing note with its audio group and repeated merge stays idempotent (6.688333ms)
+✔ bad manifest/audio checksum, duplicate entries and traversal paths reject before staging (87.986167ms)
+synthetic archive performance: Node v24.21.0, 32 MiB audio → 33 MiB TAR, 64 KiB source chunks, max write 65536 B, 1414 ms, sampled RSS start/peak/end 85/99/99 MiB
+✔ staging write failure aborts the stream and removes only the import destination (20.096708ms)
+✔ additive SQLite migration preserves existing notes, recordings, recovery rows and cleanup queue (1.198958ms)
+✔ SQLite import transaction commits note/audio references and provenance together (1.559ms)
+✔ SQLite trigger failure rolls back inserted note and recording while retaining staged journal for cleanup (1.848791ms)
+✔ crash recovery removes only journaled uncommitted files and retains committed or unrelated media (0.691417ms)
+✔ archive writer streams a 32 MiB synthetic recording in bounded chunks without retaining TAR bytes (1419.408458ms)
+(node:44247) [MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of file:///Users/buivannin/Desktop/workspace/personal/note-os/spikes/phase-00/gate1/mobile/document-subset.ts is not specified and it doesn't parse as CommonJS.
+Reparsing as ES module because module syntax was detected. This incurs a performance overhead.
+To eliminate this warning, add "type": "module" to /Users/buivannin/Desktop/workspace/personal/note-os/spikes/phase-00/gate1/mobile/package.json.
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ supported paragraph and checklist subset round-trips through native model (55.972625ms)
+✔ unsupported canonical structures and future schema remain read-only without changing bytes (0.39225ms)
+✔ native record uses the Web notes-only backup v1 contract and keeps checklist state (33.266625ms)
+✔ backup parser rejects invalid JSON and future bundle versions (2.05425ms)
+✔ canonical rich structure, formatting, nested lists, tasks, and multilingual text survive bridge validation (10.032333ms)
+✔ snapshot replies require the matching request id and preserve checked states (0.858542ms)
+✔ unsupported future schema remains unchanged and cannot enter an editable bridge message (0.262208ms)
+✔ malformed canonical documents and unsafe link protocols are rejected (0.461458ms)
+✔ bridge rejects malformed envelopes, unknown message types, oversized messages, and wrong-note sessions (0.456833ms)
+✔ stale and out-of-order WebView generations are rejected (0.131041ms)
+✔ background recovery decision only offers a same-revision active schema-v1 draft (0.172ms)
+✔ native save gate in source prevents overlapping commits and preserves the revision CAS call (6.46325ms)
+✔ recording gate locks double start/stop and navigation until verified persistence finishes (1.32975ms)
+✔ native recording ownership prevents Home Quick Voice and editor recording at the same time (0.114417ms)
+✔ Full Archive export and recording finalization cannot overlap (0.446875ms)
+✔ background requested while recording is best effort and start lock remains held (0.180875ms)
+✔ trashed notes cannot transition directly to archived (0.16975ms)
+✔ legacy Web v1 organization defaults are view-only and pinned items sort first (1.168458ms)
+✔ recovery drafts restore only at their exact base revision and known schema (0.102917ms)
+✔ draft writer serializes overlapping edits and leaves the newest snapshot last (28.048666ms)
+✔ normal edit then explicit discard leaves no journal when the editor is reopened (1.998667ms)
+✔ discard waits for an in-flight journal write, deletes it, and cannot recreate it (5.497125ms)
+✔ discard does not delete a journal from another revision and reopens the writer on failure (1.58925ms)
+✔ Keep Editing leaves unsaved text in the journal (0.160583ms)
+✔ journal clear runs only after note commit succeeds (0.512959ms)
+✔ native editing policy permits only active schema-v1 notes with supported native content (0.192291ms)
+✔ shared tag normalization rejects duplicates instead of silently dropping one (0.264833ms)
+✔ v4 migration is additive and keeps existing notes, recordings, editor journals and cleanup rows (4.156083ms)
+✔ native capture draft writes are versioned, retryable, and stale saves cannot clear newer text (2.961041ms)
+✔ native Quick Text note commit is idempotent and only creates an ordinary revision-zero note (277.142209ms)
+✔ voice commit inserts note, audio row and archive metadata together and removes its recovery journal (2.567375ms)
+✔ voice transaction failure rolls back note and audio rows while retaining the pending recovery journal (2.824458ms)
+ℹ tests 49
+ℹ suites 0
+ℹ pass 49
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2754.999333

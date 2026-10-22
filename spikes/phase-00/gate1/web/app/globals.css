@@ -61,6 +61,16 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .search-row { display: flex; align-items: center; gap: 10px; margin-bottom: 25px; }
 .searchbox { width: min(100%, 420px); min-height: 44px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); color: var(--ink); }
 .searchbox::placeholder { color: #89919a; }
+.quick-capture { margin: -8px 0 25px; padding: 13px 16px 10px; border: 1px solid #ddd8cd; border-radius: 13px; background: var(--surface); box-shadow: var(--shadow); transition: border-color .16s ease, box-shadow .16s ease; }
+.quick-capture:focus-within { border-color: #82927f; box-shadow: 0 0 0 3px #5d78551a; }
+.quick-capture-input { display: block; width: 100%; min-height: 83px; padding: 4px 2px 10px; border: 0; outline: 0; resize: vertical; background: transparent; color: var(--ink); font-family: Literata, Georgia, serif; font-size: 19px; line-height: 1.65; }
+.quick-capture-input::placeholder { color: #92928a; opacity: 1; }
+.quick-capture-footer { display: flex; align-items: center; gap: 14px; min-height: 47px; padding-top: 8px; border-top: 1px solid var(--line); }
+.quick-capture-hint { flex: 1; color: #777e76; font-size: 12px; }
+.quick-capture-save { min-width: 92px; }
+.quick-capture-status { min-height: 0; color: var(--success); font-size: 12px; line-height: 1.55; }
+.quick-capture-status:not(:empty) { padding-top: 8px; }
+.quick-capture-status.is-error { color: var(--danger); }
 .notes-controls { display: flex; align-items: center; gap: 18px; margin-bottom: 14px; }
 .notes-controls .search-row { flex: 1; min-width: 0; margin-bottom: 0; }
 .notes-controls .searchbox { flex: 1; min-width: 0; }
@@ -202,6 +212,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
   .home-heading.home-has-notes .eyebrow, .home-heading.home-has-notes .page-lede { display: none; }
   .home-heading .page-title { font-size: 32px; }
   .home-heading .new-note-button { min-height: 44px; padding: 8px 11px; white-space: nowrap; }
+  .quick-capture { margin: 0 0 21px; padding: 11px 12px 9px; border-radius: 12px; }
+  .quick-capture-input { min-height: 76px; font-size: 18px; }
+  .quick-capture-footer { gap: 8px; }
+  .quick-capture-hint { max-width: 190px; font-size: 11px; line-height: 1.4; }
+  .quick-capture-save { min-height: 44px; padding: 8px 13px; }
   .page-title { font-size: 34px; }
   .notes-controls { align-items: stretch; flex-direction: column; gap: 9px; }
   .notes-controls .search-row { width: 100%; }

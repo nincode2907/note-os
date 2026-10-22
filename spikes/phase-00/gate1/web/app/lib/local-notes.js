@@ -146,6 +146,28 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
     return note;
   }
 
+  async function createIfMissing(note) {
+    assertNoteRecord(note);
+    const database = await openDatabase();
+    const transaction = database.transaction(STORE_NAME, 'readwrite');
+    const done = transactionResult(transaction);
+    const store = transaction.objectStore(STORE_NAME);
+    try {
+      const existing = await requestResult(store.get(note.id));
+      if (existing) {
+        if (JSON.stringify(existing) !== JSON.stringify(note)) throw abort(transaction, new NoteConflictError());
+        await done;
+        return existing;
+      }
+      store.add(note);
+      await done;
+      return note;
+    } catch (error) {
+      try { await done; } catch { /* Consume the transaction abort before returning the original error. */ }
+      throw error;
+    }
+  }
+
   async function save(id, changes, expectedRevision) {
     assertExpectedRevision(expectedRevision);
     if (!changes || typeof changes.title !== 'string') throw new TypeError('A note title must be a string.');
@@ -336,7 +358,7 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
     }
   }
 
-  return { list, get, create, save, updateOrganization, setLifecycle, deleteForever, importNotes, snapshotArchive, importArchive };
+  return { list, get, create, createIfMissing, save, updateOrganization, setLifecycle, deleteForever, importNotes, snapshotArchive, importArchive };
 }
 
 function assertAudioTimestamp(value, label) {

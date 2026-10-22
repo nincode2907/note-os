@@ -3,6 +3,7 @@ import { assertNoteRecord, validateNoteDocument } from '../web/app/lib/note-vali
 import { normalizeTagList } from '../web/app/lib/note-organization.mjs';
 import { ArchiveOperationGate, canTransitionLifecycle, commitThenClearDraft } from './mobile-safety.mjs';
 import { commitArchiveBatch, migrateArchiveSchema } from './archive-store.mjs';
+import { commitQuickCaptureNote, commitQuickVoicePending, deleteQuickCaptureDraft, migrateQuickCaptureSchema, upsertQuickCaptureDraft } from './quick-capture-store.mjs';
 
 export type Lifecycle = 'active' | 'archived' | 'trashed';
 export type Note = { id: string; title: string; document: any; schemaVersion: number; createdAt: number; updatedAt: number; lifecycle: Lifecycle; revision: number; pinned: boolean; tags: string[]; [key: string]: any };
@@ -38,6 +39,7 @@ async function migrate(database: SQLite.SQLiteDatabase) {
       CREATE TABLE IF NOT EXISTS file_cleanup (file_uri TEXT PRIMARY KEY NOT NULL, created_at INTEGER NOT NULL); PRAGMA user_version = 2;`);
   });
   await migrateArchiveSchema(database);
+  await migrateQuickCaptureSchema(database);
 }
 function rawRecord(note: Note): string { return JSON.stringify(note); }
 function decode(row: { record_json: string }): Note {
@@ -55,6 +57,50 @@ export async function listRecordings(noteId: string): Promise<Recording[]> { con
 export async function listAllRecordings(): Promise<Recording[]> { const database = await db(); return database.getAllAsync<Recording>('SELECT id,note_id,title,file_uri,status,created_at FROM recordings ORDER BY id'); }
 
 export async function createNote(note: Note) { requireWriteableDocument(note); const database = await db(); await database.withExclusiveTransactionAsync(async txn => { await txn.runAsync('INSERT INTO notes(id,record_json,revision,lifecycle,updated_at) VALUES(?,?,?,?,?)', note.id, rawRecord(note), note.revision, note.lifecycle, note.updatedAt); }); }
+export async function createQuickCaptureNote(note: Note): Promise<{note:Note;created:boolean}> {
+  requireWriteableDocument(note);
+  const database = await db();
+  let outcome!: {note:Note;created:boolean};
+  await database.withExclusiveTransactionAsync(async txn => { outcome = await commitQuickCaptureNote(txn, note); });
+  return outcome;
+}
+export async function getQuickCaptureDraft(draftId = 'home') {
+  const database = await db();
+  const row = await database.getFirstAsync<{body:string;sequence:number;note_json:string|null}>('SELECT body,sequence,note_json FROM quick_capture_drafts WHERE draft_id=?', draftId);
+  return row ? { body: row.body, sequence: row.sequence, note: row.note_json ? JSON.parse(row.note_json) : null } : null;
+}
+export async function persistQuickCaptureDraft(body: string, sequence: number, note: Note | null = null, draftId = 'home') {
+  if (typeof body !== 'string' || !Number.isSafeInteger(sequence) || sequence < 0) throw new Error('Quick Capture draft metadata is invalid.');
+  if (note) requireWriteableDocument(note);
+  const database = await db();
+  await database.withExclusiveTransactionAsync(async txn => { await upsertQuickCaptureDraft(txn, { draftId, body, sequence, noteJson: note ? rawRecord(note) : null }); });
+}
+export async function clearQuickCaptureDraft(sequence: number, draftId = 'home') {
+  const database = await db();
+  await database.withExclusiveTransactionAsync(txn => deleteQuickCaptureDraft(txn, { draftId, sequence }));
+}
+export async function journalQuickVoiceCapture(note: Note, recording: Recording, metadata: RecordingArchiveMetadata) {
+  const database = await db();
+  await database.withExclusiveTransactionAsync(async txn => {
+    const existing = await txn.getFirstAsync<{note_json:string;recording_json:string}>('SELECT note_json,recording_json FROM quick_voice_pending WHERE recording_id=?', recording.id);
+    const noteJson = rawRecord(note), recordingJson = JSON.stringify(recording);
+    if (existing) {
+      if (existing.note_json !== noteJson || existing.recording_json !== recordingJson) throw new Error('A different Quick Voice recovery journal already uses this recording ID.');
+      return;
+    }
+    await txn.runAsync('INSERT INTO quick_voice_pending(recording_id,note_json,recording_json,metadata_json,created_at) VALUES(?,?,?,?,?)', recording.id, noteJson, recordingJson, JSON.stringify(metadata), Date.now());
+  });
+}
+export async function commitQuickVoiceCapture(recordingId: string) {
+  const database = await db();
+  let outcome: Awaited<ReturnType<typeof commitQuickVoicePending>> = null;
+  await database.withExclusiveTransactionAsync(async txn => { outcome = await commitQuickVoicePending(txn, recordingId); });
+  return outcome;
+}
+export async function listPendingQuickVoiceCaptures() {
+  const database = await db();
+  return database.getAllAsync<{recording_id:string;note_json:string;recording_json:string;metadata_json:string}>('SELECT recording_id,note_json,recording_json,metadata_json FROM quick_voice_pending ORDER BY created_at');
+}
 export async function saveNote(note: Note, expectedRevision: number): Promise<{ note: Note; recoveryJournalCleared: boolean; recoveryJournalError?: string }> {
   if (note.schemaVersion !== 1) throw new Error('Only active schema-v1 notes can be edited in this prototype.');
   requireWriteableDocument(note); const database = await db(); const updated = { ...note, tags: normalizeTagList(note.tags ?? []), revision: expectedRevision + 1, updatedAt: Date.now() };
@@ -100,6 +146,7 @@ function inferArchiveMetadata(recording: Recording): RecordingArchiveMetadata {
   const mimeType = ({ webm: 'audio/webm', ogg: 'audio/ogg', m4a: 'audio/mp4', mp4: 'audio/mp4', wav: 'audio/wav', mp3: 'audio/mpeg', aac: 'audio/aac', flac: 'audio/flac' } as Record<string, string>)[ext ?? ''] ?? 'audio/mp4';
   return { mimeType, ownerId: 'ios-local', updatedAt: recording.created_at, durationMs: 0, durationKnown: false, sourcePlatform: 'ios' };
 }
+export function recordingArchiveMetadata(recording: Recording): RecordingArchiveMetadata { return inferArchiveMetadata(recording); }
 export async function saveRecording(recording: Recording, archiveMetadata: RecordingArchiveMetadata = inferArchiveMetadata(recording)) {
   const database = await db(); await database.withExclusiveTransactionAsync(async txn => {
     await txn.runAsync('INSERT INTO recordings(id,note_id,title,file_uri,status,created_at) VALUES(?,?,?,?,?,?)', recording.id, recording.note_id, recording.title, recording.file_uri, recording.status, recording.created_at);

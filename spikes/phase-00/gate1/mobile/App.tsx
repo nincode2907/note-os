@@ -10,12 +10,13 @@ import * as Sharing from 'expo-sharing';
 import { makeBackup, parseBackup, filterNotes, sortNotes } from '../web/app/lib/mvp-utils.mjs';
 import { normalizeTagList } from '../web/app/lib/note-organization.mjs';
 import { canonicalToPlainText, createEmptyCanonicalDocument, validateCanonicalDocument } from '../web/packages/document-engine/src/index.js';
-import { beginRecordingFinalization, createNote, discardRecoveryDraft, exportNotes, getNote, getRecoveryDraft, importNotes, listNotes, listPendingFileCleanups, listRecordings, markFileCleanupDone, Note, permanentlyDeleteNote, RecoveryDraft, Recording, removeRecording, renameRecording, RevisionConflictError, saveNote, saveRecording, saveRecoveryDraft, setLifecycle, setPinned } from './store';
-import { canEditNativeNote, discardDraftSafely, LatestDraftWriter, recoveryDecision, RecordingSessionGate, SingleSaveGate } from './mobile-safety.mjs';
+import { beginRecordingFinalization, clearQuickCaptureDraft, commitQuickVoiceCapture, createNote, createQuickCaptureNote as createQuickCaptureRecord, discardRecoveryDraft, exportNotes, getNote, getQuickCaptureDraft, getRecoveryDraft, importNotes, journalQuickVoiceCapture, listNotes, listPendingFileCleanups, listPendingQuickVoiceCaptures, listRecordings, markFileCleanupDone, Note, permanentlyDeleteNote, persistQuickCaptureDraft, RecordingArchiveMetadata, RecoveryDraft, Recording, recordingArchiveMetadata, removeRecording, renameRecording, RevisionConflictError, saveNote, saveRecording, saveRecoveryDraft, setLifecycle, setPinned } from './store';
+import { canEditNativeNote, discardDraftSafely, LatestDraftWriter, recoveryDecision, RecordingSessionGate, SingleSaveGate, acquireNativeRecordingSession } from './mobile-safety.mjs';
 import { documentToNativeModel, nativeModelToDocument } from './document-subset';
 import { CanonicalEditor, CanonicalEditorHandle } from './CanonicalEditor';
 import { createEditorSession, validateEditorEnvelope } from './editor-bridge.mjs';
 import { createFullArchive, reconcileArchiveImports, restoreFullArchive } from './full-archive';
+import { captureSnapshotIsCurrent, commitQuickCaptureSnapshot, makeQuickCaptureNote, makeQuickVoiceNote, normalizeQuickCaptureInput, QuickCaptureSaveGate } from '../web/app/lib/quick-capture.mjs';
 
 type RootStack = { Home: undefined; Editor: { id: string } };
 const Stack = createNativeStackNavigator<RootStack>();
@@ -25,12 +26,144 @@ const timeNow = () => Date.now();
 function HomeScreen({ navigation }: any) {
   const [notes, setNotes] = useState<Note[]>([]); const [query, setQuery] = useState('');
   const [lifecycle, setLifecycleFilter] = useState<'active' | 'archived' | 'trashed'>('active'); const [status, setStatus] = useState(''); const [backupBusy, setBackupBusy] = useState(false); const [backupStatus, setBackupStatus] = useState('');
+  const [captureText, setCaptureText] = useState(''); const [captureReady, setCaptureReady] = useState(false); const [captureBusy, setCaptureBusy] = useState(false); const [captureFocused, setCaptureFocused] = useState(false); const [captureStatus, setCaptureStatus] = useState('');
+  const captureTextRef = useRef(''); const captureSequenceRef = useRef(0); const captureNoteRef = useRef<Note | null>(null); const captureTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null); const captureSaveGate = useRef(new QuickCaptureSaveGate());
+  const [voicePhase, setVoicePhase] = useState<'idle'|'requesting'|'starting'|'recording'|'stopping'|'saving'|'saved'|'interrupted'|'failed'>('idle'); const [voiceStatus, setVoiceStatus] = useState('');
+  const quickRecorder = useAudioRecorder({ ...RecordingPresets.HIGH_QUALITY, directory: 'document' }); const quickRecorderState = useAudioRecorderState(quickRecorder);
+  const quickVoiceGate = useRef(new RecordingSessionGate()); const quickVoiceRelease = useRef<null | (() => void)>(null); const quickVoicePending = useRef<null | { note: Note; recording: Recording; metadata: RecordingArchiveMetadata }>(null); const quickVoiceSaveGate = useRef(new QuickCaptureSaveGate()); const finishQuickVoiceRef = useRef<(interrupted?: boolean) => Promise<void>>(async () => {});
   const pendingPins = useRef(new Set<string>());
   const refresh = useCallback(async () => { setNotes(await listNotes()); const pending = await listPendingFileCleanups(); for (const uri of pending) { try { const file = new File(uri); if (file.exists) file.delete(); await markFileCleanupDone(uri); } catch (error) { setStatus(`File cleanup is pending retry: ${String(error)}`); } } }, []);
   async function togglePin(item: Note) { if (backupBusy || pendingPins.current.has(item.id)) return; pendingPins.current.add(item.id); try { await setPinned(item.id, !item.pinned, item.revision); await refresh(); } catch (error) { setStatus(String(error)); } finally { pendingPins.current.delete(item.id); } }
-  useEffect(() => { void (async () => { const unresolved = await reconcileArchiveImports(); if (unresolved.length) setStatus(`Archive recovery needs attention: ${unresolved.join(' ')}`); await refresh(); })().catch(error => setStatus(String(error))); }, [refresh]);
+  useEffect(() => { let mounted = true; void (async () => {
+    const draft = await getQuickCaptureDraft();
+    if (draft && mounted) { captureTextRef.current = draft.body; captureSequenceRef.current = draft.sequence; captureNoteRef.current = draft.note; setCaptureText(draft.body); }
+    const pendingVoices = await listPendingQuickVoiceCaptures();
+    for (const pending of pendingVoices) {
+      try {
+        const recording = JSON.parse(pending.recording_json) as Recording; const note = JSON.parse(pending.note_json) as Note; const metadata = JSON.parse(pending.metadata_json) as RecordingArchiveMetadata;
+        const file = recording.file_uri ? new File(recording.file_uri) : null;
+        if (file?.exists && file.size > 0) {
+          try {
+            await commitQuickVoiceCapture(recording.id);
+            if (mounted) setVoiceStatus('Recovered a finalized voice note after restart. Open it from Recent notes to play it.');
+          } catch (error) {
+            if (mounted) { quickVoicePending.current = { note, recording, metadata }; setVoicePhase('failed'); setVoiceStatus(`A finalized voice note is ready for retry. ${String(error)}`); }
+          }
+        } else if (mounted) {
+          setVoicePhase('failed'); setVoiceStatus('A voice recording needs attention. Its recovery journal is preserved because the audio file is unavailable.');
+        }
+      } catch (error) { if (mounted) { setVoicePhase('failed'); setVoiceStatus(`A voice recovery journal needs attention and has been preserved. ${String(error)}`); } }
+    }
+    const unresolved = await reconcileArchiveImports(); if (unresolved.length && mounted) setStatus(`Archive recovery needs attention: ${unresolved.join(' ')}`);
+    await refresh(); if (mounted) setCaptureReady(true);
+  })().catch(error => { if (mounted) { setStatus(String(error)); setCaptureReady(true); } }); return () => { mounted = false; if (captureTimerRef.current) clearTimeout(captureTimerRef.current); }; }, [refresh]);
   useEffect(() => { const unsubscribe = navigation.addListener('focus', () => { void refresh(); }); return unsubscribe; }, [navigation, refresh]);
+  const quickVoiceActive = ['requesting','starting','recording','stopping','saving'].includes(voicePhase) || Boolean(quickVoicePending.current);
+  usePreventRemove(quickVoiceActive, () => setVoiceStatus('Finish saving the voice note before leaving Quick Capture.'));
   const visible = useMemo(() => sortNotes(filterNotes(notes, query, lifecycle) as Note[]), [notes, query, lifecycle]);
+  function updateCapture(value: string) {
+    captureTextRef.current = value; captureSequenceRef.current += 1; captureNoteRef.current = null; setCaptureText(value); setCaptureStatus('');
+    const sequence = captureSequenceRef.current;
+    if (captureTimerRef.current) clearTimeout(captureTimerRef.current);
+    captureTimerRef.current = setTimeout(() => {
+      void persistQuickCaptureDraft(value, sequence, null).then(async () => {
+        if (!normalizeQuickCaptureInput(value) && captureSequenceRef.current === sequence) await clearQuickCaptureDraft(sequence);
+      }).catch(error => setCaptureStatus(`Recovery copy could not be saved. Keep the app open until your note is committed. ${String(error)}`));
+    }, 250);
+  }
+  async function saveCapture() {
+    if (backupBusy || !captureReady || !captureSaveGate.current.begin()) return;
+    const original = captureTextRef.current, body = normalizeQuickCaptureInput(original), sequence = captureSequenceRef.current;
+    if (!body) { setCaptureStatus(''); captureSaveGate.current.finish(); return; }
+    const note = captureNoteRef.current ?? makeQuickCaptureNote(body, { id: makeId(), now: timeNow() }) as Note;
+    captureNoteRef.current = note; setCaptureBusy(true); setCaptureStatus('Saving on this device…');
+    try {
+      if (captureTimerRef.current) { clearTimeout(captureTimerRef.current); captureTimerRef.current = null; }
+      const outcome = await commitQuickCaptureSnapshot({
+        snapshot: { text: original, sequence, note },
+        persist: (snapshot: { text: string; sequence: number; note: Note }) => persistQuickCaptureDraft(snapshot.text, snapshot.sequence, snapshot.note),
+        commit: async (snapshot: { text: string; sequence: number; note: Note }) => (await createQuickCaptureRecord(snapshot.note)).note,
+        clear: (snapshot: { text: string; sequence: number; note: Note }) => clearQuickCaptureDraft(snapshot.sequence),
+        isCurrent: (snapshot: { text: string; sequence: number; note: Note }) => captureSnapshotIsCurrent(captureTextRef.current, captureSequenceRef.current, snapshot),
+      });
+      setNotes(current => [outcome.note, ...current.filter(item => item.id !== outcome.note.id)]);
+      if (captureSnapshotIsCurrent(captureTextRef.current, captureSequenceRef.current, { text: original, sequence })) {
+        captureTextRef.current = ''; captureNoteRef.current = null; setCaptureText('');
+      }
+      setCaptureStatus('Saved on this device. Ready for another thought.');
+    } catch (error) { setCaptureStatus(`Could not save. Your text is still here. Retry when ready. ${String(error)}`); }
+    finally { captureSaveGate.current.finish(); setCaptureBusy(false); }
+  }
+  async function retryQuickVoiceSave() {
+    const pending = quickVoicePending.current as { note: Note; recording: Recording; metadata: RecordingArchiveMetadata } | null;
+    if (!pending || !quickVoiceSaveGate.current.begin()) return;
+    setVoicePhase('saving'); setVoiceStatus('Saving the finalized voice note…');
+    try {
+      await journalQuickVoiceCapture(pending.note, pending.recording, pending.metadata);
+      await commitQuickVoiceCapture(pending.recording.id);
+      quickVoicePending.current = null;
+      setNotes(current => [pending.note, ...current.filter(item => item.id !== pending.note.id)]);
+      setVoicePhase(pending.recording.status === 'interrupted' ? 'interrupted' : 'saved');
+      setVoiceStatus(pending.recording.status === 'interrupted' ? 'Interrupted recording saved. Open its note to play it.' : 'Voice note saved. Open it from Recent notes to play it.');
+    } catch (error) { setVoicePhase('failed'); setVoiceStatus(`Audio is finalized and held for retry. ${String(error)}`); }
+    finally { quickVoiceSaveGate.current.finish(); }
+  }
+  async function startQuickVoice() {
+    const gate = quickVoiceGate.current;
+    if (backupBusy || quickVoicePending.current || !gate.beginStart()) return;
+    const release = acquireNativeRecordingSession('quick-voice-home');
+    if (!release) { gate.finish(); setVoicePhase('failed'); setVoiceStatus('Another recording session is already active. Stop and save it first.'); return; }
+    quickVoiceRelease.current = release; setVoicePhase('requesting'); setVoiceStatus('Requesting microphone access…');
+    try {
+      const permission = await AudioModule.requestRecordingPermissionsAsync();
+      if (!permission.granted) { gate.finish(); quickVoiceRelease.current?.(); quickVoiceRelease.current = null; setVoicePhase('failed'); setVoiceStatus('Microphone access was denied. No note was created; enable access in iOS Settings to record.'); return; }
+      gate.move('requesting', 'starting'); setVoicePhase('starting');
+      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true, allowsBackgroundRecording: false });
+      await quickRecorder.prepareToRecordAsync();
+      if (gate.backgroundRequested) { await quickRecorder.stop(); gate.finish(); quickVoiceRelease.current?.(); quickVoiceRelease.current = null; setVoicePhase('interrupted'); setVoiceStatus('Recording start was interrupted before audio began. No note was created.'); return; }
+      quickRecorder.record(); gate.move('starting', 'recording'); setVoicePhase('recording'); setVoiceStatus('Recording locally. It will stop when the app leaves the foreground.');
+    } catch (error) { gate.finish(); quickVoiceRelease.current?.(); quickVoiceRelease.current = null; setVoicePhase('failed'); setVoiceStatus(`Recording could not start. No note was created. ${String(error)}`); }
+  }
+  async function finishQuickVoice(interrupted = false) {
+    const gate = quickVoiceGate.current;
+    let releaseFinalization: (() => void) | null = null;
+    try { releaseFinalization = beginRecordingFinalization(); }
+    catch (error) { setVoiceStatus(`Recording is still active. Wait for Full Archive to finish, then stop and save. ${String(error)}`); return; }
+    if (!gate.beginStop()) { releaseFinalization(); return; }
+    setVoicePhase('stopping'); setVoiceStatus('Stopping and verifying the audio file…');
+    try {
+      await quickRecorder.stop();
+      const uri = quickRecorder.uri;
+      if (!uri) throw new Error('Recorder did not provide a finalized audio file.');
+      const file = new File(uri);
+      if (!file.exists || file.size <= 0) throw new Error('Finalized audio is missing or empty.');
+      const createdAt = timeNow(), note = makeQuickVoiceNote({ id: makeId(), now: createdAt }) as Note;
+      const recording: Recording = { id: `recording-${makeId()}`, note_id: note.id, title: `Voice note · ${new Date(createdAt).toLocaleString()}`, file_uri: uri, status: interrupted ? 'interrupted' : 'complete', created_at: createdAt };
+      quickVoicePending.current = { note, recording, metadata: recordingArchiveMetadata(recording) };
+      setVoicePhase('saving'); setVoiceStatus('Audio finalized. Saving its note and recording together…');
+      await retryQuickVoiceSave();
+    } catch (error) {
+      const uri = quickRecorder.uri;
+      const file = uri ? new File(uri) : null;
+      if (file?.exists && file.size > 0 && !quickVoicePending.current) {
+        const createdAt = timeNow(), note = makeQuickVoiceNote({ id: makeId(), now: createdAt }) as Note;
+        const recording: Recording = { id: `recording-${makeId()}`, note_id: note.id, title: `Interrupted voice note · ${new Date(createdAt).toLocaleString()}`, file_uri: uri!, status: 'interrupted', created_at: createdAt };
+        quickVoicePending.current = { note, recording, metadata: recordingArchiveMetadata(recording) };
+        setVoicePhase('failed'); setVoiceStatus(`The recording stopped unexpectedly. Its audio is preserved for retry. ${String(error)}`);
+      } else { setVoicePhase('failed'); setVoiceStatus(`Recording could not be saved. No note was created. ${String(error)}`); }
+    } finally { gate.finish(); releaseFinalization?.(); quickVoiceRelease.current?.(); quickVoiceRelease.current = null; }
+  }
+  finishQuickVoiceRef.current = finishQuickVoice;
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', state => {
+      if (state === 'active') return;
+      if (captureTimerRef.current) { clearTimeout(captureTimerRef.current); captureTimerRef.current = null; }
+      const text = captureTextRef.current, sequence = captureSequenceRef.current;
+      void persistQuickCaptureDraft(text, sequence, captureNoteRef.current).then(async () => { if (!normalizeQuickCaptureInput(text)) await clearQuickCaptureDraft(sequence); }).catch(error => setCaptureStatus(`Background capture checkpoint failed. Your on-screen text remains available. ${String(error)}`));
+      if (quickVoiceGate.current.requestBackgroundStop()) void finishQuickVoiceRef.current(true);
+    });
+    return () => subscription.remove();
+  }, []);
   async function create() {
     if (backupBusy) return;
     const now = timeNow();
@@ -96,7 +229,7 @@ function HomeScreen({ navigation }: any) {
   }
   function deleteForever(note: Note) {
     if (backupBusy) return;
-    Alert.alert('Delete permanently?', `“${note.title || 'Untitled note'}” and its local recordings will be removed from this device. Notes backup does not include audio.`, [
+    Alert.alert('Delete permanently?', `“${note.title || 'Untitled note'}” and its local recordings will be removed from this device. Legacy JSON V1 excludes audio; Full Archive V2 includes local recordings.`, [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: () => { void (async () => {
         if (backupBusy) return;
@@ -107,14 +240,26 @@ function HomeScreen({ navigation }: any) {
       })(); } },
     ]);
   }
-  return <SafeAreaView style={styles.screen} edges={['top', 'left', 'right', 'bottom']}>
-    <View style={styles.homeHeader}><View><Text style={styles.eyebrow}>PRIVATE · ON THIS DEVICE</Text><Text style={styles.heading}>Your notes</Text></View><Pressable disabled={backupBusy} style={styles.primary} onPress={() => void create()}><Text style={styles.primaryText}>＋ New note</Text></Pressable></View>
+  const pendingVoiceForUi = quickVoicePending.current as { note: Note; recording: Recording; metadata: RecordingArchiveMetadata } | null;
+  const voiceButtonLabel = pendingVoiceForUi && voicePhase === 'failed' ? 'Retry save' : voicePhase === 'recording' ? `Stop · ${Math.round(quickRecorderState.durationMillis / 1000)}s` : ['requesting','starting','stopping','saving'].includes(voicePhase) ? ({ requesting: 'Requesting…', starting: 'Starting…', stopping: 'Stopping…', saving: 'Saving…' } as Record<string,string>)[voicePhase] : 'Voice';
+  return <SafeAreaView style={styles.screen} edges={['top', 'left', 'right', 'bottom']}><KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <View style={styles.homeHeader}><View><Text style={styles.eyebrow}>PRIVATE · ON THIS DEVICE</Text><Text style={styles.heading}>Your notes</Text></View><Pressable disabled={backupBusy || quickVoiceActive} style={styles.primary} onPress={() => void create()}><Text style={styles.primaryText}>＋ Full editor</Text></Pressable></View>
+    <View style={[styles.captureCard, captureFocused && styles.captureFocused]}>
+      <TextInput accessibilityLabel="What's on your mind?" style={styles.captureInput} placeholder="What's on your mind?" placeholderTextColor="#99978E" value={captureText} onChangeText={updateCapture} onFocus={() => setCaptureFocused(true)} onBlur={() => setCaptureFocused(false)} editable={captureReady} multiline textAlignVertical="top" blurOnSubmit={false} returnKeyType="default" />
+      <View style={styles.captureActions}>
+        <Pressable accessibilityRole="button" accessibilityLabel={voiceButtonLabel} disabled={backupBusy || !['idle','saved','interrupted','failed','recording'].includes(voicePhase) || Boolean(pendingVoiceForUi && voicePhase !== 'failed')} style={[styles.voiceButton, voicePhase === 'recording' && styles.voiceButtonRecording]} onPress={() => { if (pendingVoiceForUi && voicePhase === 'failed') void retryQuickVoiceSave(); else if (voicePhase === 'recording') void finishQuickVoice(false); else { setVoiceStatus(''); void startQuickVoice(); } }}><Text style={[styles.voiceButtonText, voicePhase === 'recording' && styles.voiceButtonRecordingText]}>{voiceButtonLabel}</Text></Pressable>
+        <Text style={styles.captureHint}>{captureBusy ? 'Saving locally…' : 'A thought is enough. Shape it later.'}</Text>
+        <Pressable accessibilityRole="button" disabled={backupBusy || !captureReady || captureBusy || !normalizeQuickCaptureInput(captureText)} style={[styles.captureSaveButton, (backupBusy || !captureReady || captureBusy || !normalizeQuickCaptureInput(captureText)) && styles.disabledButton]} onPress={() => void saveCapture()}><Text style={styles.captureSaveText}>{captureBusy ? 'Saving…' : 'Save'}</Text></Pressable>
+      </View>
+      {captureStatus ? <Text accessibilityRole="alert" style={[styles.captureMessage, captureStatus.startsWith('Could not') && styles.captureError]}>{captureStatus}</Text> : null}
+      {voiceStatus ? <Text accessibilityLiveRegion="polite" style={[styles.captureMessage, voicePhase === 'failed' && styles.captureError]}>{voicePhase === 'recording' ? `● ${Math.round(quickRecorderState.durationMillis / 1000)}s · ${voiceStatus}` : voiceStatus}</Text> : null}
+    </View>
     <TextInput style={styles.search} placeholder="Search notes and tags" value={query} onChangeText={setQuery} returnKeyType="search" />
     <View style={styles.segmentRow}>{(['active', 'archived', 'trashed'] as const).map(value => <Pressable key={value} onPress={() => setLifecycleFilter(value)} style={[styles.segment, lifecycle === value && styles.segmentActive]}><Text style={[styles.segmentText, lifecycle === value && styles.segmentTextActive]}>{value === 'active' ? 'Notes' : value === 'archived' ? 'Archive' : 'Trash'}</Text></Pressable>)}</View>
     {status ? <Text accessibilityRole="alert" style={styles.status}>{status}</Text> : null}
-    <FlatList data={visible} keyExtractor={item => item.id} scrollEnabled={!backupBusy} contentContainerStyle={styles.listContent} ListEmptyComponent={<Text style={styles.empty}>Nothing here yet. Create a note or import a Web backup.</Text>} renderItem={({ item }) => {
+    <FlatList data={visible} keyExtractor={item => item.id} scrollEnabled={!backupBusy && !quickVoiceActive} keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive" contentContainerStyle={styles.listContent} ListEmptyComponent={<Text style={styles.empty}>{captureText ? 'Your unsaved thought is safe above.' : 'Capture a thought above, or open the full editor.'}</Text>} renderItem={({ item }) => {
       const body = canonicalToPlainText(item.document); const preview = body.status === 'projected' ? body.text : 'Rich content · opens read-only';
-      return <Pressable disabled={backupBusy} style={styles.noteCard} onPress={() => navigation.navigate('Editor', { id: item.id })}>
+      return <Pressable disabled={backupBusy || quickVoiceActive} style={styles.noteCard} onPress={() => navigation.navigate('Editor', { id: item.id })}>
         <View style={styles.noteTitleRow}><Text style={styles.noteTitle} numberOfLines={1}>{item.pinned ? '◆ ' : ''}{item.title || 'Untitled note'}</Text><Text style={styles.noteTime}>{new Date(item.updatedAt).toLocaleDateString()}</Text></View>
         <Text style={styles.preview} numberOfLines={2}>{preview || 'No text yet'}</Text>
         {!!item.tags?.length && <Text style={styles.tags}>{item.tags.map((tag: string) => `#${tag}`).join('   ')}</Text>}
@@ -125,11 +270,11 @@ function HomeScreen({ navigation }: any) {
     }} />
     <View style={styles.backupPanel}>
       <View style={styles.segmentRow}><View><Text style={styles.sectionLabel}>DATA & BACKUP</Text><Text style={styles.subtle}>Local manual transfer · archives are unencrypted</Text></View><Text style={styles.subtle}>V2</Text></View>
-      <View style={styles.backupActions}><Text style={styles.subtle}>Full Archive V2 · notes + audio</Text><Pressable disabled={backupBusy} onPress={chooseArchiveMode}><Text style={styles.action}>Restore</Text></Pressable><Pressable disabled={backupBusy} onPress={() => void backupExportFull()}><Text style={styles.action}>Export</Text></Pressable></View>
+      <View style={styles.backupActions}><Text style={styles.subtle}>Full Archive V2 · notes + audio</Text><Pressable disabled={backupBusy || quickVoiceActive} onPress={chooseArchiveMode}><Text style={styles.action}>Restore</Text></Pressable><Pressable disabled={backupBusy || quickVoiceActive} onPress={() => void backupExportFull()}><Text style={styles.action}>Export</Text></Pressable></View>
       <View style={styles.backupActions}><Text style={styles.subtle}>Legacy JSON V1 · notes only</Text><Pressable disabled={backupBusy} onPress={() => void backupImport()}><Text style={styles.action}>Import</Text></Pressable><Pressable disabled={backupBusy} onPress={() => void backupExportLegacy()}><Text style={styles.action}>Export</Text></Pressable></View>
       {backupBusy || backupStatus ? <Text accessibilityRole="alert" style={styles.backupStatus}>{backupBusy ? 'Working · ' : ''}{backupStatus}</Text> : null}
     </View>
-  </SafeAreaView>;
+  </KeyboardAvoidingView></SafeAreaView>;
 }
 
 function AudioItem({ item, onPlay, onRename, onDelete }: { item: Recording; onPlay: (item: Recording) => void; onRename: (item: Recording) => void; onDelete: (item: Recording) => void }) {
@@ -141,7 +286,7 @@ function AudioPlayback({ uri, onClose }: { uri: string; onClose: () => void }) {
 function EditorScreen({ route, navigation }: any) {
   const [note, setNote] = useState<Note | null>(null); const [title, setTitle] = useState(''); const [document, setDocument] = useState<any>(createEmptyCanonicalDocument()); const [tags, setTags] = useState(''); const [pinned, setPinned] = useState(false); const [editable, setEditable] = useState(false); const [readOnlyReason, setReadOnlyReason] = useState(''); const [dirty, setDirty] = useState(false); const [status, setStatus] = useState(''); const [recordings, setRecordings] = useState<Recording[]>([]); const [recordingPhase, setRecordingPhase] = useState('idle'); const [recoveryHeld, setRecoveryHeld] = useState(false); const [playingUri, setPlayingUri] = useState(''); const [editorFailed, setEditorFailed] = useState(false); const [editorReady, setEditorReady] = useState(false); const [editorHeight, setEditorHeight] = useState(320); const [saving, setSaving] = useState(false);
   const [sessionId, setSessionId] = useState(() => createEditorSession(route.params.id, makeId()));
-  const gateRef = useRef(new RecordingSessionGate()); const editorRef = useRef<CanonicalEditorHandle>(null); const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null); const draftWriter = useRef<LatestDraftWriter | null>(null); const latestRef = useRef<any>(null);
+  const gateRef = useRef(new RecordingSessionGate()); const recordingSessionRelease = useRef<null | (() => void)>(null); const editorRef = useRef<CanonicalEditorHandle>(null); const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null); const draftWriter = useRef<LatestDraftWriter | null>(null); const latestRef = useRef<any>(null);
   const noteRef = useRef<Note | null>(null); const documentRef = useRef<any>(null); const dirtyRef = useRef(false); const changeSequence = useRef(0); const editorGeneration = useRef(0); const sessionRef = useRef(sessionId); const snapshotSequence = useRef(0); const pendingSnapshot = useRef<null | { id: string; resolve: (value: { document: any; generation: number }) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>(null); const saveLock = useRef(new SingleSaveGate());
   const draftValues = useRef({ title, document, tags, pinned }); draftValues.current = { title, document, tags, pinned };
   sessionRef.current = sessionId;
@@ -246,16 +391,19 @@ function EditorScreen({ route, navigation }: any) {
   }
   usePreventRemove(!gateRef.current.canNavigate() || dirty || saving, ({ data }) => { if (!gateRef.current.canNavigate()) { setStatus('Stop and save the recording before leaving this note.'); return; } back(data.action); });
   async function startRecording() {
-    const gate = gateRef.current; if (!gate.beginStart()) return; setRecordingPhase(gate.phase);
+    const gate = gateRef.current; if (!gate.beginStart()) return;
+    const release = acquireNativeRecordingSession(`editor:${route.params.id}`);
+    if (!release) { gate.finish(); setStatus('Another recording session is already active. Stop and save it first.'); return; }
+    recordingSessionRelease.current = release; setRecordingPhase(gate.phase);
     try {
       const permission = await AudioModule.requestRecordingPermissionsAsync();
-      if (!permission.granted) { setStatus('Microphone access was denied. Enable it in iOS Settings to record.'); gate.finish(); setRecordingPhase(gate.phase); return; }
+      if (!permission.granted) { setStatus('Microphone access was denied. Enable it in iOS Settings to record.'); gate.finish(); setRecordingPhase(gate.phase); recordingSessionRelease.current?.(); recordingSessionRelease.current = null; return; }
       gate.move('requesting', 'starting'); setRecordingPhase(gate.phase);
       await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true, allowsBackgroundRecording: false });
       await recorder.prepareToRecordAsync();
-      if (gate.backgroundRequested) { await recorder.stop(); gate.finish(); setRecordingPhase(gate.phase); setStatus('Recording start was cancelled when the app left the foreground.'); return; }
+      if (gate.backgroundRequested) { await recorder.stop(); gate.finish(); setRecordingPhase(gate.phase); setStatus('Recording start was cancelled when the app left the foreground.'); recordingSessionRelease.current?.(); recordingSessionRelease.current = null; return; }
       recorder.record(); gate.move('starting', 'recording'); setRecordingPhase(gate.phase); setStatus('Recording locally…');
-    } catch (error) { gate.finish(); setRecordingPhase(gate.phase); setStatus(`Recording could not start: ${String(error)}`); }
+    } catch (error) { gate.finish(); setRecordingPhase(gate.phase); recordingSessionRelease.current?.(); recordingSessionRelease.current = null; setStatus(`Recording could not start: ${String(error)}`); }
   }
   async function finishRecording(interrupted = false) {
     const gate = gateRef.current; if (!note) return;
@@ -275,7 +423,7 @@ function EditorScreen({ route, navigation }: any) {
       setRecordings(await listRecordings(note.id));
       setStatus(interrupted ? 'Recording stopped when the app left the foreground and was kept as interrupted for recovery.' : 'Recording finalized, verified and saved locally.');
     } catch (error) { setStatus(`Audio save state is unknown. Any recorder file was left in place for recovery: ${String(error)}`); }
-    finally { gate.finish(); setRecordingPhase(gate.phase); releaseFinalization(); }
+    finally { gate.finish(); setRecordingPhase(gate.phase); releaseFinalization(); recordingSessionRelease.current?.(); recordingSessionRelease.current = null; }
   }
   useEffect(() => {
     const sub = AppState.addEventListener('change', state => { if (state === 'active') return; const gate = gateRef.current; if (gate.requestBackgroundStop()) void finishRecording(true); });
@@ -343,6 +491,7 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#F7F5F0' }, center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 28, gap: 12, backgroundColor: '#F7F5F0' },
   homeHeader: { paddingHorizontal: 22, paddingTop: 20, paddingBottom: 14, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' }, eyebrow: { fontSize: 10, letterSpacing: 1.7, color: '#6F705F', fontWeight: '700' }, heading: { fontSize: 32, fontWeight: '700', color: '#202019', marginTop: 4 },
   primary: { backgroundColor: '#344D3F', paddingHorizontal: 15, paddingVertical: 11, borderRadius: 22 }, primaryWide: { backgroundColor: '#344D3F', borderRadius: 14, padding: 15, alignItems: 'center', marginVertical: 18 }, primaryText: { color: 'white', fontSize: 14, fontWeight: '700' },
+  captureCard: { marginHorizontal: 20, marginBottom: 5, paddingHorizontal: 14, paddingTop: 10, paddingBottom: 8, borderRadius: 15, borderWidth: 1, borderColor: '#E2DED4', backgroundColor: '#FFFEFC' }, captureFocused: { borderColor: '#82927F' }, captureInput: { minHeight: 75, maxHeight: 150, paddingHorizontal: 1, paddingTop: 5, color: '#272820', fontSize: 18, lineHeight: 26 }, captureActions: { flexDirection: 'row', alignItems: 'center', gap: 9, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#EBE8E0', paddingTop: 8 }, voiceButton: { minHeight: 42, justifyContent: 'center', paddingHorizontal: 12, borderRadius: 22, backgroundColor: '#F2EAE1' }, voiceButtonText: { color: '#654A37', fontWeight: '700', fontSize: 13 }, voiceButtonRecording: { backgroundColor: '#A04435' }, voiceButtonRecordingText: { color: 'white' }, captureHint: { flex: 1, color: '#85847B', fontSize: 10, lineHeight: 14 }, captureSaveButton: { minWidth: 68, minHeight: 42, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 14, borderRadius: 22, backgroundColor: '#344D3F' }, captureSaveText: { color: 'white', fontWeight: '700', fontSize: 13 }, disabledButton: { opacity: .48 }, captureMessage: { paddingTop: 8, color: '#416958', fontSize: 11, lineHeight: 16 }, captureError: { color: '#A04F3D' },
   search: { backgroundColor: '#ECEAE2', marginHorizontal: 20, borderRadius: 13, paddingHorizontal: 14, paddingVertical: 12, color: '#202019' }, segmentRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 7, marginHorizontal: 20, marginTop: 13, marginBottom: 7 }, segment: { flex: 1, paddingVertical: 9, alignItems: 'center', borderRadius: 18 }, segmentActive: { backgroundColor: '#DCE4DA' }, segmentText: { color: '#77786F', fontSize: 13, fontWeight: '600' }, segmentTextActive: { color: '#344D3F' },
   status: { color: '#77562D', backgroundColor: '#F0E6D1', padding: 10, marginHorizontal: 20, borderRadius: 9, overflow: 'hidden', marginVertical: 5 }, listContent: { paddingHorizontal: 18, paddingBottom: 16, flexGrow: 1 }, empty: { textAlign: 'center', color: '#88877F', padding: 36, lineHeight: 22 }, noteCard: { backgroundColor: '#FFFEFC', padding: 16, borderRadius: 16, marginTop: 10, borderWidth: 1, borderColor: '#EBE8E0' }, noteTitleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, noteTitle: { color: '#272820', fontWeight: '700', fontSize: 16, flex: 1 }, noteTime: { color: '#99978E', fontSize: 11, marginLeft: 6 }, preview: { color: '#77776E', lineHeight: 19, marginTop: 7 }, tags: { color: '#647D6C', fontSize: 12, marginTop: 8 }, cardActions: { borderTopColor: '#F0EEE9', borderTopWidth: 1, marginTop: 12, paddingTop: 10, flexDirection: 'row', gap: 17 }, action: { color: '#42644F', fontWeight: '600', paddingVertical: 4 }, dangerAction: { color: '#A04F3D', fontWeight: '600', paddingVertical: 4 }, backupRow: { borderTopColor: '#E5E2D9', borderTopWidth: 1, paddingHorizontal: 20, paddingVertical: 13, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }, backupPanel: { borderTopColor: '#E5E2D9', borderTopWidth: 1, paddingHorizontal: 16, paddingBottom: 10 }, backupActions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, paddingVertical: 6, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#EBE8E0' }, backupStatus: { color: '#77562D', fontSize: 12, lineHeight: 17, paddingVertical: 8 }, subtle: { color: '#8B8980', fontSize: 11 },
   editorContent: { paddingHorizontal: 21, paddingTop: 18, paddingBottom: 50 }, readOnly: { padding: 13, borderRadius: 12, backgroundColor: '#F0E6D1', marginBottom: 14 }, readOnlyTitle: { color: '#74502A', fontWeight: '700' }, readOnlyText: { color: '#74502A', marginTop: 4, lineHeight: 19 }, titleInput: { fontSize: 29, fontWeight: '700', color: '#22231D', paddingHorizontal: 0, paddingVertical: 8, marginBottom: 16 }, sectionLabel: { fontSize: 10, fontWeight: '800', letterSpacing: 1.4, color: '#797B6C', marginTop: 15, marginBottom: 7 }, bodyInput: { minHeight: 150, padding: 14, borderRadius: 13, backgroundColor: '#FFFEFC', color: '#25251F', fontSize: 16, lineHeight: 24, borderColor: '#EBE8E0', borderWidth: 1 }, field: { backgroundColor: '#FFFEFC', borderColor: '#EBE8E0', borderWidth: 1, borderRadius: 12, padding: 13, color: '#272820' }, pinRow: { alignSelf: 'flex-start', marginTop: 10 }, taskRow: { flexDirection: 'row', alignItems: 'center', gap: 9, paddingVertical: 5 }, checkbox: { width: 23, height: 23, borderRadius: 7, borderWidth: 1.5, borderColor: '#9A9A8C', alignItems: 'center', justifyContent: 'center' }, checked: { backgroundColor: '#496A52', borderColor: '#496A52' }, checkMark: { color: 'white', fontWeight: '800' }, taskInput: { flex: 1, paddingVertical: 8, color: '#272820', fontSize: 15 }, taskDone: { textDecorationLine: 'line-through', color: '#99978E' }, revision: { color: '#9B998F', fontSize: 11, textAlign: 'center', marginVertical: 22 }, readOnlyBody: { backgroundColor: '#FFFEFC', borderRadius: 13, padding: 15, borderColor: '#EBE8E0', borderWidth: 1, marginTop: 12 }, readBlock: { paddingVertical: 5, flexDirection: 'row', flexWrap: 'wrap' },

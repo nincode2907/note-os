@@ -9,6 +9,18 @@ export class RecordingSessionGate {
   finish() { this.phase = 'idle'; this.backgroundRequested = false; }
 }
 
+let nativeRecordingOwner = null;
+export function acquireNativeRecordingSession(owner) {
+  if (typeof owner !== 'string' || !owner || nativeRecordingOwner !== null) return null;
+  nativeRecordingOwner = owner;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    if (nativeRecordingOwner === owner) nativeRecordingOwner = null;
+  };
+}
+
 export class SingleSaveGate {
   active = false;
   begin() { if (this.active) return false; this.active = true; return true; }

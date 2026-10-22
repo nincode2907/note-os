@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ArchiveOperationGate, canEditNativeNote, canTransitionLifecycle, commitThenClearDraft, discardDraftSafely, LatestDraftWriter, normalizeNoteView, recoveryDecision, RecordingSessionGate } from '../mobile-safety.mjs';
+import { acquireNativeRecordingSession, ArchiveOperationGate, canEditNativeNote, canTransitionLifecycle, commitThenClearDraft, discardDraftSafely, LatestDraftWriter, normalizeNoteView, recoveryDecision, RecordingSessionGate } from '../mobile-safety.mjs';
 import { normalizeTagList, sortNotes } from '../../web/app/lib/mvp-utils.mjs';
 
 test('recording gate locks double start/stop and navigation until verified persistence finishes', () => {
@@ -17,6 +17,16 @@ test('recording gate locks double start/stop and navigation until verified persi
   assert.equal(gate.canNavigate(), false);
   gate.finish();
   assert.equal(gate.canNavigate(), true);
+});
+
+test('native recording ownership prevents Home Quick Voice and editor recording at the same time', () => {
+  const releaseHome = acquireNativeRecordingSession('quick-voice-home');
+  assert.equal(typeof releaseHome, 'function');
+  assert.equal(acquireNativeRecordingSession('editor:note-1'), null);
+  releaseHome(); releaseHome();
+  const releaseEditor = acquireNativeRecordingSession('editor:note-1');
+  assert.equal(typeof releaseEditor, 'function');
+  releaseEditor();
 });
 
 test('Full Archive export and recording finalization cannot overlap', () => {

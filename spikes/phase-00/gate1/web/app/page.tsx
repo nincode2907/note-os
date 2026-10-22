@@ -5,9 +5,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createNotesRepository, makeEmptyNote } from './lib/local-notes.js';
 import { filterNotes, filterNotesByTags, sortNotes } from './lib/mvp-utils.mjs';
 import { tagKey } from './lib/note-organization.mjs';
+import { captureSnapshotIsCurrent, commitQuickCaptureSnapshot, makeQuickCaptureNote, normalizeQuickCaptureInput, QuickCaptureSaveGate } from './lib/quick-capture.mjs';
 
 type SortMode = 'updated' | 'created' | 'title';
 const HOME_PREFERENCES_KEY = 'noteos:mvp03:home-preferences';
+const QUICK_CAPTURE_KEY = 'noteos:mvp05:quick-capture';
 
 function textOf(document: any) {
   const text: string[] = [];
@@ -37,6 +39,13 @@ export default function Home() {
   const [ready, setReady] = useState(false);
   const [busyPinIds, setBusyPinIds] = useState<string[]>([]);
   const busyPinIdsRef = useRef(new Set<string>());
+  const [captureText, setCaptureText] = useState('');
+  const [captureStatus, setCaptureStatus] = useState('');
+  const [captureBusy, setCaptureBusy] = useState(false);
+  const captureTextRef = useRef('');
+  const captureSequenceRef = useRef(0);
+  const captureNoteRef = useRef<any>(null);
+  const captureGate = useRef(new QuickCaptureSaveGate());
 
   const refresh = useCallback(async (clearError = true) => {
     try { setNotes(await createNotesRepository().list()); if (clearError) setError(''); }
@@ -47,6 +56,14 @@ export default function Home() {
   useEffect(() => {
     const preferences = preferencesFromStorage();
     setQuery(preferences.query); setSort(preferences.sort); setSelectedTags(preferences.tags); setPreferencesReady(true);
+    try {
+      const savedCapture = JSON.parse(localStorage.getItem(QUICK_CAPTURE_KEY) ?? 'null');
+      if (savedCapture && typeof savedCapture.body === 'string' && Number.isSafeInteger(savedCapture.sequence) && savedCapture.sequence >= 0) {
+        captureTextRef.current = savedCapture.body; setCaptureText(savedCapture.body);
+        captureSequenceRef.current = savedCapture.sequence;
+        captureNoteRef.current = savedCapture.note && typeof savedCapture.note.id === 'string' ? savedCapture.note : null;
+      }
+    } catch { setCaptureStatus('The previous unsaved capture could not be read. Its text may still be available in browser storage.'); }
     void refresh();
   }, [refresh]);
 
@@ -74,6 +91,45 @@ export default function Home() {
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not create a note.'); }
   }
 
+  function updateCapture(value: string) {
+    captureTextRef.current = value; captureSequenceRef.current += 1; captureNoteRef.current = null; setCaptureText(value);
+    setCaptureStatus('');
+    try {
+      if (value) localStorage.setItem(QUICK_CAPTURE_KEY, JSON.stringify({ body: value, sequence: captureSequenceRef.current, note: null }));
+      else localStorage.removeItem(QUICK_CAPTURE_KEY);
+    } catch { setCaptureStatus('This browser could not save a recovery copy. Keep this page open until the note is saved.'); }
+  }
+
+  async function saveQuickCapture() {
+    if (!captureGate.current.begin()) return;
+    const original = captureTextRef.current;
+    const body = normalizeQuickCaptureInput(original);
+    if (!body) { captureStatus && setCaptureStatus(''); captureGate.current.finish(); return; }
+    const sequence = captureSequenceRef.current;
+    const note = captureNoteRef.current ?? makeQuickCaptureNote(body);
+    captureNoteRef.current = note;
+    setCaptureBusy(true); setCaptureStatus('Saving on this device…');
+    try {
+      const outcome = await commitQuickCaptureSnapshot({
+        snapshot: { text: original, sequence, note },
+        persist: async (snapshot: { text: string; sequence: number; note: any }) => { localStorage.setItem(QUICK_CAPTURE_KEY, JSON.stringify({ body: snapshot.text, sequence: snapshot.sequence, note: snapshot.note })); },
+        commit: async (snapshot: { text: string; sequence: number; note: any }) => createNotesRepository().createIfMissing(snapshot.note),
+        clear: async (snapshot: { text: string; sequence: number; note: any }) => {
+          const stored = JSON.parse(localStorage.getItem(QUICK_CAPTURE_KEY) ?? 'null');
+          if (stored?.sequence === snapshot.sequence && stored?.note?.id === snapshot.note.id) localStorage.removeItem(QUICK_CAPTURE_KEY);
+        },
+        isCurrent: (snapshot: { text: string; sequence: number; note: any }) => captureSnapshotIsCurrent(captureTextRef.current, captureSequenceRef.current, snapshot),
+      });
+      setNotes((current) => [outcome.note, ...current.filter((item) => item.id !== outcome.note.id)]);
+      if (captureSnapshotIsCurrent(captureTextRef.current, captureSequenceRef.current, { text: original, sequence })) {
+        captureTextRef.current = ''; captureNoteRef.current = null; setCaptureText('');
+      }
+      setError(''); setCaptureStatus('Saved on this device. Ready for another thought.');
+    } catch (cause) {
+      setCaptureStatus(cause instanceof Error ? `Could not save. Your text is still here. Retry when ready. ${cause.message}` : 'Could not save. Your text is still here. Retry when ready.');
+    } finally { captureGate.current.finish(); setCaptureBusy(false); }
+  }
+
   async function togglePin(note: any) {
     if (busyPinIdsRef.current.has(note.id)) return;
     busyPinIdsRef.current.add(note.id);
@@ -96,8 +152,14 @@ export default function Home() {
 
   const hasFilters = Boolean(query || selectedTags.length);
   return <>
-    <div className={`page-heading home-heading ${notes.some((note) => note.lifecycle === 'active') ? 'home-has-notes' : ''}`}><div className="home-intro"><p className="eyebrow">A quiet place to think</p><h1 className="page-title">Your notes</h1><p className="page-lede">A little space for what you want to remember.</p></div><div className="actions"><button className="btn btn-primary new-note-button" onClick={createNote}>＋ New note</button></div></div>
+    <div className={`page-heading home-heading ${notes.some((note) => note.lifecycle === 'active') ? 'home-has-notes' : ''}`}><div className="home-intro"><p className="eyebrow">A quiet place to think</p><h1 className="page-title">Your notes</h1><p className="page-lede">A little space for what you want to remember.</p></div><div className="actions"><button className="btn btn-quiet new-note-button" onClick={createNote}>Open full editor</button></div></div>
     {error && <div className="notice error" role="alert">{error} Your notes stay stored locally.</div>}
+    <form className="quick-capture" aria-label="Quick Capture" onSubmit={(event) => { event.preventDefault(); void saveQuickCapture(); }}>
+      <label className="screen-reader" htmlFor="quick-capture-input">What's on your mind?</label>
+      <textarea id="quick-capture-input" className="quick-capture-input" placeholder="What's on your mind?" value={captureText} onChange={(event) => updateCapture(event.target.value)} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); void saveQuickCapture(); } }} rows={3} />
+      <div className="quick-capture-footer"><span className="quick-capture-hint">A thought is enough. You can shape it later.</span><button className="btn btn-primary quick-capture-save" type="submit" disabled={captureBusy || !normalizeQuickCaptureInput(captureText)}>{captureBusy ? 'Saving…' : 'Save note'}</button></div>
+      <div className={`quick-capture-status ${captureStatus.startsWith('Could not') ? 'is-error' : ''}`} role="status" aria-live="polite">{captureStatus}</div>
+    </form>
     <div className="notes-controls">
       <div className="search-row"><label className="screen-reader" htmlFor="note-search">Search notes</label><input id="note-search" className="searchbox" type="search" placeholder="Search titles, notes and tags…" value={query} onChange={(event) => setQuery(event.target.value)} /><span className="toolbar-label">{visibleNotes.length} {visibleNotes.length === 1 ? 'note' : 'notes'}</span></div>
       <label className="sort-control"><span>Sort</span><select aria-label="Sort notes" value={sort} onChange={(event) => setSort(event.target.value as SortMode)}><option value="updated">Recently updated</option><option value="created">Recently created</option><option value="title">Title A–Z</option></select></label>
