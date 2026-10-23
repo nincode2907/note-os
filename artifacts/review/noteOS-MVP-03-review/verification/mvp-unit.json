@@ -1,8 +1,0 @@
-{
-  "command": "rtk npm --prefix spikes/phase-00/gate1/web run test:mvp",
-  "status": "PASS",
-  "tests": 40,
-  "passed": 40,
-  "failed": 0,
-  "includes": ["organization metadata revision guard", "future record schema read-only", "lifecycle metadata preservation", "backup v1 compatibility", "tag validation and filtering", "coordinator serialization and recovery"]
-}

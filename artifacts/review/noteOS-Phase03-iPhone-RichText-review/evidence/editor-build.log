@@ -1,5 +1,0 @@
-
-> build:editor
-> node scripts/build-editor-bundle.mjs
-
-Built offline Tiptap editor asset (404803 bytes).

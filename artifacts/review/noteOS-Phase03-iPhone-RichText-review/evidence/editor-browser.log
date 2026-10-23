@@ -1,5 +1,0 @@
-
-> test:editor-browser
-> node scripts/editor-browser-check.mjs
-
-PASS Chromium 156.0.8078.4: local Tiptap runtime, canonical round-trip, bold toolbar, task toggle, IME snapshot deferral, and zero external requests.

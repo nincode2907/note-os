@@ -1,9 +1,0 @@
-{
-  "status": "BLOCKED",
-  "runner": "UI Lens capture API from the shared local UI Lens repository, imported through its existing tsx loader",
-  "targets": ["home-pinned", "editor-checklist", "mobile-navigation"],
-  "result": "The seeded capture run did not produce per-target output or a manifest before it was stopped after no visible progress.",
-  "sharedProjectModified": false,
-  "fallback": "Playwright 1.64.1 screenshots in evidence/",
-  "note": "The existing UI Lens runner itself completed its audio-idle desktop/mobile capture successfully; the block is specific to this MVP-03 fixture run."
-}

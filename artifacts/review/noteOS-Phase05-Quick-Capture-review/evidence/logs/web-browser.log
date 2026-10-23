@@ -1,5 +1,0 @@
-
-> test:quick-capture-browser
-> node scripts/mvp-05-quick-capture-browser.mjs
-
-PASS Chromium 156.0.8078.4: reload recovery, empty guard, double-click dedupe, canonical Unicode save, independent notes, editor open, 1440px desktop and 390px phone layout; zero console errors and external requests.

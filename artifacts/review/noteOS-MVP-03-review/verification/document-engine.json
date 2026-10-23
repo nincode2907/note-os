@@ -1,8 +1,0 @@
-{
-  "command": "rtk npm --prefix spikes/phase-00/gate1/web run test:documents",
-  "status": "PASS",
-  "tests": 31,
-  "passed": 31,
-  "failed": 0,
-  "coverage": ["canonical v1 checklist schema", "task checked-state attributes", "Vietnamese, Japanese, emoji preservation", "future schema read-only behavior"]
-}
