@@ -12,7 +12,8 @@ services:
       TS_HOSTNAME: ${NOTEOS_TAILSCALE_HOSTNAME:?Set an owner-approved unique device hostname}
       TS_USERSPACE: "true"
     secrets:
-      - tailscale_auth_key
+      - source: tailscale_auth_key
+        target: ts_authkey
     volumes:
       - noteos_dedicated_tailscale_state:/var/lib/tailscale
     networks:
