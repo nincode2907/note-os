@@ -122,6 +122,60 @@ test('archive, trash, and restore retain pinned and tag metadata', async () => {
   assert.equal(active.pinned, true); assert.deepEqual(active.tags, ['Personal', '日本語']);
 });
 
+test('sync enrollment writes each eligible local mutation and outbox entry durably', async () => {
+  const { name, repo } = repository();
+  await repo.setDefaultSyncEnrollment(true);
+  const created = await repo.create(makeNote('outbox-create'));
+  let outbox = await repo.listSyncOutbox();
+  assert.equal(outbox.length, 1); assert.equal(JSON.parse(outbox[0].recordJson).id, created.id);
+  const changed = await repo.save(created.id, { title: 'updated', document: canonical('日本語・tiếng Việt') }, created.revision);
+  outbox = await repo.listSyncOutbox(); assert.equal(outbox.length, 2); assert.equal(JSON.parse(outbox[1].recordJson).title, 'updated');
+  const reopened = createNotesRepository(globalThis.indexedDB, name);
+  assert.equal((await reopened.listSyncOutbox()).length, 2); assert.equal((await reopened.get('outbox-create')).revision, changed.revision);
+});
+
+test('existing notes require explicit owner enrollment and DEVICE_ONLY or recording-bearing notes are excluded', async () => {
+  const { name, repo } = repository();
+  const privateNote = await repo.create(makeNote('owner-choice'));
+  const deviceOnly = await repo.create({ ...makeNote('never-upload'), privacy: 'DEVICE_ONLY' });
+  const audioNote = await repo.create(makeNote('audio-local'));
+  const db = await new Promise((resolve,reject) => { const request = indexedDB.open(name,3); request.onsuccess=()=>resolve(request.result); request.onerror=()=>reject(request.error); });
+  const tx=db.transaction('recordings','readwrite');tx.objectStore('recordings').put({id:'recording-a',noteId:audioNote.id,status:'interrupted'});await new Promise((resolve,reject)=>{tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);});db.close();
+  await repo.setSyncEnrollment([privateNote.id,deviceOnly.id,audioNote.id],true);
+  assert.equal((await repo.listSyncOutbox()).length,1);
+  const state=await repo.getSyncState();assert.equal(state.conflicts.length,0);
+});
+
+test('pull applies note and durable cursor in one transaction; failed apply leaves cursor unchanged', async () => {
+  const { name, repo } = repository();
+  const remote = { ...makeNote('remote'), title: 'Remote 日本語', revision: 3 };
+  const change = { id: remote.id, cursor: 7, serverVersion: 2, serverEpoch: 'epoch-a', event: 'upsert', recordJson: JSON.stringify(remote), contentHash: 'hash', lifecycle: 'active' };
+  await repo.commitSyncPull({ serverEpoch: 'epoch-a', serverCursor: 7, changes: [change] });
+  const state = await repo.getSyncState(); assert.equal(state.state.history.serverCursor, 7); assert.equal(state.state.history.serverEpoch, 'epoch-a');
+  assert.equal((await createNotesRepository(globalThis.indexedDB,name).get('remote')).title, 'Remote 日本語');
+  await assert.rejects(repo.commitSyncPull({ serverEpoch: 'epoch-a', serverCursor: 8, changes: [{ ...change, id: 'bad', cursor: 8, recordJson: '{' }] }));
+  assert.equal((await repo.getSyncState()).state.history.serverCursor, 7); assert.equal(await repo.get('bad'), null);
+});
+
+test('remote ID collision preserves local content and retries one deterministic conflict copy', async () => {
+  const { repo } = repository();
+  const local = await repo.create(makeNote('collision', 'local version'));
+  const remote = makeNote('collision', 'remote version');
+  const change = { id: remote.id, cursor: 1, serverVersion: 1, serverEpoch: 'epoch-test', event: 'upsert', recordJson: JSON.stringify(remote), contentHash: 'hash', lifecycle: 'active' };
+  for (let attempt = 0; attempt < 2; attempt++) await repo.commitSyncPull({ serverEpoch: 'epoch-test', serverCursor: 1, changes: [change] });
+  assert.equal((await repo.get(local.id)).title, 'local version');
+  const notes = await repo.list(); assert.equal(notes.filter(note => note.title.includes('(Sync conflict)')).length, 1);
+  assert.equal((await repo.getSyncState()).conflicts.filter(item => item.kind === 'edit-edit').length, 1);
+});
+
+test('remote tombstone colliding with a local edit is held for review and never deletes the note', async () => {
+  const { repo } = repository(); const local=await repo.create(makeNote('edit-versus-delete','local offline edit'));
+  await repo.commitSyncPull({serverEpoch:'epoch-delete',serverCursor:9,changes:[{id:local.id,cursor:9,serverVersion:2,serverEpoch:'epoch-delete',event:'tombstone',recordJson:null,contentHash:null,lifecycle:'trashed'}]});
+  assert.equal((await repo.get(local.id)).title,'local offline edit');
+  const state=await repo.getSyncState();assert.ok(state.conflicts.some(row=>row.kind==='edit-delete'&&row.noteId===local.id));
+  assert.equal(state.state.history.serverCursor,9);
+});
+
 test('future note record schemas remain preserved but cannot be edited or organized as schema v1', async () => {
   const { repo } = repository();
   const future = { ...makeEmptyNote(100, 'future-record'), schemaVersion: 2, futureMetadata: { keep: true } };

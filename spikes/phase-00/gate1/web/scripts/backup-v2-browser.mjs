@@ -6,7 +6,7 @@ import { seedBackupFixture, fingerprint } from './backup-v2-fixture.mjs';
 import { createTar, readTar } from '../app/lib/archive-tar.mjs';
 const require = createRequire(import.meta.url), root = fileURLToPath(new URL('../../../../../', import.meta.url));
 const { chromium } = require(require.resolve('playwright', { paths: [process.env.NOTEOS_PLAYWRIGHT_ROOT ?? `${root}/../ui-lens`] }));
-const baseUrl = process.env.NOTEOS_TEST_URL ?? 'http://127.0.0.1:15710', output = `${root}/artifacts/review/noteOS-Backup-V2-review/evidence`;
+const baseUrl = process.env.NOTEOS_TEST_URL ?? 'http://127.0.0.1:15710', output = process.env.NOTEOS_BACKUP_V2_EVIDENCE ?? `${root}/artifacts/review/noteOS-Backup-V2-review/evidence`;
 await mkdir(output, { recursive: true });
 const browser = await chromium.launch(), results = [], diagnostics = { consoleErrors: [], pageErrors: [], externalRequests: [] };
 async function context(viewport = { width: 1440, height: 1000 }) {

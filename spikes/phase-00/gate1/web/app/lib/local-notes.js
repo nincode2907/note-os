@@ -2,13 +2,19 @@ import { assertNoteRecord, validateNoteDocument } from './note-validation.mjs';
 import { normalizeTagList } from './note-organization.mjs';
 import { requireVerifiedArchive } from './archive-v2.mjs';
 import { addAudioAnchor, deleteAudioAnchor, emptyAudioAnchorSet, renameAudioAnchor, validateAudioAnchorSet } from './audio-anchors.mjs';
+import { canonicalJson } from './sync-protocol.mjs';
 export { NoteDocumentError } from './note-validation.mjs';
 
 const DATABASE_NAME = 'noteos-mvp-01';
-const DATABASE_VERSION = 2;
+const DATABASE_VERSION = 3;
 const STORE_NAME = 'notes';
 const RECORDINGS_STORE = 'recordings';
 const RECORDING_CHUNKS_STORE = 'recordingChunks';
+const SYNC_OUTBOX_STORE = 'syncOutbox';
+const SYNC_BASELINES_STORE = 'syncBaselines';
+const SYNC_STATE_STORE = 'syncState';
+const SYNC_CONFLICTS_STORE = 'syncConflicts';
+const SYNC_ENROLLMENT_STORE = 'syncEnrollment';
 
 export class NoteNotFoundError extends Error {
   constructor(id) {
@@ -59,6 +65,11 @@ function abort(transaction, error) {
   return error;
 }
 
+function notifyLocalCommit() {
+  try { globalThis.dispatchEvent?.(new Event('noteos:local-note-commit')); } catch {}
+  try { const channel = new BroadcastChannel('noteos-local-commits'); channel.postMessage({ type: 'committed' }); channel.close(); } catch {}
+}
+
 export function makeEmptyNote(now = Date.now(), id = crypto.randomUUID()) {
   return {
     id,
@@ -104,6 +115,11 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
             chunks.createIndex('recordingId', 'recordingId', { unique: false });
             chunks.createIndex('recordingSequence', ['recordingId', 'sequence'], { unique: true });
           }
+          if (!database.objectStoreNames.contains(SYNC_OUTBOX_STORE)) database.createObjectStore(SYNC_OUTBOX_STORE, { keyPath: 'operationId' });
+          if (!database.objectStoreNames.contains(SYNC_BASELINES_STORE)) database.createObjectStore(SYNC_BASELINES_STORE, { keyPath: 'id' });
+          if (!database.objectStoreNames.contains(SYNC_STATE_STORE)) database.createObjectStore(SYNC_STATE_STORE, { keyPath: 'key' });
+          if (!database.objectStoreNames.contains(SYNC_CONFLICTS_STORE)) database.createObjectStore(SYNC_CONFLICTS_STORE, { keyPath: 'id' });
+          if (!database.objectStoreNames.contains(SYNC_ENROLLMENT_STORE)) database.createObjectStore(SYNC_ENROLLMENT_STORE, { keyPath: 'id' });
         };
         request.onsuccess = () => {
           request.result.onversionchange = () => request.result.close();
@@ -117,6 +133,151 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
       });
     }
     return databasePromise;
+  }
+
+  async function hasExistingDatabase() {
+    if (!indexedDBFactory?.databases) return false;
+    return (await indexedDBFactory.databases()).some(database => database.name === databaseName);
+  }
+
+  async function enqueueMutation(transaction, note, { remote = false, optedIn = false } = {}) {
+    const enrollments = transaction.objectStore(SYNC_ENROLLMENT_STORE);
+    const preferences = transaction.objectStore(SYNC_STATE_STORE);
+    const [enrollment, preference, recordings] = await Promise.all([
+      requestResult(enrollments.get(note.id)), requestResult(preferences.get('defaultEnrollment')),
+      requestResult(transaction.objectStore(RECORDINGS_STORE).index('noteId').count(note.id)),
+    ]);
+    if (remote || recordings > 0) return;
+    const allowed = note.privacy !== 'DEVICE_ONLY' && (optedIn || enrollment?.optedIn === true || preference?.value === true);
+    if (!allowed) return;
+    enrollments.put({ id: note.id, optedIn: true, updatedAt: Date.now() });
+    const baseline = await requestResult(transaction.objectStore(SYNC_BASELINES_STORE).get(note.id));
+    const operation = { operationId: crypto.randomUUID(), entityId: note.id, localRevision: note.revision, baseServerVersion: baseline?.serverVersion ?? 0, ownerApproved: true, type: 'upsert', recordJson: canonicalJson(note), createdAt: Date.now() };
+    transaction.objectStore(SYNC_OUTBOX_STORE).add(operation);
+  }
+
+  async function setSyncEnrollment(ids, optedIn = true) {
+    if (!Array.isArray(ids) || ids.some(id => typeof id !== 'string')) throw new TypeError('Invalid note selection.');
+    const database = await openDatabase();
+    const transaction = database.transaction([STORE_NAME, RECORDINGS_STORE, SYNC_ENROLLMENT_STORE, SYNC_OUTBOX_STORE, SYNC_BASELINES_STORE, SYNC_STATE_STORE], 'readwrite');
+    const done = transactionResult(transaction);
+    const notes = transaction.objectStore(STORE_NAME), recordings = transaction.objectStore(RECORDINGS_STORE);
+    try {
+      for (const id of ids) {
+        const note = await requestResult(notes.get(id));
+        if (!note || note.privacy === 'DEVICE_ONLY') continue;
+        if ((await requestResult(recordings.index('noteId').count(id))) > 0) continue;
+        transaction.objectStore(SYNC_ENROLLMENT_STORE).put({ id, optedIn, updatedAt: Date.now() });
+        if (optedIn) await enqueueMutation(transaction, note, { optedIn: true });
+        else for (const operation of await requestResult(transaction.objectStore(SYNC_OUTBOX_STORE).getAll())) if (operation.entityId === id) transaction.objectStore(SYNC_OUTBOX_STORE).delete(operation.operationId);
+      }
+      await done;
+    } catch (error) { abort(transaction, error); try { await done; } catch {} throw error; }
+  }
+
+  async function setDefaultSyncEnrollment(value) {
+    const database = await openDatabase();
+    const transaction = database.transaction(SYNC_STATE_STORE, 'readwrite');
+    const done = transactionResult(transaction);
+    transaction.objectStore(SYNC_STATE_STORE).put({ key: 'defaultEnrollment', value: Boolean(value) });
+    await done;
+  }
+
+  async function listSyncOutbox(limit = 100) {
+    const database = await openDatabase(); const transaction = database.transaction([SYNC_OUTBOX_STORE, RECORDINGS_STORE, STORE_NAME, SYNC_ENROLLMENT_STORE], 'readonly'); const done = transactionResult(transaction);
+    const [rows, recordings, notes, enrolled] = await Promise.all([requestResult(transaction.objectStore(SYNC_OUTBOX_STORE).getAll()), requestResult(transaction.objectStore(RECORDINGS_STORE).getAll()), requestResult(transaction.objectStore(STORE_NAME).getAll()), requestResult(transaction.objectStore(SYNC_ENROLLMENT_STORE).getAll())]); await done;
+    const audioNotes = new Set(recordings.map(row => row.noteId)), noteMap = new Map(notes.map(row => [row.id,row])), enrolledSet = new Set(enrolled.filter(row => row.optedIn).map(row => row.id));
+    return rows.filter(row => !audioNotes.has(row.entityId) && noteMap.get(row.entityId)?.privacy !== 'DEVICE_ONLY' && enrolledSet.has(row.entityId)).sort((a,b) => a.createdAt-b.createdAt).slice(0, limit);
+  }
+
+  async function saveSyncRecovery(reason, serverHistory = null) {
+    const database = await openDatabase(); const transaction = database.transaction(SYNC_STATE_STORE, 'readwrite'); const done = transactionResult(transaction);
+    transaction.objectStore(SYNC_STATE_STORE).put({ key: 'recovery', value: { reason, serverHistory, at: Date.now() } }); await done;
+  }
+
+  async function setSyncPaired(value) {
+    const database = await openDatabase(); const transaction = database.transaction(SYNC_STATE_STORE, 'readwrite'); const done = transactionResult(transaction);
+    transaction.objectStore(SYNC_STATE_STORE).put({ key: 'paired', value: Boolean(value) }); await done;
+  }
+
+  async function getSyncState() {
+    const database = await openDatabase(); const transaction = database.transaction([SYNC_STATE_STORE, SYNC_CONFLICTS_STORE], 'readonly'); const done = transactionResult(transaction);
+    const [state, conflicts] = await Promise.all([requestResult(transaction.objectStore(SYNC_STATE_STORE).getAll()), requestResult(transaction.objectStore(SYNC_CONFLICTS_STORE).getAll())]);
+    await done; return { state: Object.fromEntries(state.map(row => [row.key, row.value ?? row])), conflicts };
+  }
+
+  async function getSyncBaseline(id) {
+    const database = await openDatabase(); const transaction = database.transaction(SYNC_BASELINES_STORE, 'readonly'); const done = transactionResult(transaction);
+    const row = await requestResult(transaction.objectStore(SYNC_BASELINES_STORE).get(id)); await done; return row ?? null;
+  }
+
+  async function recordSyncConflict(operationId, conflict) {
+    const database = await openDatabase(); const transaction = database.transaction([STORE_NAME, SYNC_OUTBOX_STORE, SYNC_BASELINES_STORE, SYNC_CONFLICTS_STORE], 'readwrite'); const done = transactionResult(transaction);
+    try {
+      const outbox = transaction.objectStore(SYNC_OUTBOX_STORE), operation = await requestResult(outbox.get(operationId));
+      if (operation) {
+        const current = await requestResult(transaction.objectStore(STORE_NAME).get(operation.entityId));
+        const remote = conflict.remote?.record;
+        const conflictId = `conflict-${conflict.serverEpoch}-${operation.entityId}-${conflict.actualVersion}`.replace(/[^A-Za-z0-9_-]/g, '_').slice(0,128);
+        if (remote && current && canonicalJson(remote) !== canonicalJson(current)) {
+          const notes = transaction.objectStore(STORE_NAME);
+          if (!(await requestResult(notes.get(conflictId)))) notes.add({ ...remote, id: conflictId, title: `${remote.title || 'Untitled note'} (Sync conflict)`, revision: 0, updatedAt: Date.now() });
+          transaction.objectStore(SYNC_CONFLICTS_STORE).put({ id: conflictId, noteId: operation.entityId, conflictNoteId: conflictId, kind: 'edit-edit', createdAt: Date.now() });
+        } else transaction.objectStore(SYNC_CONFLICTS_STORE).put({ id: `conflict-${operation.entityId}`, noteId: operation.entityId, kind: conflict.tombstoned ? 'edit-delete' : 'id-collision', createdAt: Date.now() });
+        if (conflict.actualVersion > 0) transaction.objectStore(SYNC_BASELINES_STORE).put({ id: operation.entityId, serverVersion: conflict.actualVersion, localRevision: current?.revision ?? 0 });
+        outbox.delete(operationId);
+      }
+      await done;
+    } catch (error) { abort(transaction,error); try { await done; } catch {} throw error; }
+  }
+
+  async function commitSyncPull({ serverEpoch, serverCursor, changes }) {
+    const database = await openDatabase();
+    const transaction = database.transaction([STORE_NAME, RECORDINGS_STORE, SYNC_OUTBOX_STORE, SYNC_BASELINES_STORE, SYNC_STATE_STORE, SYNC_CONFLICTS_STORE, SYNC_ENROLLMENT_STORE], 'readwrite');
+    const done = transactionResult(transaction);
+    const notes = transaction.objectStore(STORE_NAME), outbox = transaction.objectStore(SYNC_OUTBOX_STORE), baselines = transaction.objectStore(SYNC_BASELINES_STORE);
+    try {
+      for (const change of changes) {
+        const current = await requestResult(notes.get(change.id));
+        const localPending = (await requestResult(outbox.getAll())).some(op => op.entityId === change.id);
+        const localRecordings = await requestResult(transaction.objectStore(RECORDINGS_STORE).index('noteId').count(change.id));
+        const remote = change.event === 'tombstone' ? null : JSON.parse(change.recordJson);
+        const baseline = await requestResult(baselines.get(change.id));
+        if (localRecordings > 0) {
+          transaction.objectStore(SYNC_CONFLICTS_STORE).put({ id: `audio:${change.id}`, noteId: change.id, kind: 'audio-review', serverCursor: change.cursor, createdAt: Date.now() });
+          continue;
+        }
+        if (current && (!baseline || localPending || current.revision !== baseline.localRevision)) {
+          if (remote && canonicalJson(current) !== canonicalJson(remote)) {
+            const conflictId = `conflict-${change.serverEpoch}-${change.id}-${change.serverVersion}`.replace(/[^A-Za-z0-9_-]/g, '_').slice(0,128);
+            const existing = await requestResult(notes.get(conflictId));
+            if (!existing) {
+              const copy = { ...remote, id: conflictId, title: `${remote.title || 'Untitled note'} (Sync conflict)`, revision: 0, updatedAt: Date.now(), lifecycle: remote.lifecycle };
+              notes.add(copy); transaction.objectStore(SYNC_CONFLICTS_STORE).put({ id: conflictId, noteId: change.id, conflictNoteId: conflictId, kind: 'edit-edit', serverCursor: change.cursor, createdAt: Date.now() });
+            }
+          } else if (!localPending && remote) baselines.put({ id: change.id, serverVersion: change.serverVersion, localRevision: current.revision, contentHash: change.contentHash, lifecycle: change.lifecycle });
+          else if (!remote) transaction.objectStore(SYNC_CONFLICTS_STORE).put({ id: `delete:${change.id}`, noteId: change.id, kind: 'edit-delete', serverCursor: change.cursor, createdAt: Date.now() });
+          continue;
+        }
+        if (change.event === 'tombstone') {
+          if (current && current.lifecycle !== 'trashed') {
+            // Text-only remote tombstones are held for review to avoid orphaning local data.
+            transaction.objectStore(SYNC_CONFLICTS_STORE).put({ id: `delete:${change.id}`, noteId: change.id, kind: 'remote-delete-review', serverCursor: change.cursor, createdAt: Date.now() });
+            continue;
+          }
+        } else if (!current) { notes.add(remote); transaction.objectStore(SYNC_ENROLLMENT_STORE).put({ id: change.id, optedIn: true, updatedAt: Date.now() }); }
+        else if (canonicalJson(current) !== canonicalJson(remote)) notes.put(remote);
+        baselines.put({ id: change.id, serverVersion: change.serverVersion, localRevision: remote?.revision ?? current?.revision ?? 0, contentHash: change.contentHash, lifecycle: change.lifecycle });
+      }
+      transaction.objectStore(SYNC_STATE_STORE).put({ key: 'history', serverEpoch, serverCursor });
+      await done;
+    } catch (error) { abort(transaction, error); try { await done; } catch {} throw error; }
+  }
+
+  async function acknowledgeSyncOperations(acks) {
+    const database = await openDatabase(); const transaction = database.transaction([SYNC_OUTBOX_STORE, SYNC_BASELINES_STORE], 'readwrite'); const done = transactionResult(transaction);
+    for (const ack of acks) { transaction.objectStore(SYNC_OUTBOX_STORE).delete(ack.operationId); transaction.objectStore(SYNC_BASELINES_STORE).put(ack.baseline); }
+    await done;
   }
 
   async function list() {
@@ -140,17 +301,21 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
   async function create(note = makeEmptyNote()) {
     assertNoteRecord(note);
     const database = await openDatabase();
-    const transaction = database.transaction(STORE_NAME, 'readwrite');
+    const transaction = database.transaction([STORE_NAME, RECORDINGS_STORE, SYNC_OUTBOX_STORE, SYNC_BASELINES_STORE, SYNC_STATE_STORE, SYNC_ENROLLMENT_STORE], 'readwrite');
     const done = transactionResult(transaction);
-    transaction.objectStore(STORE_NAME).add(note);
-    await done;
+    try {
+      transaction.objectStore(STORE_NAME).add(note);
+      await enqueueMutation(transaction, note);
+      await done;
+    } catch (error) { abort(transaction,error); try { await done; } catch {} throw error; }
+    notifyLocalCommit();
     return note;
   }
 
   async function createIfMissing(note) {
     assertNoteRecord(note);
     const database = await openDatabase();
-    const transaction = database.transaction(STORE_NAME, 'readwrite');
+    const transaction = database.transaction([STORE_NAME, RECORDINGS_STORE, SYNC_OUTBOX_STORE, SYNC_BASELINES_STORE, SYNC_STATE_STORE, SYNC_ENROLLMENT_STORE], 'readwrite');
     const done = transactionResult(transaction);
     const store = transaction.objectStore(STORE_NAME);
     try {
@@ -161,7 +326,9 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
         return existing;
       }
       store.add(note);
+      await enqueueMutation(transaction, note);
       await done;
+      notifyLocalCommit();
       return note;
     } catch (error) {
       try { await done; } catch { /* Consume the transaction abort before returning the original error. */ }
@@ -174,7 +341,7 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
     if (!changes || typeof changes.title !== 'string') throw new TypeError('A note title must be a string.');
     const validation = validateNoteDocument(changes.document, false);
     const database = await openDatabase();
-    const transaction = database.transaction(STORE_NAME, 'readwrite');
+    const transaction = database.transaction([STORE_NAME, RECORDINGS_STORE, SYNC_OUTBOX_STORE, SYNC_BASELINES_STORE, SYNC_STATE_STORE, SYNC_ENROLLMENT_STORE], 'readwrite');
     const done = transactionResult(transaction);
     const store = transaction.objectStore(STORE_NAME);
 
@@ -192,7 +359,9 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
         revision: current.revision + 1,
       };
       store.put(updated);
+      await enqueueMutation(transaction, updated);
       await done;
+      notifyLocalCommit();
       return updated;
     } catch (error) {
       try { await done; } catch { /* Consume the abort before returning the original error. */ }
@@ -208,7 +377,7 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
     if (hasPinned && typeof changes.pinned !== 'boolean') throw new TypeError('Pin state must be true or false.');
     const tags = hasTags ? normalizeTagList(changes.tags) : undefined;
     const database = await openDatabase();
-    const transaction = database.transaction(STORE_NAME, 'readwrite');
+    const transaction = database.transaction([STORE_NAME, RECORDINGS_STORE, SYNC_OUTBOX_STORE, SYNC_BASELINES_STORE, SYNC_STATE_STORE, SYNC_ENROLLMENT_STORE], 'readwrite');
     const done = transactionResult(transaction), store = transaction.objectStore(STORE_NAME);
     try {
       const current = await requestResult(store.get(id));
@@ -224,7 +393,9 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
       };
       assertNoteRecord(updated);
       store.put(updated);
+      await enqueueMutation(transaction, updated);
       await done;
+      notifyLocalCommit();
       return updated;
     } catch (error) { try { await done; } catch { /* Consume the transaction abort. */ } throw error; }
   }
@@ -233,7 +404,7 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
     if (!['active', 'archived', 'trashed'].includes(lifecycle)) throw new TypeError('Invalid note lifecycle.');
     assertExpectedRevision(expectedRevision);
     const database = await openDatabase();
-    const transaction = database.transaction(STORE_NAME, 'readwrite');
+    const transaction = database.transaction([STORE_NAME, RECORDINGS_STORE, SYNC_OUTBOX_STORE, SYNC_BASELINES_STORE, SYNC_STATE_STORE, SYNC_ENROLLMENT_STORE], 'readwrite');
     const done = transactionResult(transaction);
     const store = transaction.objectStore(STORE_NAME);
 
@@ -246,7 +417,9 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
       }
       const updated = { ...current, lifecycle, updatedAt: Date.now(), revision: current.revision + 1 };
       store.put(updated);
+      await enqueueMutation(transaction, updated);
       await done;
+      notifyLocalCommit();
       return updated;
     } catch (error) {
       try { await done; } catch { /* Consume the abort before returning the original error. */ }
@@ -359,7 +532,7 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
     }
   }
 
-  return { list, get, create, createIfMissing, save, updateOrganization, setLifecycle, deleteForever, importNotes, snapshotArchive, importArchive };
+  return { list, get, hasExistingDatabase, create, createIfMissing, save, updateOrganization, setLifecycle, deleteForever, importNotes, snapshotArchive, importArchive, setSyncEnrollment, setDefaultSyncEnrollment, listSyncOutbox, getSyncState, getSyncBaseline, setSyncPaired, saveSyncRecovery, recordSyncConflict, commitSyncPull, acknowledgeSyncOperations };
 }
 
 function assertAudioTimestamp(value, label) {

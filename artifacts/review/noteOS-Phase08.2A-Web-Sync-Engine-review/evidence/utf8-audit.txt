@@ -1,0 +1,21 @@
+PASS 20 staged text/source files decode as UTF-8 with fatal error handling.
+docker-compose.phase082a-test.yml
+docs/phase-00/phase-08.2a-web-sync.md
+spikes/phase-00/gate1/web/app/globals.css
+spikes/phase-00/gate1/web/app/lib/audio-storage.test.mjs
+spikes/phase-00/gate1/web/app/lib/local-notes.js
+spikes/phase-00/gate1/web/app/lib/local-notes.test.mjs
+spikes/phase-00/gate1/web/app/lib/sync-client.mjs
+spikes/phase-00/gate1/web/app/lib/sync-discovery.mjs
+spikes/phase-00/gate1/web/app/lib/sync-protocol.mjs
+spikes/phase-00/gate1/web/app/sync/page.tsx
+spikes/phase-00/gate1/web/app/ui/app-shell.tsx
+spikes/phase-00/gate1/web/app/ui/sync-worker.tsx
+spikes/phase-00/gate1/web/scripts/backup-v2-browser.mjs
+spikes/phase-00/gate1/web/scripts/sync-origin-isolation.mjs
+spikes/phase-00/gate1/web/scripts/sync-web-08-2a-browser.mjs
+spikes/phase-00/gate1/web/scripts/sync-web-08-2a-fixture.mjs
+spikes/phase-00/gate1/web/sync-server/foundation.test.mjs
+spikes/phase-00/gate1/web/sync-server/http.mjs
+spikes/phase-00/gate1/web/sync-server/migrations/002-incremental.sql
+spikes/phase-00/gate1/web/sync-server/storage.mjs

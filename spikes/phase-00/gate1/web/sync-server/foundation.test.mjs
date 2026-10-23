@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync, unlinkSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
 import { promisify } from 'node:util';
 import { openStore, serverMeta, transaction, appendChange } from './storage.mjs';
 import { issuePairingCode, redeemPairingCode, authenticate, revokeDevice } from './auth.mjs';
@@ -36,14 +37,26 @@ test('migration v1, WAL, foreign keys and bounded busy timeout', t => {
   assert.equal(db.prepare('PRAGMA journal_mode').get().journal_mode,'wal');
   assert.equal(db.prepare('PRAGMA foreign_keys').get().foreign_keys,1);
   assert.equal(db.prepare('PRAGMA busy_timeout').get().timeout,2000);
-  assert.equal(serverMeta(db).schemaVersion,1);
+  assert.equal(serverMeta(db).schemaVersion,2);
   assert.equal(db.prepare("SELECT count(*) n FROM sqlite_master WHERE type='table'").get().n,7);
 });
 test('epoch and schema survive close/reopen and idempotent init', t => {
   const {root,db}=setup(t), meta=serverMeta(db); db.close();
   const again=openStore(root,{initialize:true}); assert.deepEqual(serverMeta(again),meta); again.close();
 });
-test('future schema fails closed', t=> {const {root,db}=setup(t); db.exec('PRAGMA user_version=2'); assert.throws(()=>openStore(root),/Migration/);});
+test('schema v1 server volume migrates additively and preserves its epoch, cursor, entities and devices', t=>{
+ const root=mkdtempSync(join(tmpdir(),'noteos-sync-v1-migration-')),epoch='legacy-epoch';t.after(()=>rmSync(root,{recursive:true,force:true}));
+ const legacy=new DatabaseSync(join(root,'sync.sqlite'));legacy.exec(readFileSync(new URL('./migrations/001-foundation.sql',import.meta.url),'utf8'));
+ legacy.prepare('INSERT INTO sync_server_meta VALUES(1,?,1,1)').run(epoch);
+ legacy.prepare("INSERT INTO sync_changelog(server_cursor,entity_type,entity_id,server_version,event) VALUES(1,'note','legacy',1,'upsert')").run();
+ legacy.prepare("INSERT INTO sync_entities VALUES('note','legacy',1,'{}','legacy-hash','active',0,1)").run();
+ legacy.prepare("INSERT INTO sync_devices VALUES('legacy-device','Old browser','token-hash',1,9999999999999,NULL)").run();
+ legacy.close();writeFileSync(join(root,'.sync-epoch'),epoch,{mode:0o600});
+ const upgraded=openStore(root);assert.equal(serverMeta(upgraded).schemaVersion,2);assert.equal(serverMeta(upgraded).serverCursor,1);
+ assert.equal(upgraded.prepare("SELECT record_json FROM sync_entities WHERE id='legacy'").get().record_json,'{}');
+ assert.equal(upgraded.prepare('SELECT count(*) n FROM sync_devices').get().n,1);upgraded.close();
+});
+test('future schema fails closed', t=> {const {root,db}=setup(t); db.exec('PRAGMA user_version=3'); assert.throws(()=>openStore(root),/Migration/);});
 test('missing volume fails closed', t=> {setup(t); assert.throws(()=>openStore('/not-a-mounted-volume'));});
 test('missing database cannot silently replace epoch', t=> {const {root,db}=setup(t);db.close();unlinkSync(join(root,'sync.sqlite'));assert.throws(()=>openStore(root,{initialize:true}),/Database missing/);});
 test('changed epoch marker requires recovery', t=> {const {root}=setup(t);writeFileSync(join(root,'.sync-epoch'),'unexpected');assert.throws(()=>openStore(root),/Epoch mismatch/);});
@@ -68,7 +81,8 @@ test('pairing blocks after five attempts', t=> {const {db}=setup(t),code=issuePa
 test('global pairing budget persists across new codes and store restart', t=> {const {db,root}=setup(t);for(let i=0;i<10;i++){issuePairingCode(db,1000);redeemPairingCode(db,'wrong-code12','test',1000);}const code=issuePairingCode(db,1000);db.close();const again=openStore(root);assert.equal(redeemPairingCode(again,code,'test',1000).status,429);again.close();});
 test('missing invalid expired and revoked tokens denied immediately', t=> {const {db}=setup(t),p=enrollment(db,1000);assert.equal(authenticate(db,null,1000),null);assert.equal(authenticate(db,'invalid',1000),null);assert.ok(authenticate(db,p.token,1000));assert.equal(authenticate(db,p.token,p.expires),null);assert.equal(revokeDevice(db,p.id,2000),1);assert.equal(authenticate(db,p.token,2000),null);});
 test('default disabled endpoint does not initialize a database', async t=> {const {env}=setup(t);const r=await handleSync(request(),'status',{...env,NOTEOS_SYNC_ENABLED:'0',NOTEOS_SYNC_STORAGE:'/missing'});assert.equal(r.status,503);assert.deepEqual(await r.json(),{error:'sync_disabled'});});
-test('all metadata needs authentication; mutation routes absent', async t=> {const {env}=setup(t);assert.equal((await handleSync(request(),'status',env)).status,401);assert.equal((await handleSync(request('bootstrap/dry-run',{method:'POST'}),'bootstrap/dry-run',env)).status,401);assert.equal((await handleSync(request('push',{method:'POST'}),'push',env)).status,404);});
+test('status, bootstrap, push and pull all require an authenticated device', async t=> {const {env}=setup(t);for(const [path,method,body] of [['status','GET'],['bootstrap/dry-run','POST',{protocolVersion:1,records:[]}],['bootstrap/commit','POST',{protocolVersion:1,records:[]}],['push','POST',{protocolVersion:1,operations:[]}],['pull','POST',{protocolVersion:1,cursor:0,limit:10}]])assert.equal((await handleSync(request(path,{method,body} ),path,env)).status,401);});
+test('cross-device permanent deletion endpoint is absent',async t=>{const {env,db}=setup(t),p=enrollment(db);const r=await handleSync(request('delete-forever',{method:'POST',cookie:cookie(p.token),body:{protocolVersion:1,ids:['synthetic']}}),'delete-forever',env);assert.equal(r.status,404);assert.equal(db.prepare('SELECT count(*) n FROM sync_tombstones').get().n,0);});
 test('pair uses Secure HttpOnly SameSite cookie on HTTPS, never exposes token JSON', async t=> {
   const {db,env}=setup(t),code=issuePairingCode(db);
   const r=await handleSync(request('pair',{method:'POST',origin:'https://notes.example.test',body:{code,label:'Test HTTPS'}}),'pair',env);
@@ -97,6 +111,35 @@ test('genuine seeded comparison: equal/new/changed/lifecycle/audio/tombstone; ze
   assert.equal(r.status,200);const preview=await r.json();assert.deepEqual(preview.identical,['equal']);assert.deepEqual(preview.toUpload,['new']);assert.deepEqual(preview.toDownload,['remote']);assert.deepEqual(preview.collidingIds,['audio','conflict','deleted','lifecycle']);assert.deepEqual(preview.audioRequiresReview,['audio']);assert.equal(preview.serverEmpty,false);assert.equal(snapshot(db),before);
 });
 test('empty-server preview is explicit',async t=> {const {db,env}=setup(t),p=enrollment(db);const r=await handleSync(request('bootstrap/dry-run',{method:'POST',cookie:cookie(p.token),body:{protocolVersion:1,records:[summary('new')]}}),'bootstrap/dry-run',env);assert.equal((await r.json()).serverEmpty,true);});
+const syncNote=(id, title='note')=>({id,title,document:{schemaVersion:1,type:'doc',content:[{type:'paragraph',content:[{type:'text',text:'Xin chào 日本語'}]}]},schemaVersion:1,createdAt:1,updatedAt:2,lifecycle:'active',revision:1,pinned:true,tags:['测试']});
+const operation=(note, operationId='operation-00000001', baseServerVersion=0)=>({operationId,entityId:note.id,baseServerVersion,ownerApproved:true,recordingCount:0,type:'upsert',recordJson:canonicalJson(note)});
+test('push atomically commits canonical note, event, server version, cursor and idempotency result',async t=>{
+ const {db,env}=setup(t),p=enrollment(db), note=syncNote('sync-new'), body={protocolVersion:1,operations:[operation(note)]};
+ const first=await handleSync(request('push',{method:'POST',cookie:cookie(p.token),body}),'push',env);assert.equal(first.status,200,JSON.stringify(await first.clone().json()));const result=await first.json();assert.equal(result.acknowledgements[0].serverVersion,1);assert.equal(result.serverCursor,1);
+ const retry=await handleSync(request('push',{method:'POST',cookie:cookie(p.token),body}),'push',env);assert.deepEqual((await retry.json()).acknowledgements,result.acknowledgements);
+ assert.equal(db.prepare("SELECT count(*) n FROM sync_entities WHERE id='sync-new'").get().n,1);assert.equal(db.prepare('SELECT count(*) n FROM sync_changelog').get().n,1);assert.equal(db.prepare('SELECT count(*) n FROM sync_operations').get().n,1);
+ const pull=await handleSync(request('pull',{method:'POST',cookie:cookie(p.token),body:{protocolVersion:1,cursor:0,limit:100}}),'pull',env);const page=await pull.json();assert.equal(page.changes[0].recordJson,canonicalJson(note));assert.equal(page.nextCursor,1);
+});
+test('pull pagination advances only by committed event cursors',async t=>{
+ const {db,env}=setup(t),p=enrollment(db),notes=[syncNote('page-one'),syncNote('page-two')];
+ for(const [index,note] of notes.entries())assert.equal((await handleSync(request('push',{method:'POST',cookie:cookie(p.token),body:{protocolVersion:1,operations:[operation(note,`operation-page-${index}01`)]}}),'push',env)).status,200);
+ const first=await handleSync(request('pull',{method:'POST',cookie:cookie(p.token),body:{protocolVersion:1,cursor:0,limit:1}}),'pull',env),page1=await first.json();assert.equal(page1.changes.length,1);assert.equal(page1.hasMore,true);assert.equal(page1.nextCursor,1);
+ const second=await handleSync(request('pull',{method:'POST',cookie:cookie(p.token),body:{protocolVersion:1,cursor:page1.nextCursor,limit:1}}),'pull',env),page2=await second.json();assert.equal(page2.changes.length,1);assert.equal(page2.nextCursor,2);
+});
+test('two offline edits at one server version conflict and never overwrite each other',async t=>{
+ const {db,env}=setup(t),now=Date.now(),a=enrollment(db,now),b=enrollment(db,now+1),left=syncNote('shared','left'),right=syncNote('shared','right');
+ assert.equal((await handleSync(request('push',{method:'POST',cookie:cookie(a.token),body:{protocolVersion:1,operations:[operation(left,'operation-left-0001')]}}),'push',env)).status,200);
+ const conflict=await handleSync(request('push',{method:'POST',cookie:cookie(b.token),body:{protocolVersion:1,operations:[operation(right,'operation-right-0001')]}}),'push',env);assert.equal(conflict.status,409);const detail=(await conflict.json()).conflict;assert.equal(detail.actualVersion,1);assert.equal(detail.remote.record.title,'left');assert.equal(db.prepare("SELECT record_json FROM sync_entities WHERE id='shared'").get().record_json,canonicalJson(left));assert.equal(db.prepare('SELECT count(*) n FROM sync_changelog').get().n,1);
+});
+test('DEVICE_ONLY notes and malformed outbox records are rejected',async t=>{
+ const {db,env}=setup(t),p=enrollment(db),privateNote={...syncNote('device'),'privacy':'DEVICE_ONLY'},body={protocolVersion:1,operations:[operation(privateNote,'operation-device-0001')]};
+ assert.equal((await handleSync(request('push',{method:'POST',cookie:cookie(p.token),body}),'push',env)).status,400);assert.equal(db.prepare('SELECT count(*) n FROM sync_entities').get().n,0);
+});
+test('bootstrap commit is additive, bounded, and collision leaves server unchanged',async t=>{
+ const {db,env}=setup(t),p=enrollment(db),note=syncNote('bootstrapped');
+ const first=await handleSync(request('bootstrap/commit',{method:'POST',cookie:cookie(p.token),body:{protocolVersion:1,records:[{note,recordingCount:0}]}}),'bootstrap/commit',env);assert.equal(first.status,200,JSON.stringify(await first.clone().json()));assert.equal((await first.json()).inserted.length,1);
+ const before=snapshot(db),collision=await handleSync(request('bootstrap/commit',{method:'POST',cookie:cookie(p.token),body:{protocolVersion:1,records:[{note:{...note,title:'overwrite'},recordingCount:0}]}}),'bootstrap/commit',env);assert.equal(collision.status,409);assert.equal(snapshot(db),before);
+});
 test('revocation endpoint makes existing cookie unusable',async t=> {const {db,env}=setup(t),p=enrollment(db);const c=cookie(p.token);assert.equal((await handleSync(request('revoke',{method:'POST',cookie:c}),'revoke',env)).status,200);assert.equal((await handleSync(request('status',{cookie:c}),'status',env)).status,401);});
 test('unavailable database gives generic 503 without paths or query data',async t=> {const {env}=setup(t);const r=await handleSync(request(),'status',{...env,NOTEOS_SYNC_STORAGE:'/missing'});assert.equal(r.status,503);assert.deepEqual(await r.json(),{error:'sync_storage_unavailable'});});
 test('history epoch or cursor rollback halts review',()=>{const previous={serverEpoch:'one',serverCursor:5};assert.throws(()=>assertHistoryContinuity(previous,{serverEpoch:'two',serverCursor:6}),/recovery/);assert.throws(()=>assertHistoryContinuity(previous,{serverEpoch:'one',serverCursor:4}),/recovery/);assert.equal(assertHistoryContinuity(previous,{serverEpoch:'one',serverCursor:6}).serverCursor,6);});

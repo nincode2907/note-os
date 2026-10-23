@@ -1,0 +1,23 @@
+{
+  "scenario": "SQLite restart preserves epoch, cursor, entities, operations and change log",
+  "result": "PASS",
+  "before": {
+    "serverEpoch": "9a0c530c-3a45-44ba-969c-db817ee9e9a4",
+    "schemaVersion": 2,
+    "serverCursor": 5,
+    "noteCount": 2,
+    "operationCount": 5,
+    "eventCount": 5,
+    "digest": "e6b164877b5c9b33ca36722d3f8c8059d0499b7f6dbb32e5741518155c312aa4"
+  },
+  "after": {
+    "serverEpoch": "9a0c530c-3a45-44ba-969c-db817ee9e9a4",
+    "schemaVersion": 2,
+    "serverCursor": 5,
+    "noteCount": 2,
+    "operationCount": 5,
+    "eventCount": 5,
+    "digest": "e6b164877b5c9b33ca36722d3f8c8059d0499b7f6dbb32e5741518155c312aa4"
+  },
+  "data": "synthetic-only; isolated Docker volume noteos_phase082a_synthetic_20261023"
+}

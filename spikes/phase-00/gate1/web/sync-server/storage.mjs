@@ -17,12 +17,15 @@ export function openStore(root, { initialize = false } = {}) {
   try {
     db.exec('PRAGMA foreign_keys=ON; PRAGMA busy_timeout=2000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;');
     const version = db.prepare('PRAGMA user_version').get().user_version;
-    if (version > 1 || (version === 0 && !initialize)) throw new Error('Migration review required');
+    if (version > 2 || (version === 0 && !initialize)) throw new Error('Migration review required');
     if (version === 0) transaction(db, () => {
       // Recheck under the writer lock: concurrent first-time initialization is safe.
       if (db.prepare('PRAGMA user_version').get().user_version !== 0) return;
       db.exec(readFileSync(join(process.cwd(), 'sync-server/migrations/001-foundation.sql'), 'utf8'));
       db.prepare('INSERT INTO sync_server_meta VALUES(1,?,1,0)').run(randomUUID());
+    });
+    if (db.prepare('PRAGMA user_version').get().user_version === 1) transaction(db, () => {
+      db.exec(readFileSync(join(process.cwd(), 'sync-server/migrations/002-incremental.sql'), 'utf8'));
     });
     const meta = serverMeta(db);
     if (existsSync(marker) && readFileSync(marker, 'utf8').trim() !== meta.serverEpoch) throw new Error('Epoch mismatch; recovery review required');
@@ -43,10 +46,10 @@ export function serverMeta(db) {
 
 // Reserved storage primitive, used only by isolated fixtures in 08.1. No HTTP caller.
 // Must run inside the same transaction as the entity/tombstone and operation writes.
-export function appendChange(db, type, id, version, event = 'upsert') {
+export function appendChange(db, type, id, version, event = 'upsert', record = null) {
   if (!db.isTransaction) throw new Error('Change allocation requires a transaction');
   const cursor = db.prepare('UPDATE sync_server_meta SET server_cursor=server_cursor+1 WHERE singleton=1 RETURNING server_cursor').get().server_cursor;
   if (!Number.isSafeInteger(cursor)) throw new Error('Cursor exhausted');
-  db.prepare('INSERT INTO sync_changelog VALUES(?,?,?,?,?)').run(cursor, type, id, version, event);
+  db.prepare('INSERT INTO sync_changelog(server_cursor,entity_type,entity_id,server_version,event,record_json) VALUES(?,?,?,?,?,?)').run(cursor, type, id, version, event, record);
   return cursor;
 }

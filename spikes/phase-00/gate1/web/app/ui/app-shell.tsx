@@ -3,6 +3,7 @@
 import { GuardedLink as Link, NavigationGuardProvider } from './navigation-guard';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
+import { SyncWorker } from './sync-worker';
 
 const links = [
   ['/', '⌂', 'Notes'], ['/archive', '▤', 'Archive'], ['/trash', '⌫', 'Trash'], ['/backup', '↥', 'Backup'], ['/sync', '⇄', 'Sync Setup'],
@@ -31,7 +32,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <Link href="/" className="brand"><span className="brand-mark">n</span>noteOS</Link>
       <nav className="nav-group" aria-label="Main navigation"><NavLinks pathname={pathname} /></nav>
       <div className="nav-bottom">
-        <div className="privacy-card"><strong><span aria-hidden="true">● </span>Private by default</strong><p>Your notes live in this browser. Sync Setup sends permitted summaries only when you request a preview.</p></div>
+        <SyncWorker />
+        <div className="privacy-card"><strong><span aria-hidden="true">● </span>Private by default</strong><p>Your notes live in this browser. Text sync starts only after you pair and approve notes.</p></div>
         <p className="storage-caption">{usage}</p>
       </div>
     </aside>

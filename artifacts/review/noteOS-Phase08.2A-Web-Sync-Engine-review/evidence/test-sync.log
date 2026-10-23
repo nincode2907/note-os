@@ -1,0 +1,50 @@
+> test:sync
+> node --test sync-server/*.test.mjs
+✔ migration v1, WAL, foreign keys and bounded busy timeout (41.778375ms)
+✔ epoch and schema survive close/reopen and idempotent init (48.484708ms)
+✔ schema v1 server volume migrates additively and preserves its epoch, cursor, entities and devices (138.465125ms)
+✔ future schema fails closed (210.231667ms)
+✔ missing volume fails closed (22.773833ms)
+✔ missing database cannot silently replace epoch (14.572625ms)
+✔ changed epoch marker requires recovery (100.364458ms)
+✔ cursor allocation requires a transaction (24.679125ms)
+✔ rollback includes cursor and all committed-change tables (11.844333ms)
+✔ entity versions reference their exact committed change and cannot coexist with tombstones (20.184458ms)
+✔ independent concurrent WAL writers allocate contiguous committed cursors (378.277583ms)
+✔ pairing expires at 120 seconds (28.394375ms)
+✔ pairing one-time use, only token hash stored (16.397792ms)
+✔ pairing blocks after five attempts (18.755416ms)
+✔ global pairing budget persists across new codes and store restart (239.849375ms)
+✔ missing invalid expired and revoked tokens denied immediately (41.273ms)
+✔ default disabled endpoint does not initialize a database (461.871167ms)
+✔ status, bootstrap, push and pull all require an authenticated device (95.133541ms)
+✔ cross-device permanent deletion endpoint is absent (47.020917ms)
+✔ pair uses Secure HttpOnly SameSite cookie on HTTPS, never exposes token JSON (65.028666ms)
+✔ localhost has distinct HttpOnly cookie and local-only insecure exception (32.253083ms)
+✔ CSRF denies missing Origin (27.810792ms)
+✔ CSRF denies wrong Origin (52.298ms)
+✔ CSRF denies cross-site (24.716291ms)
+✔ CSRF denies missing custom header (31.470625ms)
+✔ CSRF denies wrong content type (54.655541ms)
+✔ unconfigured Host and insecure non-loopback Origin denied (34.943583ms)
+✔ oversized JSON, malformed JSON, unknown and duplicate summary fields rejected (50.154ms)
+✔ genuine seeded comparison: equal/new/changed/lifecycle/audio/tombstone; zero server mutations (62.788166ms)
+✔ empty-server preview is explicit (58.047958ms)
+✔ push atomically commits canonical note, event, server version, cursor and idempotency result (149.381542ms)
+✔ pull pagination advances only by committed event cursors (93.044583ms)
+✔ two offline edits at one server version conflict and never overwrite each other (43.80625ms)
+✔ DEVICE_ONLY notes and malformed outbox records are rejected (33.178708ms)
+✔ bootstrap commit is additive, bounded, and collision leaves server unchanged (55.759292ms)
+✔ revocation endpoint makes existing cookie unusable (48.344916ms)
+✔ unavailable database gives generic 503 without paths or query data (21.514958ms)
+✔ history epoch or cursor rollback halts review (2.256167ms)
+✔ canonical hashes do not depend on object order; localRevision not serverVersion (0.452708ms)
+✔ summary hash cannot coerce arrays and canonical records cannot drop non-JSON objects (0.273083ms)
+ℹ tests 40
+ℹ suites 0
+ℹ pass 40
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4603.66125

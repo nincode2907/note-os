@@ -1,0 +1,1 @@
+The full end-to-end script's extra navigation to the HTTP origin timed out after 30 seconds in the slow local test environment. A focused Chromium test then passed the required check; see origin-isolation.json. It wrote one synthetic IndexedDB note at 127.0.0.1:15740, observed zero notes at localhost:15740, and observed the original note intact on return.

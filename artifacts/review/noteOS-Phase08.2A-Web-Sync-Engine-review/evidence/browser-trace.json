@@ -1,0 +1,57 @@
+[
+  {
+    "browser": "iPhone-sized WebKit",
+    "step": "device-paired",
+    "success": true
+  },
+  {
+    "browser": "iPhone-sized WebKit",
+    "step": "owner-approved-existing-note; DEVICE_ONLY-and-audio-excluded",
+    "success": true
+  },
+  {
+    "browser": "iPhone-sized WebKit",
+    "step": "offline-quick-capture-local-commit-and-outbox-durable",
+    "success": true
+  },
+  {
+    "browser": "iPhone-sized WebKit",
+    "step": "client-runtime-log",
+    "count": 5,
+    "message": "Next.js logged a rejected RSC prefetch and used its browser-navigation fallback."
+  },
+  {
+    "browser": "Mac Chromium",
+    "step": "device-paired",
+    "success": true
+  },
+  {
+    "browser": "Mac Chromium",
+    "step": "Mac edit committed and pushed",
+    "success": true
+  },
+  {
+    "browser": "iPhone-sized WebKit",
+    "step": "received Mac edit",
+    "success": true
+  },
+  {
+    "scenario": "lost-ack-idempotent-retry",
+    "success": true,
+    "mutationCountStable": true
+  },
+  {
+    "scenario": "concurrent-offline-edit-preserves-local-and-remote-copy",
+    "success": true,
+    "conflictCopies": 1
+  },
+  {
+    "scenario": "two-tab-sync-lock",
+    "success": true,
+    "noDuplicateEvents": true
+  },
+  {
+    "scenario": "server-epoch-change-stops-sync-and-persists-recovery",
+    "success": true
+  }
+]

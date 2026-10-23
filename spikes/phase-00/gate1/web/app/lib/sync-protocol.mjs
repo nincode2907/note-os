@@ -1,5 +1,6 @@
 // Shared Web/native protocol v1. No note-save or synchronization side effects.
 export const SYNC_LIMITS = Object.freeze({ maxRecords: 1000, maxBytes: 262144 });
+export const OPERATION_LIMITS = Object.freeze({ maxOperations: 100, maxRecordBytes: 65536 });
 export const AUDIO_SYNC_STATES = Object.freeze([
   'text-local', 'text-synced-audio-pending', 'metadata-synced-blob-pending',
   'fully-verified', 'conflict-review',
@@ -32,6 +33,18 @@ export function validateSummaries(body) {
     ids.add(row.id);
   }
   return body.records;
+}
+export function validateOperations(body) {
+  if (!body || Object.keys(body).sort().join(',') !== 'operations,protocolVersion' || body.protocolVersion !== 1 || !Array.isArray(body.operations) || body.operations.length > OPERATION_LIMITS.maxOperations) throw new Error('Invalid operation envelope');
+  const ids = new Set();
+  return body.operations.map(op => {
+    if (!op || Object.keys(op).sort().join(',') !== 'baseServerVersion,entityId,operationId,ownerApproved,recordJson,recordingCount,type' || op.ownerApproved !== true || op.type !== 'upsert' || typeof op.operationId !== 'string' || !/^[A-Za-z0-9_-]{16,128}$/.test(op.operationId) || ids.has(op.operationId) || typeof op.entityId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(op.entityId) || !Number.isSafeInteger(op.baseServerVersion) || op.baseServerVersion < 0 || op.recordingCount !== 0 || typeof op.recordJson !== 'string' || new TextEncoder().encode(op.recordJson).length > OPERATION_LIMITS.maxRecordBytes) throw new Error('Invalid operation');
+    ids.add(op.operationId);
+    let record;
+    try { record = JSON.parse(op.recordJson); } catch { throw new Error('Invalid operation record'); }
+    if (record?.id !== op.entityId || record.privacy === 'DEVICE_ONLY' || canonicalJson(record) !== op.recordJson || !['active','archived','trashed'].includes(record.lifecycle) || !Number.isSafeInteger(record.revision) || record.revision < 0 || !Number.isSafeInteger(record.schemaVersion) || record.schemaVersion < 1 || !record.document || typeof record.document !== 'object') throw new Error('Invalid operation record');
+    return { ...op, record };
+  });
 }
 export function compareSummaries(client, server, tombstones = []) {
   const remote = new Map(server.map(r => [r.id, r])), deleted = new Set(tombstones.map(r => r.id));

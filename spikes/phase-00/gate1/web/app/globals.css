@@ -284,6 +284,14 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .backup-panel .backup-limit { font-size: 12px; }
 
 .sync-origin { overflow-wrap: anywhere; }
+.sync-worker-state { display: inline-flex; align-items: center; width: fit-content; margin: 0 0 12px; padding: 5px 9px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 11px; }
+.sync-worker-state.state-synced { color: var(--accent-strong); }
+.sync-worker-state.state-needs-review { color: var(--danger); }
+.sync-candidate-list { display: grid; gap: 8px; max-height: 250px; overflow: auto; margin: 12px 0; padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
+.sync-candidate-list label, .sync-default-enrollment { display: flex; align-items: flex-start; gap: 9px; color: var(--text); font-size: 13px; }
+.sync-candidate-list label span { color: var(--muted); }
+.sync-candidate-list input, .sync-default-enrollment input { margin-top: 3px; accent-color: var(--accent); }
+.sync-default-enrollment { margin: 18px 0; }
 .sync-pair-form { display: grid; gap: 12px; margin-top: 18px; }
 .sync-pair-form label { display: grid; gap: 6px; color: var(--muted); font-size: 13px; }
 .sync-pair-form .btn { justify-self: start; }
