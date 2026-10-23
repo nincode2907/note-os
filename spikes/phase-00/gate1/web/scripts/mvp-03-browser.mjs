@@ -197,7 +197,7 @@ try {
     const id = await openNew(page);
     await page.evaluate(() => sessionStorage.setItem('noteos:mvp031:fail-next-note-put', 'yes'));
     await page.locator('#note-tag-input').fill('retry-tag'); await page.getByRole('button', { name: 'Add tag' }).click();
-    await page.getByRole('alert').waitFor();
+    await page.locator('.notice.error[role="alert"]').waitFor();
     check(await page.locator('#note-tag-input').inputValue() === 'retry-tag', 'Storage failure cleared attempted tag input.');
     const failedRecord = await readNote(page, id);
     check(!failedRecord.tags.includes('retry-tag'), 'Failed IndexedDB tag write changed stored metadata.');

@@ -54,7 +54,7 @@ try {
   const [legacy] = await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'Download backup',exact:true}).click()]); assert.match(legacy.suggestedFilename(),/\.json$/);
   results.push({name:'legacy-export-still-available-with-explicit-audio-warning',status:'PASS'});
   const quotaContext = await context(), quota = await quotaContext.newPage();
-  await quota.goto(baseUrl); await quota.getByRole('button', { name: /New note/ }).first().click(); await quota.locator('#note-title').waitFor(); await quota.goto(`${baseUrl}/backup`);
+  await quota.goto(baseUrl); await quota.getByRole('textbox', { name: "What's on your mind?" }).fill('Synthetic quota baseline'); await quota.getByRole('button', { name: 'Save note', exact: true }).click(); await quota.getByRole('status').filter({ hasText: 'Saved on this device' }).waitFor(); await quota.goto(`${baseUrl}/backup`);
   const quotaBefore = await fingerprint(quota);
   await quota.evaluate(() => { const add = IDBObjectStore.prototype.add; IDBObjectStore.prototype.add = function(value, ...args) { if (this.name === 'recordingChunks') throw new DOMException('Synthetic quota failure', 'QuotaExceededError'); return add.call(this, value, ...args); }; });
   await quota.locator('input[type=file]').setInputFiles(path); await quota.getByRole('button', { name: 'Validate and import', exact: true }).click();

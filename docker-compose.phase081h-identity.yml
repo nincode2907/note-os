@@ -1,0 +1,33 @@
+# Owner-approved activation prototype only. This overlay is excluded from normal `docker compose up`.
+# It registers a distinct Tailscale device and must not be started before the approval gates in the H report.
+services:
+  tailscale-noteos:
+    image: tailscale/tailscale:v1.104.2
+    profiles: ["dedicated-identity-owner-approved"]
+    hostname: ${NOTEOS_TAILSCALE_HOSTNAME:?Set an owner-approved unique device hostname}
+    environment:
+      TS_AUTHKEY: file:/run/secrets/ts_authkey
+      TS_AUTH_ONCE: "true"
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_HOSTNAME: ${NOTEOS_TAILSCALE_HOSTNAME:?Set an owner-approved unique device hostname}
+      TS_USERSPACE: "true"
+    secrets:
+      - tailscale_auth_key
+    volumes:
+      - noteos_dedicated_tailscale_state:/var/lib/tailscale
+    networks:
+      - noteos_existing
+    restart: unless-stopped
+
+secrets:
+  tailscale_auth_key:
+    file: ${NOTEOS_TAILSCALE_AUTHKEY_FILE:?Point to an owner-created key file outside this repository}
+
+volumes:
+  noteos_dedicated_tailscale_state:
+    name: noteos_dedicated_tailscale_state
+
+networks:
+  noteos_existing:
+    external: true
+    name: noteos_default

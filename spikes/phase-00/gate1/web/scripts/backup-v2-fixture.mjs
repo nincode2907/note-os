@@ -1,9 +1,14 @@
 // Only call with a newly-created, nonpersistent Playwright browser context.
 export async function seedBackupFixture(page, baseUrl, totalMiB = 0) {
   await page.goto(baseUrl);
-  await page.getByRole('button', { name: /New note/ }).first().click();
-  await page.locator('#note-title').waitFor();
-  const noteId = new URL(page.url()).pathname.split('/').pop();
+  await page.getByRole('textbox', { name: "What's on your mind?" }).fill('Synthetic backup fixture');
+  await page.getByRole('button', { name: 'Save note', exact: true }).click();
+  await page.getByRole('status').filter({ hasText: 'Saved on this device' }).waitFor();
+  const noteId = await page.evaluate(() => new Promise((resolve, reject) => {
+    const request = indexedDB.open('noteos-mvp-01'); request.onerror = () => reject(request.error);
+    request.onsuccess = () => { const db = request.result, tx = db.transaction('notes', 'readonly'), get = tx.objectStore('notes').getAll(); get.onsuccess = () => { db.close(); resolve(get.result[0]?.id); }; get.onerror = () => reject(get.error); };
+  }));
+  if (typeof noteId !== 'string') throw new Error('Synthetic quick-capture fixture was not stored.');
   await page.goto(`${baseUrl}/backup`);
   await page.evaluate(async ({ noteId, totalMiB }) => {
     const notes = ['active', 'archived', 'trashed'].map((lifecycle, index) => ({
