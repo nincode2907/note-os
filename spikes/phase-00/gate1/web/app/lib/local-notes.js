@@ -6,7 +6,7 @@ import { canonicalJson } from './sync-protocol.mjs';
 export { NoteDocumentError } from './note-validation.mjs';
 
 const DATABASE_NAME = 'noteos-mvp-01';
-const DATABASE_VERSION = 3;
+const DATABASE_VERSION = 4;
 const STORE_NAME = 'notes';
 const RECORDINGS_STORE = 'recordings';
 const RECORDING_CHUNKS_STORE = 'recordingChunks';
@@ -15,6 +15,7 @@ const SYNC_BASELINES_STORE = 'syncBaselines';
 const SYNC_STATE_STORE = 'syncState';
 const SYNC_CONFLICTS_STORE = 'syncConflicts';
 const SYNC_ENROLLMENT_STORE = 'syncEnrollment';
+const SYNC_QUARANTINE_STORE = 'syncQuarantine';
 
 export class NoteNotFoundError extends Error {
   constructor(id) {
@@ -120,6 +121,7 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
           if (!database.objectStoreNames.contains(SYNC_STATE_STORE)) database.createObjectStore(SYNC_STATE_STORE, { keyPath: 'key' });
           if (!database.objectStoreNames.contains(SYNC_CONFLICTS_STORE)) database.createObjectStore(SYNC_CONFLICTS_STORE, { keyPath: 'id' });
           if (!database.objectStoreNames.contains(SYNC_ENROLLMENT_STORE)) database.createObjectStore(SYNC_ENROLLMENT_STORE, { keyPath: 'id' });
+          if (!database.objectStoreNames.contains(SYNC_QUARANTINE_STORE)) database.createObjectStore(SYNC_QUARANTINE_STORE, { keyPath: 'operationId' });
         };
         request.onsuccess = () => {
           request.result.onversionchange = () => request.result.close();
@@ -187,7 +189,60 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
     const database = await openDatabase(); const transaction = database.transaction([SYNC_OUTBOX_STORE, RECORDINGS_STORE, STORE_NAME, SYNC_ENROLLMENT_STORE], 'readonly'); const done = transactionResult(transaction);
     const [rows, recordings, notes, enrolled] = await Promise.all([requestResult(transaction.objectStore(SYNC_OUTBOX_STORE).getAll()), requestResult(transaction.objectStore(RECORDINGS_STORE).getAll()), requestResult(transaction.objectStore(STORE_NAME).getAll()), requestResult(transaction.objectStore(SYNC_ENROLLMENT_STORE).getAll())]); await done;
     const audioNotes = new Set(recordings.map(row => row.noteId)), noteMap = new Map(notes.map(row => [row.id,row])), enrolledSet = new Set(enrolled.filter(row => row.optedIn).map(row => row.id));
-    return rows.filter(row => !audioNotes.has(row.entityId) && noteMap.get(row.entityId)?.privacy !== 'DEVICE_ONLY' && enrolledSet.has(row.entityId)).sort((a,b) => a.createdAt-b.createdAt).slice(0, limit);
+    return rows.filter(row => !audioNotes.has(row.entityId) && noteMap.get(row.entityId)?.privacy !== 'DEVICE_ONLY' && enrolledSet.has(row.entityId)).sort((a,b) => a.createdAt-b.createdAt || a.entityId.localeCompare(b.entityId) || a.localRevision-b.localRevision || a.operationId.localeCompare(b.operationId)).slice(0, limit);
+  }
+
+  async function getSyncOverview() {
+    const database = await openDatabase();
+    const transaction = database.transaction([STORE_NAME, RECORDINGS_STORE, SYNC_OUTBOX_STORE, SYNC_BASELINES_STORE, SYNC_STATE_STORE, SYNC_CONFLICTS_STORE, SYNC_ENROLLMENT_STORE, SYNC_QUARANTINE_STORE], 'readonly');
+    const done = transactionResult(transaction);
+    const stores = name => transaction.objectStore(name).getAll();
+    const [notes, recordings, outbox, baselines, state, conflicts, enrollments, quarantine] = await Promise.all([
+      ...[STORE_NAME, RECORDINGS_STORE, SYNC_OUTBOX_STORE, SYNC_BASELINES_STORE, SYNC_STATE_STORE, SYNC_CONFLICTS_STORE, SYNC_ENROLLMENT_STORE, SYNC_QUARANTINE_STORE].map(name => requestResult(stores(name))),
+    ]);
+    await done;
+    const noteMap = new Map(notes.map(note => [note.id, note]));
+    const enrollmentSet = new Set(enrollments.filter(row => row.optedIn).map(row => row.id));
+    const audioCounts = new Map();
+    for (const recording of recordings) audioCounts.set(recording.noteId, (audioCounts.get(recording.noteId) ?? 0) + 1);
+    const eligible = outbox.filter(row => !audioCounts.has(row.entityId) && noteMap.get(row.entityId)?.privacy !== 'DEVICE_ONLY' && enrollmentSet.has(row.entityId));
+    const eligibleIds = new Set(eligible.map(row => row.operationId));
+    const blocked = outbox.filter(row => !eligibleIds.has(row.operationId));
+    const pendingNotes = new Set(eligible.map(row => row.entityId));
+    const baselineMap = new Map(baselines.map(row => [row.id, row]));
+    const conflictNotes = new Set(conflicts.map(row => row.noteId));
+    const quarantinedNotes = new Set(quarantine.map(row => row.entityId));
+    const noteStatuses = notes.map(note => {
+      const hasAudio = (audioCounts.get(note.id) ?? 0) > 0;
+      const hasConflict = conflictNotes.has(note.id) || quarantinedNotes.has(note.id);
+      const pending = pendingNotes.has(note.id);
+      const baseline = baselineMap.get(note.id);
+      const textSynced = Boolean(baseline && baseline.localRevision >= note.revision);
+      const status = hasConflict ? 'needs-review' : hasAudio ? 'media-local-only' : pending ? 'pending' : textSynced ? 'text-synced' : 'saved-device';
+      return { id: note.id, status, textSynced, recordingCount: audioCounts.get(note.id) ?? 0 };
+    });
+    const values = Object.fromEntries(state.map(row => [row.key, row.value ?? row]));
+    return {
+      totalOutbox: outbox.length, eligiblePending: eligible.length, blockedPending: blocked.length,
+      quarantined: quarantine.length, conflicts: conflicts.length, recordings: recordings.length,
+      unfinishedRecordings: recordings.filter(row => ['recording', 'paused', 'interrupted'].includes(row.status)).length,
+      mediaLocalOnly: noteStatuses.filter(row => row.status === 'media-local-only').length,
+      textSyncedWithMedia: noteStatuses.filter(row => row.status === 'media-local-only' && row.textSynced).length,
+      noteStatuses, conflictRecords: conflicts, quarantineRecords: quarantine,
+      recovery: values.recovery ?? null, paired: values.paired === true, history: values.history ?? null,
+    };
+  }
+
+  async function quarantineSyncOperation(operationId, reason = 'The server rejected this operation.') {
+    const database = await openDatabase();
+    const transaction = database.transaction([SYNC_OUTBOX_STORE, SYNC_QUARANTINE_STORE], 'readwrite');
+    const done = transactionResult(transaction);
+    const outbox = transaction.objectStore(SYNC_OUTBOX_STORE), operation = await requestResult(outbox.get(operationId));
+    if (operation) {
+      transaction.objectStore(SYNC_QUARANTINE_STORE).put({ ...operation, reason, quarantinedAt: Date.now(), status: 'needs-review' });
+      outbox.delete(operationId);
+    }
+    await done;
   }
 
   async function saveSyncRecovery(reason, serverHistory = null) {
@@ -201,9 +256,9 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
   }
 
   async function getSyncState() {
-    const database = await openDatabase(); const transaction = database.transaction([SYNC_STATE_STORE, SYNC_CONFLICTS_STORE], 'readonly'); const done = transactionResult(transaction);
-    const [state, conflicts] = await Promise.all([requestResult(transaction.objectStore(SYNC_STATE_STORE).getAll()), requestResult(transaction.objectStore(SYNC_CONFLICTS_STORE).getAll())]);
-    await done; return { state: Object.fromEntries(state.map(row => [row.key, row.value ?? row])), conflicts };
+    const database = await openDatabase(); const transaction = database.transaction([SYNC_STATE_STORE, SYNC_CONFLICTS_STORE, SYNC_QUARANTINE_STORE], 'readonly'); const done = transactionResult(transaction);
+    const [state, conflicts, quarantine] = await Promise.all([requestResult(transaction.objectStore(SYNC_STATE_STORE).getAll()), requestResult(transaction.objectStore(SYNC_CONFLICTS_STORE).getAll()), requestResult(transaction.objectStore(SYNC_QUARANTINE_STORE).getAll())]);
+    await done; return { state: Object.fromEntries(state.map(row => [row.key, row.value ?? row])), conflicts, quarantine };
   }
 
   async function getSyncBaseline(id) {
@@ -212,7 +267,7 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
   }
 
   async function recordSyncConflict(operationId, conflict) {
-    const database = await openDatabase(); const transaction = database.transaction([STORE_NAME, SYNC_OUTBOX_STORE, SYNC_BASELINES_STORE, SYNC_CONFLICTS_STORE], 'readwrite'); const done = transactionResult(transaction);
+    const database = await openDatabase(); const transaction = database.transaction([STORE_NAME, SYNC_OUTBOX_STORE, SYNC_BASELINES_STORE, SYNC_CONFLICTS_STORE, SYNC_QUARANTINE_STORE], 'readwrite'); const done = transactionResult(transaction);
     try {
       const outbox = transaction.objectStore(SYNC_OUTBOX_STORE), operation = await requestResult(outbox.get(operationId));
       if (operation) {
@@ -222,10 +277,13 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
         if (remote && current && canonicalJson(remote) !== canonicalJson(current)) {
           const notes = transaction.objectStore(STORE_NAME);
           if (!(await requestResult(notes.get(conflictId)))) notes.add({ ...remote, id: conflictId, title: `${remote.title || 'Untitled note'} (Sync conflict)`, revision: 0, updatedAt: Date.now() });
-          transaction.objectStore(SYNC_CONFLICTS_STORE).put({ id: conflictId, noteId: operation.entityId, conflictNoteId: conflictId, kind: 'edit-edit', createdAt: Date.now() });
-        } else transaction.objectStore(SYNC_CONFLICTS_STORE).put({ id: `conflict-${operation.entityId}`, noteId: operation.entityId, kind: conflict.tombstoned ? 'edit-delete' : 'id-collision', createdAt: Date.now() });
+          transaction.objectStore(SYNC_CONFLICTS_STORE).put({ id: conflictId, noteId: operation.entityId, conflictNoteId: conflictId, kind: 'edit-edit', localOnly: true, status: 'needs-review', localRecord: current, remoteRecord: remote, serverEpoch: conflict.serverEpoch, serverVersion: conflict.actualVersion, createdAt: Date.now() });
+        } else transaction.objectStore(SYNC_CONFLICTS_STORE).put({ id: `conflict-${operation.entityId}`, noteId: operation.entityId, kind: conflict.tombstoned ? 'edit-delete' : 'id-collision', localOnly: true, status: 'needs-review', localRecord: current ?? null, remoteRecord: remote ?? null, serverEpoch: conflict.serverEpoch, serverVersion: conflict.actualVersion, createdAt: Date.now() });
         if (conflict.actualVersion > 0) transaction.objectStore(SYNC_BASELINES_STORE).put({ id: operation.entityId, serverVersion: conflict.actualVersion, localRevision: current?.revision ?? 0 });
-        outbox.delete(operationId);
+        for (const pending of await requestResult(outbox.getAll())) if (pending.entityId === operation.entityId) {
+          transaction.objectStore(SYNC_QUARANTINE_STORE).put({ ...pending, reason: 'Blocked because another device changed this note.', quarantinedAt: Date.now(), status: 'needs-review' });
+          outbox.delete(pending.operationId);
+        }
       }
       await done;
     } catch (error) { abort(transaction,error); try { await done; } catch {} throw error; }
@@ -233,18 +291,27 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
 
   async function commitSyncPull({ serverEpoch, serverCursor, changes }) {
     const database = await openDatabase();
-    const transaction = database.transaction([STORE_NAME, RECORDINGS_STORE, SYNC_OUTBOX_STORE, SYNC_BASELINES_STORE, SYNC_STATE_STORE, SYNC_CONFLICTS_STORE, SYNC_ENROLLMENT_STORE], 'readwrite');
+    const transaction = database.transaction([STORE_NAME, RECORDINGS_STORE, SYNC_OUTBOX_STORE, SYNC_BASELINES_STORE, SYNC_STATE_STORE, SYNC_CONFLICTS_STORE, SYNC_ENROLLMENT_STORE, SYNC_QUARANTINE_STORE], 'readwrite');
     const done = transactionResult(transaction);
     const notes = transaction.objectStore(STORE_NAME), outbox = transaction.objectStore(SYNC_OUTBOX_STORE), baselines = transaction.objectStore(SYNC_BASELINES_STORE);
     try {
       for (const change of changes) {
         const current = await requestResult(notes.get(change.id));
-        const localPending = (await requestResult(outbox.getAll())).some(op => op.entityId === change.id);
+        const entityOperations = (await requestResult(outbox.getAll())).filter(op => op.entityId === change.id);
+        const localPending = entityOperations.length > 0;
         const localRecordings = await requestResult(transaction.objectStore(RECORDINGS_STORE).index('noteId').count(change.id));
         const remote = change.event === 'tombstone' ? null : JSON.parse(change.recordJson);
         const baseline = await requestResult(baselines.get(change.id));
+        // A push can commit on the server while its ACK is lost. Pull then returns
+        // the exact queued snapshot; reconcile it as an ACK before conflict handling.
+        const lostAck = remote && entityOperations.find(operation => operation.localRevision === remote.revision && operation.recordJson === canonicalJson(remote));
+        if (lostAck) {
+          outbox.delete(lostAck.operationId);
+          baselines.put({ id: change.id, serverVersion: change.serverVersion, localRevision: remote.revision, contentHash: change.contentHash, lifecycle: change.lifecycle });
+          continue;
+        }
         if (localRecordings > 0) {
-          transaction.objectStore(SYNC_CONFLICTS_STORE).put({ id: `audio:${change.id}`, noteId: change.id, kind: 'audio-review', serverCursor: change.cursor, createdAt: Date.now() });
+          transaction.objectStore(SYNC_CONFLICTS_STORE).put({ id: `audio:${change.id}`, noteId: change.id, kind: 'audio-review', localOnly: true, status: 'needs-review', localRecord: current ?? null, remoteRecord: remote, serverCursor: change.cursor, serverEpoch, serverVersion: change.serverVersion, createdAt: Date.now() });
           continue;
         }
         if (current && (!baseline || localPending || current.revision !== baseline.localRevision)) {
@@ -253,16 +320,20 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
             const existing = await requestResult(notes.get(conflictId));
             if (!existing) {
               const copy = { ...remote, id: conflictId, title: `${remote.title || 'Untitled note'} (Sync conflict)`, revision: 0, updatedAt: Date.now(), lifecycle: remote.lifecycle };
-              notes.add(copy); transaction.objectStore(SYNC_CONFLICTS_STORE).put({ id: conflictId, noteId: change.id, conflictNoteId: conflictId, kind: 'edit-edit', serverCursor: change.cursor, createdAt: Date.now() });
+              notes.add(copy); transaction.objectStore(SYNC_CONFLICTS_STORE).put({ id: conflictId, noteId: change.id, conflictNoteId: conflictId, kind: 'edit-edit', localOnly: true, status: 'needs-review', localRecord: current, remoteRecord: remote, serverCursor: change.cursor, serverEpoch, serverVersion: change.serverVersion, createdAt: Date.now() });
             }
           } else if (!localPending && remote) baselines.put({ id: change.id, serverVersion: change.serverVersion, localRevision: current.revision, contentHash: change.contentHash, lifecycle: change.lifecycle });
-          else if (!remote) transaction.objectStore(SYNC_CONFLICTS_STORE).put({ id: `delete:${change.id}`, noteId: change.id, kind: 'edit-delete', serverCursor: change.cursor, createdAt: Date.now() });
+          else if (!remote) transaction.objectStore(SYNC_CONFLICTS_STORE).put({ id: `delete:${change.id}`, noteId: change.id, kind: 'edit-delete', localOnly: true, status: 'needs-review', localRecord: current, remoteRecord: null, serverCursor: change.cursor, serverEpoch, serverVersion: change.serverVersion, createdAt: Date.now() });
+          if (localPending) for (const pending of entityOperations) {
+            transaction.objectStore(SYNC_QUARANTINE_STORE).put({ ...pending, reason: 'Blocked because a remote change arrived while this note had pending edits.', quarantinedAt: Date.now(), status: 'needs-review' });
+            outbox.delete(pending.operationId);
+          }
           continue;
         }
         if (change.event === 'tombstone') {
           if (current && current.lifecycle !== 'trashed') {
             // Text-only remote tombstones are held for review to avoid orphaning local data.
-            transaction.objectStore(SYNC_CONFLICTS_STORE).put({ id: `delete:${change.id}`, noteId: change.id, kind: 'remote-delete-review', serverCursor: change.cursor, createdAt: Date.now() });
+            transaction.objectStore(SYNC_CONFLICTS_STORE).put({ id: `delete:${change.id}`, noteId: change.id, kind: 'remote-delete-review', localOnly: true, status: 'needs-review', localRecord: current, remoteRecord: null, serverCursor: change.cursor, serverEpoch, serverVersion: change.serverVersion, createdAt: Date.now() });
             continue;
           }
         } else if (!current) { notes.add(remote); transaction.objectStore(SYNC_ENROLLMENT_STORE).put({ id: change.id, optedIn: true, updatedAt: Date.now() }); }
@@ -274,9 +345,19 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
     } catch (error) { abort(transaction, error); try { await done; } catch {} throw error; }
   }
 
-  async function acknowledgeSyncOperations(acks) {
-    const database = await openDatabase(); const transaction = database.transaction([SYNC_OUTBOX_STORE, SYNC_BASELINES_STORE], 'readwrite'); const done = transactionResult(transaction);
+  async function acknowledgeSyncOperations(acks, history = null) {
+    const database = await openDatabase(); const transaction = database.transaction([SYNC_OUTBOX_STORE, SYNC_BASELINES_STORE, SYNC_STATE_STORE], 'readwrite'); const done = transactionResult(transaction);
+    if (history !== null) {
+      const previous = await requestResult(transaction.objectStore(SYNC_STATE_STORE).get('history'));
+      if (typeof history.serverEpoch !== 'string' || !Number.isSafeInteger(history.serverCursor) || history.serverCursor < 0 ||
+        (previous && (previous.serverEpoch !== history.serverEpoch || history.serverCursor < previous.serverCursor))) {
+        const error = abort(transaction, new Error('Acknowledged server history is invalid or moved backwards. Sync recovery review is required.'));
+        try { await done; } catch {}
+        throw error;
+      }
+    }
     for (const ack of acks) { transaction.objectStore(SYNC_OUTBOX_STORE).delete(ack.operationId); transaction.objectStore(SYNC_BASELINES_STORE).put(ack.baseline); }
+    if (history?.serverEpoch && Number.isSafeInteger(history.serverCursor)) transaction.objectStore(SYNC_STATE_STORE).put({ key: 'history', serverEpoch: history.serverEpoch, serverCursor: history.serverCursor });
     await done;
   }
 
@@ -532,7 +613,7 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
     }
   }
 
-  return { list, get, hasExistingDatabase, create, createIfMissing, save, updateOrganization, setLifecycle, deleteForever, importNotes, snapshotArchive, importArchive, setSyncEnrollment, setDefaultSyncEnrollment, listSyncOutbox, getSyncState, getSyncBaseline, setSyncPaired, saveSyncRecovery, recordSyncConflict, commitSyncPull, acknowledgeSyncOperations };
+  return { list, get, hasExistingDatabase, create, createIfMissing, save, updateOrganization, setLifecycle, deleteForever, importNotes, snapshotArchive, importArchive, setSyncEnrollment, setDefaultSyncEnrollment, listSyncOutbox, getSyncState, getSyncOverview, quarantineSyncOperation, getSyncBaseline, setSyncPaired, saveSyncRecovery, recordSyncConflict, commitSyncPull, acknowledgeSyncOperations };
 }
 
 function assertAudioTimestamp(value, label) {
@@ -586,7 +667,7 @@ export function createAudioRepository(indexedDBFactory = globalThis.indexedDB, d
     if (typeof ownerId !== 'string' || !ownerId) throw new TypeError('A recording owner ID is required.');
     assertAudioTimestamp(createdAt, 'createdAt');
     const database = await openDatabase();
-    const tx = database.transaction([STORE_NAME, RECORDINGS_STORE], 'readwrite');
+    const tx = database.transaction([STORE_NAME, RECORDINGS_STORE, SYNC_OUTBOX_STORE, SYNC_QUARANTINE_STORE], 'readwrite');
     const done = transactionResult(tx);
     try {
       const note = await requestResult(tx.objectStore(STORE_NAME).get(noteId));
@@ -597,7 +678,13 @@ export function createAudioRepository(indexedDBFactory = globalThis.indexedDB, d
       if (current.some((entry) => ['recording', 'paused'].includes(entry.status))) throw abort(tx, new NoteStateError('A recording is already active for this note.'));
       const recording = { id: crypto.randomUUID(), noteId, title: 'Audio recording', mimeType, status: 'recording', ownerId, createdAt, updatedAt: createdAt, durationMs: 0, chunkCount: 0 };
       store.add(recording);
+      const outbox = tx.objectStore(SYNC_OUTBOX_STORE);
+      for (const operation of await requestResult(outbox.getAll())) if (operation.entityId === noteId) {
+        tx.objectStore(SYNC_QUARANTINE_STORE).put({ ...operation, reason: 'Text sync paused because this note now has local-only audio.', quarantinedAt: Date.now(), status: 'needs-review' });
+        outbox.delete(operation.operationId);
+      }
       await done;
+      notifyLocalCommit();
       return recording;
     } catch (error) { try { await done; } catch { /* Consume transaction abort before returning the original error. */ } throw error; }
   }
@@ -630,7 +717,7 @@ export function createAudioRepository(indexedDBFactory = globalThis.indexedDB, d
       if (recording.status !== status && !allowed[recording.status].includes(status)) throw abort(tx, new NoteStateError(`Cannot change recording from ${recording.status} to ${status}.`));
       const updated = { ...recording, status, updatedAt: Date.now(), ...(durationMs === undefined ? {} : { durationMs }) };
       if (durationMs !== undefined && (!Number.isSafeInteger(durationMs) || durationMs < 0)) throw abort(tx, new TypeError('Recording duration must be non-negative.'));
-      store.put(updated); await done; return updated;
+      store.put(updated); await done; notifyLocalCommit(); return updated;
     } catch (error) { try { await done; } catch { /* Consume the abort. */ } throw error; }
   }
   async function rename(recordingId, title) {
@@ -680,7 +767,7 @@ export function createAudioRepository(indexedDBFactory = globalThis.indexedDB, d
       if (['recording', 'paused'].includes(recording.status)) throw abort(tx, new NoteStateError('Stop the active recording before deleting it.'));
       const keys = await requestResult(chunkStore.index('recordingId').getAllKeys(recordingId));
       for (const key of keys) chunkStore.delete(key);
-      recordings.delete(recordingId); await done; return recording;
+      recordings.delete(recordingId); await done; notifyLocalCommit(); return recording;
     } catch (error) { try { await done; } catch { /* Consume the abort. */ } throw error; }
   }
   async function recover(recordingId) {

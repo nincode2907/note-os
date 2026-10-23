@@ -1,0 +1,32 @@
+{
+  "status": "PASS",
+  "environment": {
+    "browser": "156.0.8078.4",
+    "origin": "https://localhost:15753",
+    "syntheticDatabase": "isolated Docker SQLite volume",
+    "profile": "disposable Playwright Chromium context"
+  },
+  "scenarios": {
+    "firstHundredAcknowledgedThenOutage": {
+      "status": "PASS",
+      "pushesBeforeOutage": 101,
+      "acknowledged": 100,
+      "pending": 50,
+      "workerLabel": "Sync · Pending"
+    },
+    "reloadRecovery": {
+      "status": "PASS",
+      "remainingAfterReload": 0,
+      "serverOperationDelta": 150,
+      "serverEventDelta": 150
+    },
+    "lostAckReplay": {
+      "status": "PASS",
+      "operationId": "reliability-lost-ack-queue-08a876c2-64e0-484a-bcee-f9b48b9108e2-125",
+      "localRetries": 1,
+      "serverOperationDelta": 150,
+      "serverEventDelta": 150
+    }
+  },
+  "actualIPhoneTest": false
+}

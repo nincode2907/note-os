@@ -21,6 +21,7 @@ export default function SyncSetup() {
   const [recovery, setRecovery] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [defaultEnrollment, setDefaultEnrollment] = useState(false);
+  const [overview, setOverview] = useState<any>(null);
   const [syncStatus, setSyncStatus] = useState('Saved on device');
   const [enrollmentSummary, setEnrollmentSummary] = useState('');
   const repository = createNotesRepository();
@@ -61,7 +62,8 @@ export default function SyncSetup() {
       else { setError(cause.message); setState('Connection needs review.'); }
     }
   }
-  useEffect(() => { setOrigin(location.origin); void connection(); }, []);
+  async function refreshOverview() { try { setOverview(await repository.getSyncOverview()); } catch { setOverview(null); } }
+  useEffect(() => { setOrigin(location.origin); void connection(); void refreshOverview(); }, []);
   async function run(action: () => Promise<void>) {
     if (busy) return; setBusy(true); setError('');
     try { await action(); } catch (cause: any) { setError(cause.message); } finally { setBusy(false); }
@@ -70,6 +72,7 @@ export default function SyncSetup() {
     setPreview(null); const next = await discoverLocal(); setLocal(next);
     setSelectedIds(next.candidates.filter((row: any) => !row.enrolled).map((row: any) => row.id));
     const saved = await repository.getSyncState(); setDefaultEnrollment(saved.state.defaultEnrollment === true);
+    await refreshOverview();
   }
   async function enrollSelected() {
     const before = local?.candidates.filter((row: any) => row.enrolled).length ?? 0, count = selectedIds.length;
@@ -79,8 +82,8 @@ export default function SyncSetup() {
   }
   async function syncNow() {
     const result = await synchronize({ repository, initialize: true, onState: value => setSyncStatus(value) });
-    setSyncStatus(result.status === 'needs-review' ? 'Needs review' : result.status === 'synced' ? 'Synced' : 'Saved on device');
-    setLocal(await discoverLocal()); await connection();
+    setSyncStatus(({ 'needs-review': 'Needs review', synced: 'Text synced', pending: 'Pending', 'media-local-only': 'Audio stays on this device', 'saved-device': 'Saved on device' } as Record<string,string>)[result.status] ?? 'Saved on device');
+    setLocal(await discoverLocal()); await refreshOverview(); await connection();
   }
   return <div className="sync-setup">
     <header className="page-heading"><div><p className="eyebrow">Private connection</p><h1 className="page-title">Sync Setup</h1><p className="page-lede">Prepare a connection at your own pace.</p></div></header>
@@ -110,6 +113,12 @@ export default function SyncSetup() {
       {preview && <div className="sync-preview" aria-label="Bootstrap comparison"><p>{preview.serverEmpty ? 'The server has no user data. This cannot establish conflicts between your populated devices.' : 'Compared against the server’s current records. Matching IDs alone do not mean matching content.'}</p><dl>{[['toUpload','Would upload'],['toDownload','Would download'],['identical','Identical text-only'],['collidingIds','IDs needing review'],['audioRequiresReview','Audio requires review']].map(([key,title]) => <div key={key}><dt>{title}</dt><dd>{preview[key].length}</dd></div>)}</dl><p>Preview only. No note records were changed. Notes with recordings are ineligible for a future text-only pilot until media-presence safety is implemented. Delete Forever across devices is unavailable.</p></div>}
     </section>
     <section className="backup-panel"><h2 className="section-title">Sync now</h2><p>{syncStatus}. Local edits are saved first. Unpaired browsers and unavailable servers keep working offline.</p><button className="btn btn-primary" disabled={busy || !server || recovery} onClick={() => run(syncNow)}>Sync now</button></section>
+    {overview && <section className="backup-panel" aria-label="Local sync status"><h2 className="section-title">Local sync status</h2>
+      <p>{overview.eligiblePending} pending text changes · {overview.blockedPending} blocked changes · {overview.quarantined} quarantined · {overview.recordings} local recordings.</p>
+      {overview.mediaLocalOnly > 0 && <p role="status">{overview.mediaLocalOnly} notes have audio that stays on this device; {overview.textSyncedWithMedia} of those notes also have acknowledged text. This is not a full-data backup.</p>}
+      {overview.conflictRecords.length > 0 && <div role="status"><h3>Needs review · local copies</h3>{overview.conflictRecords.map((conflict: any) => <p key={conflict.id}>{conflict.kind}: {conflict.conflictNoteId ? 'a conflict copy is saved on this device and was not uploaded' : 'local and remote versions are preserved on this device'}.</p>)}<p>To retain a conflict copy as a separate note, inspect this browser’s notes and explicitly approve that copy.</p></div>}
+      {overview.recovery && <p role="alert">Sync is paused for recovery review: {overview.recovery.reason}</p>}
+    </section>}
     {error && <p className="notice error" role="alert">{error}</p>}
     <p className="storage-caption">Tailnet access and device authentication do not provide application-level E2EE. <Link href="/">Continue with local notes</Link>.</p>
   </div>;

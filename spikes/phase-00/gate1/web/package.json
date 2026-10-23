@@ -10,6 +10,8 @@
     "test:mvp": "node --test app/lib/*.test.mjs",
     "test:sync": "node --test sync-server/*.test.mjs",
     "test:quick-capture-browser": "node scripts/mvp-05-quick-capture-browser.mjs",
+    "test:sync-browser": "node scripts/sync-web-08-2a-browser.mjs",
+    "test:sync-reliability-browser": "node scripts/sync-reliability-browser.mjs",
     "test:mvp03-browser": "node scripts/mvp-03-browser.mjs",
     "test:audio-browser": "node scripts/mvp-02-browser.mjs",
     "test:documents": "npm --prefix packages/document-engine test",

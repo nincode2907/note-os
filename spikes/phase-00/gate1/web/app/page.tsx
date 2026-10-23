@@ -31,6 +31,7 @@ function preferencesFromStorage() {
 
 export default function Home() {
   const [notes, setNotes] = useState<any[]>([]);
+  const [syncNotes, setSyncNotes] = useState<Record<string, any>>({});
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<SortMode>('updated');
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
@@ -48,7 +49,12 @@ export default function Home() {
   const captureGate = useRef(new QuickCaptureSaveGate());
 
   const refresh = useCallback(async (clearError = true) => {
-    try { setNotes(await createNotesRepository().list()); if (clearError) setError(''); }
+    try {
+      const repository = createNotesRepository();
+      const [nextNotes, overview] = await Promise.all([repository.list(), repository.getSyncOverview()]);
+      setNotes(nextNotes); setSyncNotes(Object.fromEntries(overview.noteStatuses.map((row: any) => [row.id, row])));
+      if (clearError) setError('');
+    }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not open local notes.'); }
     finally { setReady(true); }
   }, []);
@@ -65,6 +71,12 @@ export default function Home() {
       }
     } catch { setCaptureStatus('The previous unsaved capture could not be read. Its text may still be available in browser storage.'); }
     void refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    const onCommit = () => void refresh(false);
+    window.addEventListener('noteos:local-note-commit', onCommit);
+    return () => window.removeEventListener('noteos:local-note-commit', onCommit);
   }, [refresh]);
 
   useEffect(() => {
@@ -169,7 +181,7 @@ export default function Home() {
       <div className="note-card-top"><span className="note-pin-state">{note.pinned ? 'Pinned' : ''}</span>{note.schemaVersion === 1 && <button className="pin-button" type="button" disabled={busyPinIds.includes(note.id)} aria-label={note.pinned ? `Unpin ${note.title || 'Untitled note'}` : `Pin ${note.title || 'Untitled note'}`} aria-pressed={Boolean(note.pinned)} onClick={() => void togglePin(note)}>{note.pinned ? '★ Pinned' : '☆ Pin'}</button>}</div>
       <Link className="note-card-link" href={`/notes/${encodeURIComponent(note.id)}`}><h2>{note.title || 'Untitled note'}</h2><p className="note-preview">{textOf(note.document) || 'Start with a thought…'}</p><span className="note-open-label">Open note ↗</span></Link>
       {Array.isArray(note.tags) && note.tags.length > 0 && <div className="note-card-tags" aria-label={`Tags for ${note.title || 'Untitled note'}`}>{note.tags.map((tag: string) => <button key={tagKey(tag)} type="button" className="tag-chip" aria-label={`Filter by ${tag}`} onClick={() => toggleTag(tag)}>{tag}</button>)}</div>}
-      <div className="note-meta"><span>{new Date(note.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span><span>{note.pinned ? 'Pinned first' : 'On this device'}</span></div>
+      <div className="note-meta"><span>{new Date(note.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span><span>{syncNotes[note.id]?.status === 'media-local-only' ? (syncNotes[note.id]?.textSynced ? 'Text synced · audio local' : 'Audio local · text not synced') : syncNotes[note.id]?.status === 'needs-review' ? 'Sync needs review' : syncNotes[note.id]?.status === 'pending' ? 'Text pending' : note.pinned ? 'Pinned first' : 'On this device'}</span></div>
     </article>)}</section>
       : <div className="empty-state"><h2>{ready ? (hasFilters ? 'No notes match these filters' : 'A fresh page') : 'Opening your notes…'}</h2><p>{ready ? (hasFilters ? 'Clear a tag or try another search to see more notes.' : 'Create a note to get your thoughts started.') : 'Everything is stored on this device.'}</p>{ready && hasFilters && <button className="btn" onClick={() => { setQuery(''); setSelectedTags([]); }}>Clear search and filters</button>}{ready && !hasFilters && <button className="btn btn-primary" onClick={createNote}>Create your first note</button>}</div>}
   </>;

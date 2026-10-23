@@ -1,0 +1,11 @@
+{
+  "result": "PASS",
+  "origins": [
+    "http://127.0.0.1:15752",
+    "http://localhost:15752"
+  ],
+  "firstOriginCount": 1,
+  "secondOriginCount": 0,
+  "firstOriginAfterReturn": 1,
+  "syntheticOnly": true
+}

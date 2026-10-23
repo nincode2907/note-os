@@ -1,0 +1,31 @@
+name: noteos-phase082a1-complete-acceptance-test
+services:
+  web:
+    image: noteos-web-phase082a-synthetic
+    container_name: noteos-phase082a1-complete-synthetic-web
+    environment:
+      NEXT_TELEMETRY_DISABLED: "1"
+      NOTEOS_SYNC_ENABLED: "1"
+      NOTEOS_SYNC_TEST_ONLY: "1"
+      NOTEOS_SYNC_STORAGE: /var/lib/noteos-sync
+      NOTEOS_SYNC_ALLOWED_ORIGINS: https://localhost:15753,http://127.0.0.1:15752,http://localhost:15752
+    ports:
+      - "127.0.0.1:15752:3000"
+    networks:
+      - phase082a1
+    volumes:
+      - phase082a1_sync_state:/var/lib/noteos-sync
+      - ./spikes/phase-00/gate1/web/.next:/app/.next:ro
+      - ./spikes/phase-00/gate1/web/scripts/sync-web-08-2a-fixture.mjs:/verification/fixture.mjs:ro
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 15s
+      retries: 12
+volumes:
+  phase082a1_sync_state:
+    name: noteos_phase082a1_synthetic_complete_20261023
+networks:
+  phase082a1:
+    name: noteos_phase082a1_synthetic_complete_net_20261023

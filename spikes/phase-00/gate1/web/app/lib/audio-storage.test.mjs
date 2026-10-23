@@ -30,8 +30,8 @@ test('v1 note database upgrades additively and preserves existing note bytes', a
   const before = await notes.get('old-v1');
   const created = await audio.create('old-v1', { mimeType: 'audio/webm', ownerId: 'tab-1', createdAt: 123 });
   const database = await new Promise((resolve, reject) => { const request = indexedDB.open(databaseName); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
-  assert.equal(database.version, 3); assert.ok(database.objectStoreNames.contains('notes')); assert.ok(database.objectStoreNames.contains('recordings')); assert.ok(database.objectStoreNames.contains('recordingChunks'));
-  for (const store of ['syncOutbox','syncBaselines','syncState','syncConflicts','syncEnrollment']) assert.ok(database.objectStoreNames.contains(store));
+  assert.equal(database.version, 4); assert.ok(database.objectStoreNames.contains('notes')); assert.ok(database.objectStoreNames.contains('recordings')); assert.ok(database.objectStoreNames.contains('recordingChunks'));
+  for (const store of ['syncOutbox','syncBaselines','syncState','syncConflicts','syncEnrollment','syncQuarantine']) assert.ok(database.objectStoreNames.contains(store));
   database.close(); assert.deepEqual(await notes.get('old-v1'), before); assert.equal(created.noteId, 'old-v1');
 });
 

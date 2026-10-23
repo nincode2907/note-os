@@ -1,0 +1,5 @@
+UTF-8 audit — 2026-10-23
+
+PASS. Python UTF-8 strict decoding succeeded for the 10 audited implementation, test, script, and Phase 00 report files (159,849 bytes total). No UTF-8 replacement-character byte sequence (EF BF BD) was found.
+
+The reviewed source/report subset included the local notes and sync client implementation and tests, home/sync/audio/worker UI, the reliability browser script, and the Phase 00 report. Browser screenshots and the synthetic TAR fixture are binary evidence and were not decoded as text.

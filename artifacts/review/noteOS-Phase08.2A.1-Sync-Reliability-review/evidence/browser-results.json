@@ -1,0 +1,23 @@
+{
+  "results": [
+    {
+      "browser": "iPhone-sized WebKit",
+      "version": "27.2",
+      "viewport": "390x844",
+      "deviceScaleFactor": 3,
+      "offlineCapture": true,
+      "ownerEnrollment": true
+    },
+    {
+      "browser": "Mac Chromium",
+      "version": "156.0.8078.4",
+      "viewport": "1440x1000",
+      "receivedFromWebKit": true,
+      "unicode": "Vietnamese/Japanese",
+      "edited": true
+    }
+  ],
+  "scenarios": 13,
+  "syntheticOnly": true,
+  "actualIPhoneTest": false
+}

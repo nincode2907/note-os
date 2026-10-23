@@ -4,6 +4,7 @@ import 'fake-indexeddb/auto';
 import { validateCanonicalDocument } from '../../packages/document-engine/src/index.js';
 import {
   createNotesRepository,
+  createAudioRepository,
   ImportCollisionError,
   makeEmptyNote,
   NoteConflictError,
@@ -11,6 +12,7 @@ import {
   NoteNotFoundError,
   NoteStateError,
 } from './local-notes.js';
+import { createAudioAnchor } from './audio-anchors.mjs';
 
 let databaseSequence = 0;
 function repository() {
@@ -134,12 +136,37 @@ test('sync enrollment writes each eligible local mutation and outbox entry durab
   assert.equal((await reopened.listSyncOutbox()).length, 2); assert.equal((await reopened.get('outbox-create')).revision, changed.revision);
 });
 
+test('v3 IndexedDB migration adds quarantine while preserving notes, history and queued operation IDs', async () => {
+  const { name } = repository();
+  const db = await new Promise((resolve, reject) => {
+    const request = indexedDB.open(name, 3);
+    request.onupgradeneeded = () => {
+      const database = request.result;
+      const notes = database.createObjectStore('notes', { keyPath: 'id' }); notes.createIndex('lifecycle', 'lifecycle'); notes.createIndex('updatedAt', 'updatedAt');
+      const recordings = database.createObjectStore('recordings', { keyPath: 'id' }); recordings.createIndex('noteId', 'noteId'); recordings.createIndex('status', 'status'); recordings.createIndex('updatedAt', 'updatedAt');
+      const chunks = database.createObjectStore('recordingChunks', { keyPath: 'id' }); chunks.createIndex('recordingId', 'recordingId'); chunks.createIndex('recordingSequence', ['recordingId', 'sequence'], { unique: true });
+      database.createObjectStore('syncOutbox', { keyPath: 'operationId' }); database.createObjectStore('syncBaselines', { keyPath: 'id' }); database.createObjectStore('syncState', { keyPath: 'key' }); database.createObjectStore('syncConflicts', { keyPath: 'id' }); database.createObjectStore('syncEnrollment', { keyPath: 'id' });
+    };
+    request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
+  });
+  const note = makeNote('v3-migration'), operation = { operationId: 'operation-v3-stable-0001', entityId: note.id, localRevision: 0, baseServerVersion: 4, ownerApproved: true, type: 'upsert', recordJson: JSON.stringify(note), createdAt: 1 };
+  const tx = db.transaction(['notes', 'syncOutbox', 'syncBaselines', 'syncState', 'syncEnrollment'], 'readwrite');
+  tx.objectStore('notes').put(note); tx.objectStore('syncOutbox').put(operation); tx.objectStore('syncBaselines').put({ id: note.id, serverVersion: 4, localRevision: 0 }); tx.objectStore('syncState').put({ key: 'history', serverEpoch: 'epoch-v3', serverCursor: 9 }); tx.objectStore('syncEnrollment').put({ id: note.id, optedIn: true });
+  await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onabort = tx.onerror = () => reject(tx.error); }); db.close();
+  const reopenedRepository = createNotesRepository(indexedDB, name);
+  assert.deepEqual(await reopenedRepository.get(note.id), note);
+  assert.equal((await reopenedRepository.listSyncOutbox())[0].operationId, operation.operationId);
+  assert.equal((await reopenedRepository.getSyncState()).state.history.serverCursor, 9);
+  const migrated = await new Promise((resolve, reject) => { const request = indexedDB.open(name); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+  assert.equal(migrated.version, 4); assert.ok(migrated.objectStoreNames.contains('syncQuarantine')); migrated.close();
+});
+
 test('existing notes require explicit owner enrollment and DEVICE_ONLY or recording-bearing notes are excluded', async () => {
   const { name, repo } = repository();
   const privateNote = await repo.create(makeNote('owner-choice'));
   const deviceOnly = await repo.create({ ...makeNote('never-upload'), privacy: 'DEVICE_ONLY' });
   const audioNote = await repo.create(makeNote('audio-local'));
-  const db = await new Promise((resolve,reject) => { const request = indexedDB.open(name,3); request.onsuccess=()=>resolve(request.result); request.onerror=()=>reject(request.error); });
+  const db = await new Promise((resolve,reject) => { const request = indexedDB.open(name,4); request.onsuccess=()=>resolve(request.result); request.onerror=()=>reject(request.error); });
   const tx=db.transaction('recordings','readwrite');tx.objectStore('recordings').put({id:'recording-a',noteId:audioNote.id,status:'interrupted'});await new Promise((resolve,reject)=>{tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);});db.close();
   await repo.setSyncEnrollment([privateNote.id,deviceOnly.id,audioNote.id],true);
   assert.equal((await repo.listSyncOutbox()).length,1);
@@ -174,6 +201,116 @@ test('remote tombstone colliding with a local edit is held for review and never 
   assert.equal((await repo.get(local.id)).title,'local offline edit');
   const state=await repo.getSyncState();assert.ok(state.conflicts.some(row=>row.kind==='edit-delete'&&row.noteId===local.id));
   assert.equal(state.state.history.serverCursor,9);
+});
+
+test('150 queued revisions of one note remain ordered, stable and visible as pending', async () => {
+  const { name, repo } = repository();
+  await repo.setDefaultSyncEnrollment(true);
+  let note = await repo.create(makeNote('many-revisions'));
+  for (let index = 0; index < 149; index++) note = await repo.save(note.id, { title: `Revision ${index + 1}`, document: canonical(`body ${index + 1}`) }, note.revision);
+  const operations = await repo.listSyncOutbox(1000);
+  assert.equal(operations.length, 150);
+  assert.equal(new Set(operations.map(row => row.operationId)).size, 150);
+  assert.deepEqual(operations.map(row => row.localRevision), [...operations.map(row => row.localRevision)].sort((a,b) => a-b));
+  assert.equal((await repo.getSyncOverview()).eligiblePending, 150);
+  const reopened = createNotesRepository(indexedDB, name);
+  assert.deepEqual((await reopened.listSyncOutbox(1000)).map(row => row.operationId), operations.map(row => row.operationId));
+});
+
+test('pull reconciles a committed operation with a lost ACK and leaves later same-note revisions sendable', async () => {
+  const { repo } = repository();
+  await repo.setDefaultSyncEnrollment(true);
+  let note = await repo.create(makeNote('lost-ack-pull'));
+  note = await repo.save(note.id, { title: 'Revision 1', document: canonical('one') }, note.revision);
+  note = await repo.save(note.id, { title: 'Revision 2', document: canonical('two') }, note.revision);
+  const operations = await repo.listSyncOutbox(10);
+  const firstRecord = JSON.parse(operations[0].recordJson);
+  await repo.commitSyncPull({ serverEpoch: 'epoch-lost-ack', serverCursor: 1, changes: [{ id: note.id, cursor: 1, serverVersion: 1, serverEpoch: 'epoch-lost-ack', event: 'upsert', recordJson: operations[0].recordJson, contentHash: 'hash-1', lifecycle: 'active' }] });
+  assert.deepEqual((await repo.listSyncOutbox(10)).map(row => row.operationId), operations.slice(1).map(row => row.operationId));
+  assert.equal((await repo.getSyncBaseline(note.id)).serverVersion, 1);
+  assert.equal((await repo.getSyncState()).conflicts.length, 0);
+  await repo.commitSyncPull({ serverEpoch: 'epoch-lost-ack', serverCursor: 2, changes: [{ id: note.id, cursor: 2, serverVersion: 2, serverEpoch: 'epoch-lost-ack', event: 'upsert', recordJson: operations[1].recordJson, contentHash: 'hash-2', lifecycle: 'active' }] });
+  assert.deepEqual((await repo.listSyncOutbox(10)).map(row => row.operationId), operations.slice(2).map(row => row.operationId));
+  assert.equal((await repo.getSyncBaseline(note.id)).serverVersion, 2);
+  assert.equal(firstRecord.revision, 0);
+  assert.equal((await repo.get(note.id)).title, 'Revision 2');
+});
+
+test('push conflict preserves full local and remote versions and blocks every queued same-note revision', async () => {
+  const { name, repo } = repository();
+  await repo.setDefaultSyncEnrollment(true);
+  const local0 = await repo.create({ ...makeNote('push-conflict', 'Local title', canonical('local body')), pinned: true, tags: ['日本語', 'Personal'], lifecycle: 'active' });
+  await repo.save(local0.id, { title: 'Later local title', document: canonical('later local body') }, local0.revision);
+  const operations = await repo.listSyncOutbox(100);
+  const remote = { ...makeNote(local0.id, 'Remote title', canonical('remote body')), pinned: false, tags: ['Remote'], lifecycle: 'archived', revision: 8 };
+  await repo.recordSyncConflict(operations[0].operationId, { serverEpoch: 'epoch-conflict', actualVersion: 9, remote: { record: remote } });
+  const state = await repo.getSyncState();
+  assert.equal((await repo.get(local0.id)).title, 'Later local title');
+  assert.equal((await repo.listSyncOutbox(100)).length, 0);
+  assert.equal(state.quarantine.length, 2);
+  const conflict = state.conflicts.find(row => row.noteId === local0.id);
+  assert.equal(conflict.localOnly, true); assert.equal(conflict.status, 'needs-review');
+  assert.deepEqual(conflict.localRecord.tags, ['日本語', 'Personal']);
+  assert.equal(conflict.localRecord.pinned, true);
+  assert.equal(conflict.localRecord.document.content[0].content[0].text, 'later local body');
+  assert.deepEqual(conflict.remoteRecord, remote);
+  const copy = await repo.get(conflict.conflictNoteId);
+  assert.equal(copy.title, 'Remote title (Sync conflict)');
+  assert.equal(copy.lifecycle, 'archived'); assert.deepEqual(copy.tags, ['Remote']); assert.equal(copy.pinned, false);
+  assert.deepEqual(copy.document, remote.document);
+  assert.equal((await repo.listSyncOutbox(100)).length, 0, 'conflict copies remain local until explicitly approved');
+  await repo.setSyncEnrollment([conflict.conflictNoteId], true);
+  assert.deepEqual((await repo.listSyncOutbox(100)).map(row => row.entityId), [conflict.conflictNoteId]);
+  const reopened = createNotesRepository(indexedDB, name);
+  assert.deepEqual((await reopened.getSyncState()).conflicts.find(row => row.id === conflict.id).remoteRecord, remote);
+  assert.equal((await reopened.getSyncOverview()).quarantined, 2);
+});
+
+test('pull conflicts are idempotent and preserve a concurrent remote version across restart', async () => {
+  const { name, repo } = repository();
+  await repo.setDefaultSyncEnrollment(true);
+  const local = await repo.create({ ...makeNote('pull-conflict', 'Offline local', canonical('offline body')), pinned: true, tags: ['Local'] });
+  await repo.save(local.id, { title: 'Offline later', document: canonical('offline later body') }, local.revision);
+  const remote = { ...makeNote(local.id, 'Other device', canonical('remote body')), pinned: false, tags: ['Remote'], revision: 4 };
+  const change = { id: local.id, cursor: 11, serverVersion: 3, serverEpoch: 'epoch-pull', event: 'upsert', recordJson: JSON.stringify(remote), contentHash: 'hash-remote', lifecycle: 'active' };
+  await repo.commitSyncPull({ serverEpoch: 'epoch-pull', serverCursor: 11, changes: [change] });
+  await repo.commitSyncPull({ serverEpoch: 'epoch-pull', serverCursor: 11, changes: [change] });
+  const state = await repo.getSyncState(), copies = (await repo.list()).filter(row => row.id.startsWith('conflict-'));
+  assert.equal((await repo.get(local.id)).title, 'Offline later');
+  assert.equal(copies.length, 1);
+  assert.equal(state.conflicts.filter(row => row.noteId === local.id).length, 1);
+  assert.deepEqual(state.conflicts.find(row => row.noteId === local.id).remoteRecord, remote);
+  assert.equal(state.quarantine.length, 2);
+  assert.equal(state.state.history.serverCursor, 11);
+  const reopened = createNotesRepository(indexedDB, name);
+  assert.equal((await reopened.get(copies[0].id)).document.content[0].content[0].text, 'remote body');
+  assert.equal((await reopened.getSyncState()).conflicts.filter(row => row.noteId === local.id).length, 1);
+});
+
+test('audio attached after text ACK is visible as media-local-only and remote pulls preserve bytes and anchors', async () => {
+  const { name, repo } = repository();
+  await repo.setDefaultSyncEnrollment(true);
+  const note = await repo.create(makeNote('audio-after-sync'));
+  const [operation] = await repo.listSyncOutbox();
+  await repo.acknowledgeSyncOperations([{ operationId: operation.operationId, baseline: { id: note.id, serverVersion: 1, localRevision: note.revision } }], { serverEpoch: 'epoch-audio', serverCursor: 1 });
+  const audio = createAudioRepository(indexedDB, name);
+  const recording = await audio.create(note.id, { mimeType: 'audio/webm', ownerId: 'test-tab', createdAt: 10 });
+  await audio.appendChunk(recording.id, 0, new Blob(['synthetic audio bytes']), 1000);
+  await audio.setStatus(recording.id, 'complete', { durationMs: 1000 });
+  await audio.addAnchor(recording.id, createAudioAnchor(recording.id, 500, 'keep this anchor', { id: 'anchor-local', createdAt: 11 }));
+  assert.equal((await repo.getSyncOverview()).noteStatuses.find(row => row.id === note.id).status, 'media-local-only');
+  const beforeChunks = await audio.chunks(recording.id), beforeRecording = await audio.get(recording.id);
+  const remote = { ...note, title: 'Remote text revision', revision: 1 };
+  await repo.commitSyncPull({ serverEpoch: 'epoch-audio', serverCursor: 2, changes: [{ id: note.id, cursor: 2, serverVersion: 2, serverEpoch: 'epoch-audio', event: 'upsert', recordJson: JSON.stringify(remote), contentHash: 'remote-hash', lifecycle: 'active' }] });
+  assert.equal((await repo.get(note.id)).title, note.title);
+  assert.deepEqual(await audio.chunks(recording.id), beforeChunks);
+  assert.deepEqual(await audio.get(recording.id), beforeRecording);
+  assert.equal((await audio.listAnchors(recording.id))[0].id, 'anchor-local');
+  const state = await repo.getSyncState();
+  assert.equal(state.conflicts.find(row => row.kind === 'audio-review').localOnly, true);
+  assert.deepEqual(state.conflicts.find(row => row.kind === 'audio-review').remoteRecord, remote);
+  assert.equal((await repo.getSyncOverview()).noteStatuses.find(row => row.id === note.id).status, 'needs-review');
+  assert.equal((await createNotesRepository(indexedDB, name).getSyncOverview()).noteStatuses.find(row => row.id === note.id).status, 'needs-review');
 });
 
 test('future note record schemas remain preserved but cannot be edited or organized as schema v1', async () => {

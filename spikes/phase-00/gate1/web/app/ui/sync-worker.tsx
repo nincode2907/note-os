@@ -34,6 +34,6 @@ export function SyncWorker() {
     };
   }, [debouncedRun, run]);
 
-  const labels: Record<string,string> = { 'saved-device': 'Sync · Saved on device', waiting: 'Sync · Waiting for Mac', syncing: 'Sync · Syncing', synced: 'Sync · Synced', 'needs-review': 'Sync · Needs review' };
+  const labels: Record<string,string> = { 'saved-device': 'Sync · Saved on device', waiting: 'Sync · Waiting for another tab', pending: 'Sync · Pending', syncing: 'Sync · Syncing', synced: 'Sync · Text synced', 'media-local-only': 'Sync · Audio stays on this device', 'needs-review': 'Sync · Needs review' };
   return <span className={`sync-worker-state state-${status}`} role="status" aria-live="polite">{labels[status] ?? 'Sync · Saved on device'}</span>;
 }

@@ -1,0 +1,1191 @@
+diff --git a/docker-compose.phase082a1-test.yml b/docker-compose.phase082a1-test.yml
+new file mode 100644
+index 0000000..7c65c61
+--- /dev/null
++++ b/docker-compose.phase082a1-test.yml
+@@ -0,0 +1,31 @@
++name: noteos-phase082a1-complete-acceptance-test
++services:
++  web:
++    image: noteos-web-phase082a-synthetic
++    container_name: noteos-phase082a1-complete-synthetic-web
++    environment:
++      NEXT_TELEMETRY_DISABLED: "1"
++      NOTEOS_SYNC_ENABLED: "1"
++      NOTEOS_SYNC_TEST_ONLY: "1"
++      NOTEOS_SYNC_STORAGE: /var/lib/noteos-sync
++      NOTEOS_SYNC_ALLOWED_ORIGINS: https://localhost:15753,http://127.0.0.1:15752,http://localhost:15752
++    ports:
++      - "127.0.0.1:15752:3000"
++    networks:
++      - phase082a1
++    volumes:
++      - phase082a1_sync_state:/var/lib/noteos-sync
++      - ./spikes/phase-00/gate1/web/.next:/app/.next:ro
++      - ./spikes/phase-00/gate1/web/scripts/sync-web-08-2a-fixture.mjs:/verification/fixture.mjs:ro
++    mem_limit: 512m
++    healthcheck:
++      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
++      interval: 5s
++      timeout: 15s
++      retries: 12
++volumes:
++  phase082a1_sync_state:
++    name: noteos_phase082a1_synthetic_complete_20261023
++networks:
++  phase082a1:
++    name: noteos_phase082a1_synthetic_complete_net_20261023
+diff --git a/spikes/phase-00/gate1/web/app/lib/audio-storage.test.mjs b/spikes/phase-00/gate1/web/app/lib/audio-storage.test.mjs
+index 5ed9bc0..aff5e35 100644
+--- a/spikes/phase-00/gate1/web/app/lib/audio-storage.test.mjs
++++ b/spikes/phase-00/gate1/web/app/lib/audio-storage.test.mjs
+@@ -30,8 +30,8 @@ test('v1 note database upgrades additively and preserves existing note bytes', a
+   const before = await notes.get('old-v1');
+   const created = await audio.create('old-v1', { mimeType: 'audio/webm', ownerId: 'tab-1', createdAt: 123 });
+   const database = await new Promise((resolve, reject) => { const request = indexedDB.open(databaseName); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+-  assert.equal(database.version, 3); assert.ok(database.objectStoreNames.contains('notes')); assert.ok(database.objectStoreNames.contains('recordings')); assert.ok(database.objectStoreNames.contains('recordingChunks'));
+-  for (const store of ['syncOutbox','syncBaselines','syncState','syncConflicts','syncEnrollment']) assert.ok(database.objectStoreNames.contains(store));
++  assert.equal(database.version, 4); assert.ok(database.objectStoreNames.contains('notes')); assert.ok(database.objectStoreNames.contains('recordings')); assert.ok(database.objectStoreNames.contains('recordingChunks'));
++  for (const store of ['syncOutbox','syncBaselines','syncState','syncConflicts','syncEnrollment','syncQuarantine']) assert.ok(database.objectStoreNames.contains(store));
+   database.close(); assert.deepEqual(await notes.get('old-v1'), before); assert.equal(created.noteId, 'old-v1');
+ });
+ 
+diff --git a/spikes/phase-00/gate1/web/app/lib/local-notes.js b/spikes/phase-00/gate1/web/app/lib/local-notes.js
+index 703735f..5c4972e 100644
+--- a/spikes/phase-00/gate1/web/app/lib/local-notes.js
++++ b/spikes/phase-00/gate1/web/app/lib/local-notes.js
+@@ -6,7 +6,7 @@ import { canonicalJson } from './sync-protocol.mjs';
+ export { NoteDocumentError } from './note-validation.mjs';
+ 
+ const DATABASE_NAME = 'noteos-mvp-01';
+-const DATABASE_VERSION = 3;
++const DATABASE_VERSION = 4;
+ const STORE_NAME = 'notes';
+ const RECORDINGS_STORE = 'recordings';
+ const RECORDING_CHUNKS_STORE = 'recordingChunks';
+@@ -15,6 +15,7 @@ const SYNC_BASELINES_STORE = 'syncBaselines';
+ const SYNC_STATE_STORE = 'syncState';
+ const SYNC_CONFLICTS_STORE = 'syncConflicts';
+ const SYNC_ENROLLMENT_STORE = 'syncEnrollment';
++const SYNC_QUARANTINE_STORE = 'syncQuarantine';
+ 
+ export class NoteNotFoundError extends Error {
+   constructor(id) {
+@@ -120,6 +121,7 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
+           if (!database.objectStoreNames.contains(SYNC_STATE_STORE)) database.createObjectStore(SYNC_STATE_STORE, { keyPath: 'key' });
+           if (!database.objectStoreNames.contains(SYNC_CONFLICTS_STORE)) database.createObjectStore(SYNC_CONFLICTS_STORE, { keyPath: 'id' });
+           if (!database.objectStoreNames.contains(SYNC_ENROLLMENT_STORE)) database.createObjectStore(SYNC_ENROLLMENT_STORE, { keyPath: 'id' });
++          if (!database.objectStoreNames.contains(SYNC_QUARANTINE_STORE)) database.createObjectStore(SYNC_QUARANTINE_STORE, { keyPath: 'operationId' });
+         };
+         request.onsuccess = () => {
+           request.result.onversionchange = () => request.result.close();
+@@ -187,7 +189,60 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
+     const database = await openDatabase(); const transaction = database.transaction([SYNC_OUTBOX_STORE, RECORDINGS_STORE, STORE_NAME, SYNC_ENROLLMENT_STORE], 'readonly'); const done = transactionResult(transaction);
+     const [rows, recordings, notes, enrolled] = await Promise.all([requestResult(transaction.objectStore(SYNC_OUTBOX_STORE).getAll()), requestResult(transaction.objectStore(RECORDINGS_STORE).getAll()), requestResult(transaction.objectStore(STORE_NAME).getAll()), requestResult(transaction.objectStore(SYNC_ENROLLMENT_STORE).getAll())]); await done;
+     const audioNotes = new Set(recordings.map(row => row.noteId)), noteMap = new Map(notes.map(row => [row.id,row])), enrolledSet = new Set(enrolled.filter(row => row.optedIn).map(row => row.id));
+-    return rows.filter(row => !audioNotes.has(row.entityId) && noteMap.get(row.entityId)?.privacy !== 'DEVICE_ONLY' && enrolledSet.has(row.entityId)).sort((a,b) => a.createdAt-b.createdAt).slice(0, limit);
++    return rows.filter(row => !audioNotes.has(row.entityId) && noteMap.get(row.entityId)?.privacy !== 'DEVICE_ONLY' && enrolledSet.has(row.entityId)).sort((a,b) => a.createdAt-b.createdAt || a.entityId.localeCompare(b.entityId) || a.localRevision-b.localRevision || a.operationId.localeCompare(b.operationId)).slice(0, limit);
++  }
++
++  async function getSyncOverview() {
++    const database = await openDatabase();
++    const transaction = database.transaction([STORE_NAME, RECORDINGS_STORE, SYNC_OUTBOX_STORE, SYNC_BASELINES_STORE, SYNC_STATE_STORE, SYNC_CONFLICTS_STORE, SYNC_ENROLLMENT_STORE, SYNC_QUARANTINE_STORE], 'readonly');
++    const done = transactionResult(transaction);
++    const stores = name => transaction.objectStore(name).getAll();
++    const [notes, recordings, outbox, baselines, state, conflicts, enrollments, quarantine] = await Promise.all([
++      ...[STORE_NAME, RECORDINGS_STORE, SYNC_OUTBOX_STORE, SYNC_BASELINES_STORE, SYNC_STATE_STORE, SYNC_CONFLICTS_STORE, SYNC_ENROLLMENT_STORE, SYNC_QUARANTINE_STORE].map(name => requestResult(stores(name))),
++    ]);
++    await done;
++    const noteMap = new Map(notes.map(note => [note.id, note]));
++    const enrollmentSet = new Set(enrollments.filter(row => row.optedIn).map(row => row.id));
++    const audioCounts = new Map();
++    for (const recording of recordings) audioCounts.set(recording.noteId, (audioCounts.get(recording.noteId) ?? 0) + 1);
++    const eligible = outbox.filter(row => !audioCounts.has(row.entityId) && noteMap.get(row.entityId)?.privacy !== 'DEVICE_ONLY' && enrollmentSet.has(row.entityId));
++    const eligibleIds = new Set(eligible.map(row => row.operationId));
++    const blocked = outbox.filter(row => !eligibleIds.has(row.operationId));
++    const pendingNotes = new Set(eligible.map(row => row.entityId));
++    const baselineMap = new Map(baselines.map(row => [row.id, row]));
++    const conflictNotes = new Set(conflicts.map(row => row.noteId));
++    const quarantinedNotes = new Set(quarantine.map(row => row.entityId));
++    const noteStatuses = notes.map(note => {
++      const hasAudio = (audioCounts.get(note.id) ?? 0) > 0;
++      const hasConflict = conflictNotes.has(note.id) || quarantinedNotes.has(note.id);
++      const pending = pendingNotes.has(note.id);
++      const baseline = baselineMap.get(note.id);
++      const textSynced = Boolean(baseline && baseline.localRevision >= note.revision);
++      const status = hasConflict ? 'needs-review' : hasAudio ? 'media-local-only' : pending ? 'pending' : textSynced ? 'text-synced' : 'saved-device';
++      return { id: note.id, status, textSynced, recordingCount: audioCounts.get(note.id) ?? 0 };
++    });
++    const values = Object.fromEntries(state.map(row => [row.key, row.value ?? row]));
++    return {
++      totalOutbox: outbox.length, eligiblePending: eligible.length, blockedPending: blocked.length,
++      quarantined: quarantine.length, conflicts: conflicts.length, recordings: recordings.length,
++      unfinishedRecordings: recordings.filter(row => ['recording', 'paused', 'interrupted'].includes(row.status)).length,
++      mediaLocalOnly: noteStatuses.filter(row => row.status === 'media-local-only').length,
++      textSyncedWithMedia: noteStatuses.filter(row => row.status === 'media-local-only' && row.textSynced).length,
++      noteStatuses, conflictRecords: conflicts, quarantineRecords: quarantine,
++      recovery: values.recovery ?? null, paired: values.paired === true, history: values.history ?? null,
++    };
++  }
++
++  async function quarantineSyncOperation(operationId, reason = 'The server rejected this operation.') {
++    const database = await openDatabase();
++    const transaction = database.transaction([SYNC_OUTBOX_STORE, SYNC_QUARANTINE_STORE], 'readwrite');
++    const done = transactionResult(transaction);
++    const outbox = transaction.objectStore(SYNC_OUTBOX_STORE), operation = await requestResult(outbox.get(operationId));
++    if (operation) {
++      transaction.objectStore(SYNC_QUARANTINE_STORE).put({ ...operation, reason, quarantinedAt: Date.now(), status: 'needs-review' });
++      outbox.delete(operationId);
++    }
++    await done;
+   }
+ 
+   async function saveSyncRecovery(reason, serverHistory = null) {
+@@ -201,9 +256,9 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
+   }
+ 
+   async function getSyncState() {
+-    const database = await openDatabase(); const transaction = database.transaction([SYNC_STATE_STORE, SYNC_CONFLICTS_STORE], 'readonly'); const done = transactionResult(transaction);
+-    const [state, conflicts] = await Promise.all([requestResult(transaction.objectStore(SYNC_STATE_STORE).getAll()), requestResult(transaction.objectStore(SYNC_CONFLICTS_STORE).getAll())]);
+-    await done; return { state: Object.fromEntries(state.map(row => [row.key, row.value ?? row])), conflicts };
++    const database = await openDatabase(); const transaction = database.transaction([SYNC_STATE_STORE, SYNC_CONFLICTS_STORE, SYNC_QUARANTINE_STORE], 'readonly'); const done = transactionResult(transaction);
++    const [state, conflicts, quarantine] = await Promise.all([requestResult(transaction.objectStore(SYNC_STATE_STORE).getAll()), requestResult(transaction.objectStore(SYNC_CONFLICTS_STORE).getAll()), requestResult(transaction.objectStore(SYNC_QUARANTINE_STORE).getAll())]);
++    await done; return { state: Object.fromEntries(state.map(row => [row.key, row.value ?? row])), conflicts, quarantine };
+   }
+ 
+   async function getSyncBaseline(id) {
+@@ -212,7 +267,7 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
+   }
+ 
+   async function recordSyncConflict(operationId, conflict) {
+-    const database = await openDatabase(); const transaction = database.transaction([STORE_NAME, SYNC_OUTBOX_STORE, SYNC_BASELINES_STORE, SYNC_CONFLICTS_STORE], 'readwrite'); const done = transactionResult(transaction);
++    const database = await openDatabase(); const transaction = database.transaction([STORE_NAME, SYNC_OUTBOX_STORE, SYNC_BASELINES_STORE, SYNC_CONFLICTS_STORE, SYNC_QUARANTINE_STORE], 'readwrite'); const done = transactionResult(transaction);
+     try {
+       const outbox = transaction.objectStore(SYNC_OUTBOX_STORE), operation = await requestResult(outbox.get(operationId));
+       if (operation) {
+@@ -222,10 +277,13 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
+         if (remote && current && canonicalJson(remote) !== canonicalJson(current)) {
+           const notes = transaction.objectStore(STORE_NAME);
+           if (!(await requestResult(notes.get(conflictId)))) notes.add({ ...remote, id: conflictId, title: `${remote.title || 'Untitled note'} (Sync conflict)`, revision: 0, updatedAt: Date.now() });
+-          transaction.objectStore(SYNC_CONFLICTS_STORE).put({ id: conflictId, noteId: operation.entityId, conflictNoteId: conflictId, kind: 'edit-edit', createdAt: Date.now() });
+-        } else transaction.objectStore(SYNC_CONFLICTS_STORE).put({ id: `conflict-${operation.entityId}`, noteId: operation.entityId, kind: conflict.tombstoned ? 'edit-delete' : 'id-collision', createdAt: Date.now() });
++          transaction.objectStore(SYNC_CONFLICTS_STORE).put({ id: conflictId, noteId: operation.entityId, conflictNoteId: conflictId, kind: 'edit-edit', localOnly: true, status: 'needs-review', localRecord: current, remoteRecord: remote, serverEpoch: conflict.serverEpoch, serverVersion: conflict.actualVersion, createdAt: Date.now() });
++        } else transaction.objectStore(SYNC_CONFLICTS_STORE).put({ id: `conflict-${operation.entityId}`, noteId: operation.entityId, kind: conflict.tombstoned ? 'edit-delete' : 'id-collision', localOnly: true, status: 'needs-review', localRecord: current ?? null, remoteRecord: remote ?? null, serverEpoch: conflict.serverEpoch, serverVersion: conflict.actualVersion, createdAt: Date.now() });
+         if (conflict.actualVersion > 0) transaction.objectStore(SYNC_BASELINES_STORE).put({ id: operation.entityId, serverVersion: conflict.actualVersion, localRevision: current?.revision ?? 0 });
+-        outbox.delete(operationId);
++        for (const pending of await requestResult(outbox.getAll())) if (pending.entityId === operation.entityId) {
++          transaction.objectStore(SYNC_QUARANTINE_STORE).put({ ...pending, reason: 'Blocked because another device changed this note.', quarantinedAt: Date.now(), status: 'needs-review' });
++          outbox.delete(pending.operationId);
++        }
+       }
+       await done;
+     } catch (error) { abort(transaction,error); try { await done; } catch {} throw error; }
+@@ -233,18 +291,27 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
+ 
+   async function commitSyncPull({ serverEpoch, serverCursor, changes }) {
+     const database = await openDatabase();
+-    const transaction = database.transaction([STORE_NAME, RECORDINGS_STORE, SYNC_OUTBOX_STORE, SYNC_BASELINES_STORE, SYNC_STATE_STORE, SYNC_CONFLICTS_STORE, SYNC_ENROLLMENT_STORE], 'readwrite');
++    const transaction = database.transaction([STORE_NAME, RECORDINGS_STORE, SYNC_OUTBOX_STORE, SYNC_BASELINES_STORE, SYNC_STATE_STORE, SYNC_CONFLICTS_STORE, SYNC_ENROLLMENT_STORE, SYNC_QUARANTINE_STORE], 'readwrite');
+     const done = transactionResult(transaction);
+     const notes = transaction.objectStore(STORE_NAME), outbox = transaction.objectStore(SYNC_OUTBOX_STORE), baselines = transaction.objectStore(SYNC_BASELINES_STORE);
+     try {
+       for (const change of changes) {
+         const current = await requestResult(notes.get(change.id));
+-        const localPending = (await requestResult(outbox.getAll())).some(op => op.entityId === change.id);
++        const entityOperations = (await requestResult(outbox.getAll())).filter(op => op.entityId === change.id);
++        const localPending = entityOperations.length > 0;
+         const localRecordings = await requestResult(transaction.objectStore(RECORDINGS_STORE).index('noteId').count(change.id));
+         const remote = change.event === 'tombstone' ? null : JSON.parse(change.recordJson);
+         const baseline = await requestResult(baselines.get(change.id));
++        // A push can commit on the server while its ACK is lost. Pull then returns
++        // the exact queued snapshot; reconcile it as an ACK before conflict handling.
++        const lostAck = remote && entityOperations.find(operation => operation.localRevision === remote.revision && operation.recordJson === canonicalJson(remote));
++        if (lostAck) {
++          outbox.delete(lostAck.operationId);
++          baselines.put({ id: change.id, serverVersion: change.serverVersion, localRevision: remote.revision, contentHash: change.contentHash, lifecycle: change.lifecycle });
++          continue;
++        }
+         if (localRecordings > 0) {
+-          transaction.objectStore(SYNC_CONFLICTS_STORE).put({ id: `audio:${change.id}`, noteId: change.id, kind: 'audio-review', serverCursor: change.cursor, createdAt: Date.now() });
++          transaction.objectStore(SYNC_CONFLICTS_STORE).put({ id: `audio:${change.id}`, noteId: change.id, kind: 'audio-review', localOnly: true, status: 'needs-review', localRecord: current ?? null, remoteRecord: remote, serverCursor: change.cursor, serverEpoch, serverVersion: change.serverVersion, createdAt: Date.now() });
+           continue;
+         }
+         if (current && (!baseline || localPending || current.revision !== baseline.localRevision)) {
+@@ -253,16 +320,20 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
+             const existing = await requestResult(notes.get(conflictId));
+             if (!existing) {
+               const copy = { ...remote, id: conflictId, title: `${remote.title || 'Untitled note'} (Sync conflict)`, revision: 0, updatedAt: Date.now(), lifecycle: remote.lifecycle };
+-              notes.add(copy); transaction.objectStore(SYNC_CONFLICTS_STORE).put({ id: conflictId, noteId: change.id, conflictNoteId: conflictId, kind: 'edit-edit', serverCursor: change.cursor, createdAt: Date.now() });
++              notes.add(copy); transaction.objectStore(SYNC_CONFLICTS_STORE).put({ id: conflictId, noteId: change.id, conflictNoteId: conflictId, kind: 'edit-edit', localOnly: true, status: 'needs-review', localRecord: current, remoteRecord: remote, serverCursor: change.cursor, serverEpoch, serverVersion: change.serverVersion, createdAt: Date.now() });
+             }
+           } else if (!localPending && remote) baselines.put({ id: change.id, serverVersion: change.serverVersion, localRevision: current.revision, contentHash: change.contentHash, lifecycle: change.lifecycle });
+-          else if (!remote) transaction.objectStore(SYNC_CONFLICTS_STORE).put({ id: `delete:${change.id}`, noteId: change.id, kind: 'edit-delete', serverCursor: change.cursor, createdAt: Date.now() });
++          else if (!remote) transaction.objectStore(SYNC_CONFLICTS_STORE).put({ id: `delete:${change.id}`, noteId: change.id, kind: 'edit-delete', localOnly: true, status: 'needs-review', localRecord: current, remoteRecord: null, serverCursor: change.cursor, serverEpoch, serverVersion: change.serverVersion, createdAt: Date.now() });
++          if (localPending) for (const pending of entityOperations) {
++            transaction.objectStore(SYNC_QUARANTINE_STORE).put({ ...pending, reason: 'Blocked because a remote change arrived while this note had pending edits.', quarantinedAt: Date.now(), status: 'needs-review' });
++            outbox.delete(pending.operationId);
++          }
+           continue;
+         }
+         if (change.event === 'tombstone') {
+           if (current && current.lifecycle !== 'trashed') {
+             // Text-only remote tombstones are held for review to avoid orphaning local data.
+-            transaction.objectStore(SYNC_CONFLICTS_STORE).put({ id: `delete:${change.id}`, noteId: change.id, kind: 'remote-delete-review', serverCursor: change.cursor, createdAt: Date.now() });
++            transaction.objectStore(SYNC_CONFLICTS_STORE).put({ id: `delete:${change.id}`, noteId: change.id, kind: 'remote-delete-review', localOnly: true, status: 'needs-review', localRecord: current, remoteRecord: null, serverCursor: change.cursor, serverEpoch, serverVersion: change.serverVersion, createdAt: Date.now() });
+             continue;
+           }
+         } else if (!current) { notes.add(remote); transaction.objectStore(SYNC_ENROLLMENT_STORE).put({ id: change.id, optedIn: true, updatedAt: Date.now() }); }
+@@ -274,9 +345,19 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
+     } catch (error) { abort(transaction, error); try { await done; } catch {} throw error; }
+   }
+ 
+-  async function acknowledgeSyncOperations(acks) {
+-    const database = await openDatabase(); const transaction = database.transaction([SYNC_OUTBOX_STORE, SYNC_BASELINES_STORE], 'readwrite'); const done = transactionResult(transaction);
++  async function acknowledgeSyncOperations(acks, history = null) {
++    const database = await openDatabase(); const transaction = database.transaction([SYNC_OUTBOX_STORE, SYNC_BASELINES_STORE, SYNC_STATE_STORE], 'readwrite'); const done = transactionResult(transaction);
++    if (history !== null) {
++      const previous = await requestResult(transaction.objectStore(SYNC_STATE_STORE).get('history'));
++      if (typeof history.serverEpoch !== 'string' || !Number.isSafeInteger(history.serverCursor) || history.serverCursor < 0 ||
++        (previous && (previous.serverEpoch !== history.serverEpoch || history.serverCursor < previous.serverCursor))) {
++        const error = abort(transaction, new Error('Acknowledged server history is invalid or moved backwards. Sync recovery review is required.'));
++        try { await done; } catch {}
++        throw error;
++      }
++    }
+     for (const ack of acks) { transaction.objectStore(SYNC_OUTBOX_STORE).delete(ack.operationId); transaction.objectStore(SYNC_BASELINES_STORE).put(ack.baseline); }
++    if (history?.serverEpoch && Number.isSafeInteger(history.serverCursor)) transaction.objectStore(SYNC_STATE_STORE).put({ key: 'history', serverEpoch: history.serverEpoch, serverCursor: history.serverCursor });
+     await done;
+   }
+ 
+@@ -532,7 +613,7 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
+     }
+   }
+ 
+-  return { list, get, hasExistingDatabase, create, createIfMissing, save, updateOrganization, setLifecycle, deleteForever, importNotes, snapshotArchive, importArchive, setSyncEnrollment, setDefaultSyncEnrollment, listSyncOutbox, getSyncState, getSyncBaseline, setSyncPaired, saveSyncRecovery, recordSyncConflict, commitSyncPull, acknowledgeSyncOperations };
++  return { list, get, hasExistingDatabase, create, createIfMissing, save, updateOrganization, setLifecycle, deleteForever, importNotes, snapshotArchive, importArchive, setSyncEnrollment, setDefaultSyncEnrollment, listSyncOutbox, getSyncState, getSyncOverview, quarantineSyncOperation, getSyncBaseline, setSyncPaired, saveSyncRecovery, recordSyncConflict, commitSyncPull, acknowledgeSyncOperations };
+ }
+ 
+ function assertAudioTimestamp(value, label) {
+@@ -586,7 +667,7 @@ export function createAudioRepository(indexedDBFactory = globalThis.indexedDB, d
+     if (typeof ownerId !== 'string' || !ownerId) throw new TypeError('A recording owner ID is required.');
+     assertAudioTimestamp(createdAt, 'createdAt');
+     const database = await openDatabase();
+-    const tx = database.transaction([STORE_NAME, RECORDINGS_STORE], 'readwrite');
++    const tx = database.transaction([STORE_NAME, RECORDINGS_STORE, SYNC_OUTBOX_STORE, SYNC_QUARANTINE_STORE], 'readwrite');
+     const done = transactionResult(tx);
+     try {
+       const note = await requestResult(tx.objectStore(STORE_NAME).get(noteId));
+@@ -597,7 +678,13 @@ export function createAudioRepository(indexedDBFactory = globalThis.indexedDB, d
+       if (current.some((entry) => ['recording', 'paused'].includes(entry.status))) throw abort(tx, new NoteStateError('A recording is already active for this note.'));
+       const recording = { id: crypto.randomUUID(), noteId, title: 'Audio recording', mimeType, status: 'recording', ownerId, createdAt, updatedAt: createdAt, durationMs: 0, chunkCount: 0 };
+       store.add(recording);
++      const outbox = tx.objectStore(SYNC_OUTBOX_STORE);
++      for (const operation of await requestResult(outbox.getAll())) if (operation.entityId === noteId) {
++        tx.objectStore(SYNC_QUARANTINE_STORE).put({ ...operation, reason: 'Text sync paused because this note now has local-only audio.', quarantinedAt: Date.now(), status: 'needs-review' });
++        outbox.delete(operation.operationId);
++      }
+       await done;
++      notifyLocalCommit();
+       return recording;
+     } catch (error) { try { await done; } catch { /* Consume transaction abort before returning the original error. */ } throw error; }
+   }
+@@ -630,7 +717,7 @@ export function createAudioRepository(indexedDBFactory = globalThis.indexedDB, d
+       if (recording.status !== status && !allowed[recording.status].includes(status)) throw abort(tx, new NoteStateError(`Cannot change recording from ${recording.status} to ${status}.`));
+       const updated = { ...recording, status, updatedAt: Date.now(), ...(durationMs === undefined ? {} : { durationMs }) };
+       if (durationMs !== undefined && (!Number.isSafeInteger(durationMs) || durationMs < 0)) throw abort(tx, new TypeError('Recording duration must be non-negative.'));
+-      store.put(updated); await done; return updated;
++      store.put(updated); await done; notifyLocalCommit(); return updated;
+     } catch (error) { try { await done; } catch { /* Consume the abort. */ } throw error; }
+   }
+   async function rename(recordingId, title) {
+@@ -680,7 +767,7 @@ export function createAudioRepository(indexedDBFactory = globalThis.indexedDB, d
+       if (['recording', 'paused'].includes(recording.status)) throw abort(tx, new NoteStateError('Stop the active recording before deleting it.'));
+       const keys = await requestResult(chunkStore.index('recordingId').getAllKeys(recordingId));
+       for (const key of keys) chunkStore.delete(key);
+-      recordings.delete(recordingId); await done; return recording;
++      recordings.delete(recordingId); await done; notifyLocalCommit(); return recording;
+     } catch (error) { try { await done; } catch { /* Consume the abort. */ } throw error; }
+   }
+   async function recover(recordingId) {
+diff --git a/spikes/phase-00/gate1/web/app/lib/local-notes.test.mjs b/spikes/phase-00/gate1/web/app/lib/local-notes.test.mjs
+index dc756cb..0303284 100644
+--- a/spikes/phase-00/gate1/web/app/lib/local-notes.test.mjs
++++ b/spikes/phase-00/gate1/web/app/lib/local-notes.test.mjs
+@@ -4,6 +4,7 @@ import 'fake-indexeddb/auto';
+ import { validateCanonicalDocument } from '../../packages/document-engine/src/index.js';
+ import {
+   createNotesRepository,
++  createAudioRepository,
+   ImportCollisionError,
+   makeEmptyNote,
+   NoteConflictError,
+@@ -11,6 +12,7 @@ import {
+   NoteNotFoundError,
+   NoteStateError,
+ } from './local-notes.js';
++import { createAudioAnchor } from './audio-anchors.mjs';
+ 
+ let databaseSequence = 0;
+ function repository() {
+@@ -134,12 +136,37 @@ test('sync enrollment writes each eligible local mutation and outbox entry durab
+   assert.equal((await reopened.listSyncOutbox()).length, 2); assert.equal((await reopened.get('outbox-create')).revision, changed.revision);
+ });
+ 
++test('v3 IndexedDB migration adds quarantine while preserving notes, history and queued operation IDs', async () => {
++  const { name } = repository();
++  const db = await new Promise((resolve, reject) => {
++    const request = indexedDB.open(name, 3);
++    request.onupgradeneeded = () => {
++      const database = request.result;
++      const notes = database.createObjectStore('notes', { keyPath: 'id' }); notes.createIndex('lifecycle', 'lifecycle'); notes.createIndex('updatedAt', 'updatedAt');
++      const recordings = database.createObjectStore('recordings', { keyPath: 'id' }); recordings.createIndex('noteId', 'noteId'); recordings.createIndex('status', 'status'); recordings.createIndex('updatedAt', 'updatedAt');
++      const chunks = database.createObjectStore('recordingChunks', { keyPath: 'id' }); chunks.createIndex('recordingId', 'recordingId'); chunks.createIndex('recordingSequence', ['recordingId', 'sequence'], { unique: true });
++      database.createObjectStore('syncOutbox', { keyPath: 'operationId' }); database.createObjectStore('syncBaselines', { keyPath: 'id' }); database.createObjectStore('syncState', { keyPath: 'key' }); database.createObjectStore('syncConflicts', { keyPath: 'id' }); database.createObjectStore('syncEnrollment', { keyPath: 'id' });
++    };
++    request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
++  });
++  const note = makeNote('v3-migration'), operation = { operationId: 'operation-v3-stable-0001', entityId: note.id, localRevision: 0, baseServerVersion: 4, ownerApproved: true, type: 'upsert', recordJson: JSON.stringify(note), createdAt: 1 };
++  const tx = db.transaction(['notes', 'syncOutbox', 'syncBaselines', 'syncState', 'syncEnrollment'], 'readwrite');
++  tx.objectStore('notes').put(note); tx.objectStore('syncOutbox').put(operation); tx.objectStore('syncBaselines').put({ id: note.id, serverVersion: 4, localRevision: 0 }); tx.objectStore('syncState').put({ key: 'history', serverEpoch: 'epoch-v3', serverCursor: 9 }); tx.objectStore('syncEnrollment').put({ id: note.id, optedIn: true });
++  await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onabort = tx.onerror = () => reject(tx.error); }); db.close();
++  const reopenedRepository = createNotesRepository(indexedDB, name);
++  assert.deepEqual(await reopenedRepository.get(note.id), note);
++  assert.equal((await reopenedRepository.listSyncOutbox())[0].operationId, operation.operationId);
++  assert.equal((await reopenedRepository.getSyncState()).state.history.serverCursor, 9);
++  const migrated = await new Promise((resolve, reject) => { const request = indexedDB.open(name); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
++  assert.equal(migrated.version, 4); assert.ok(migrated.objectStoreNames.contains('syncQuarantine')); migrated.close();
++});
++
+ test('existing notes require explicit owner enrollment and DEVICE_ONLY or recording-bearing notes are excluded', async () => {
+   const { name, repo } = repository();
+   const privateNote = await repo.create(makeNote('owner-choice'));
+   const deviceOnly = await repo.create({ ...makeNote('never-upload'), privacy: 'DEVICE_ONLY' });
+   const audioNote = await repo.create(makeNote('audio-local'));
+-  const db = await new Promise((resolve,reject) => { const request = indexedDB.open(name,3); request.onsuccess=()=>resolve(request.result); request.onerror=()=>reject(request.error); });
++  const db = await new Promise((resolve,reject) => { const request = indexedDB.open(name,4); request.onsuccess=()=>resolve(request.result); request.onerror=()=>reject(request.error); });
+   const tx=db.transaction('recordings','readwrite');tx.objectStore('recordings').put({id:'recording-a',noteId:audioNote.id,status:'interrupted'});await new Promise((resolve,reject)=>{tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);});db.close();
+   await repo.setSyncEnrollment([privateNote.id,deviceOnly.id,audioNote.id],true);
+   assert.equal((await repo.listSyncOutbox()).length,1);
+@@ -176,6 +203,116 @@ test('remote tombstone colliding with a local edit is held for review and never
+   assert.equal(state.state.history.serverCursor,9);
+ });
+ 
++test('150 queued revisions of one note remain ordered, stable and visible as pending', async () => {
++  const { name, repo } = repository();
++  await repo.setDefaultSyncEnrollment(true);
++  let note = await repo.create(makeNote('many-revisions'));
++  for (let index = 0; index < 149; index++) note = await repo.save(note.id, { title: `Revision ${index + 1}`, document: canonical(`body ${index + 1}`) }, note.revision);
++  const operations = await repo.listSyncOutbox(1000);
++  assert.equal(operations.length, 150);
++  assert.equal(new Set(operations.map(row => row.operationId)).size, 150);
++  assert.deepEqual(operations.map(row => row.localRevision), [...operations.map(row => row.localRevision)].sort((a,b) => a-b));
++  assert.equal((await repo.getSyncOverview()).eligiblePending, 150);
++  const reopened = createNotesRepository(indexedDB, name);
++  assert.deepEqual((await reopened.listSyncOutbox(1000)).map(row => row.operationId), operations.map(row => row.operationId));
++});
++
++test('pull reconciles a committed operation with a lost ACK and leaves later same-note revisions sendable', async () => {
++  const { repo } = repository();
++  await repo.setDefaultSyncEnrollment(true);
++  let note = await repo.create(makeNote('lost-ack-pull'));
++  note = await repo.save(note.id, { title: 'Revision 1', document: canonical('one') }, note.revision);
++  note = await repo.save(note.id, { title: 'Revision 2', document: canonical('two') }, note.revision);
++  const operations = await repo.listSyncOutbox(10);
++  const firstRecord = JSON.parse(operations[0].recordJson);
++  await repo.commitSyncPull({ serverEpoch: 'epoch-lost-ack', serverCursor: 1, changes: [{ id: note.id, cursor: 1, serverVersion: 1, serverEpoch: 'epoch-lost-ack', event: 'upsert', recordJson: operations[0].recordJson, contentHash: 'hash-1', lifecycle: 'active' }] });
++  assert.deepEqual((await repo.listSyncOutbox(10)).map(row => row.operationId), operations.slice(1).map(row => row.operationId));
++  assert.equal((await repo.getSyncBaseline(note.id)).serverVersion, 1);
++  assert.equal((await repo.getSyncState()).conflicts.length, 0);
++  await repo.commitSyncPull({ serverEpoch: 'epoch-lost-ack', serverCursor: 2, changes: [{ id: note.id, cursor: 2, serverVersion: 2, serverEpoch: 'epoch-lost-ack', event: 'upsert', recordJson: operations[1].recordJson, contentHash: 'hash-2', lifecycle: 'active' }] });
++  assert.deepEqual((await repo.listSyncOutbox(10)).map(row => row.operationId), operations.slice(2).map(row => row.operationId));
++  assert.equal((await repo.getSyncBaseline(note.id)).serverVersion, 2);
++  assert.equal(firstRecord.revision, 0);
++  assert.equal((await repo.get(note.id)).title, 'Revision 2');
++});
++
++test('push conflict preserves full local and remote versions and blocks every queued same-note revision', async () => {
++  const { name, repo } = repository();
++  await repo.setDefaultSyncEnrollment(true);
++  const local0 = await repo.create({ ...makeNote('push-conflict', 'Local title', canonical('local body')), pinned: true, tags: ['日本語', 'Personal'], lifecycle: 'active' });
++  await repo.save(local0.id, { title: 'Later local title', document: canonical('later local body') }, local0.revision);
++  const operations = await repo.listSyncOutbox(100);
++  const remote = { ...makeNote(local0.id, 'Remote title', canonical('remote body')), pinned: false, tags: ['Remote'], lifecycle: 'archived', revision: 8 };
++  await repo.recordSyncConflict(operations[0].operationId, { serverEpoch: 'epoch-conflict', actualVersion: 9, remote: { record: remote } });
++  const state = await repo.getSyncState();
++  assert.equal((await repo.get(local0.id)).title, 'Later local title');
++  assert.equal((await repo.listSyncOutbox(100)).length, 0);
++  assert.equal(state.quarantine.length, 2);
++  const conflict = state.conflicts.find(row => row.noteId === local0.id);
++  assert.equal(conflict.localOnly, true); assert.equal(conflict.status, 'needs-review');
++  assert.deepEqual(conflict.localRecord.tags, ['日本語', 'Personal']);
++  assert.equal(conflict.localRecord.pinned, true);
++  assert.equal(conflict.localRecord.document.content[0].content[0].text, 'later local body');
++  assert.deepEqual(conflict.remoteRecord, remote);
++  const copy = await repo.get(conflict.conflictNoteId);
++  assert.equal(copy.title, 'Remote title (Sync conflict)');
++  assert.equal(copy.lifecycle, 'archived'); assert.deepEqual(copy.tags, ['Remote']); assert.equal(copy.pinned, false);
++  assert.deepEqual(copy.document, remote.document);
++  assert.equal((await repo.listSyncOutbox(100)).length, 0, 'conflict copies remain local until explicitly approved');
++  await repo.setSyncEnrollment([conflict.conflictNoteId], true);
++  assert.deepEqual((await repo.listSyncOutbox(100)).map(row => row.entityId), [conflict.conflictNoteId]);
++  const reopened = createNotesRepository(indexedDB, name);
++  assert.deepEqual((await reopened.getSyncState()).conflicts.find(row => row.id === conflict.id).remoteRecord, remote);
++  assert.equal((await reopened.getSyncOverview()).quarantined, 2);
++});
++
++test('pull conflicts are idempotent and preserve a concurrent remote version across restart', async () => {
++  const { name, repo } = repository();
++  await repo.setDefaultSyncEnrollment(true);
++  const local = await repo.create({ ...makeNote('pull-conflict', 'Offline local', canonical('offline body')), pinned: true, tags: ['Local'] });
++  await repo.save(local.id, { title: 'Offline later', document: canonical('offline later body') }, local.revision);
++  const remote = { ...makeNote(local.id, 'Other device', canonical('remote body')), pinned: false, tags: ['Remote'], revision: 4 };
++  const change = { id: local.id, cursor: 11, serverVersion: 3, serverEpoch: 'epoch-pull', event: 'upsert', recordJson: JSON.stringify(remote), contentHash: 'hash-remote', lifecycle: 'active' };
++  await repo.commitSyncPull({ serverEpoch: 'epoch-pull', serverCursor: 11, changes: [change] });
++  await repo.commitSyncPull({ serverEpoch: 'epoch-pull', serverCursor: 11, changes: [change] });
++  const state = await repo.getSyncState(), copies = (await repo.list()).filter(row => row.id.startsWith('conflict-'));
++  assert.equal((await repo.get(local.id)).title, 'Offline later');
++  assert.equal(copies.length, 1);
++  assert.equal(state.conflicts.filter(row => row.noteId === local.id).length, 1);
++  assert.deepEqual(state.conflicts.find(row => row.noteId === local.id).remoteRecord, remote);
++  assert.equal(state.quarantine.length, 2);
++  assert.equal(state.state.history.serverCursor, 11);
++  const reopened = createNotesRepository(indexedDB, name);
++  assert.equal((await reopened.get(copies[0].id)).document.content[0].content[0].text, 'remote body');
++  assert.equal((await reopened.getSyncState()).conflicts.filter(row => row.noteId === local.id).length, 1);
++});
++
++test('audio attached after text ACK is visible as media-local-only and remote pulls preserve bytes and anchors', async () => {
++  const { name, repo } = repository();
++  await repo.setDefaultSyncEnrollment(true);
++  const note = await repo.create(makeNote('audio-after-sync'));
++  const [operation] = await repo.listSyncOutbox();
++  await repo.acknowledgeSyncOperations([{ operationId: operation.operationId, baseline: { id: note.id, serverVersion: 1, localRevision: note.revision } }], { serverEpoch: 'epoch-audio', serverCursor: 1 });
++  const audio = createAudioRepository(indexedDB, name);
++  const recording = await audio.create(note.id, { mimeType: 'audio/webm', ownerId: 'test-tab', createdAt: 10 });
++  await audio.appendChunk(recording.id, 0, new Blob(['synthetic audio bytes']), 1000);
++  await audio.setStatus(recording.id, 'complete', { durationMs: 1000 });
++  await audio.addAnchor(recording.id, createAudioAnchor(recording.id, 500, 'keep this anchor', { id: 'anchor-local', createdAt: 11 }));
++  assert.equal((await repo.getSyncOverview()).noteStatuses.find(row => row.id === note.id).status, 'media-local-only');
++  const beforeChunks = await audio.chunks(recording.id), beforeRecording = await audio.get(recording.id);
++  const remote = { ...note, title: 'Remote text revision', revision: 1 };
++  await repo.commitSyncPull({ serverEpoch: 'epoch-audio', serverCursor: 2, changes: [{ id: note.id, cursor: 2, serverVersion: 2, serverEpoch: 'epoch-audio', event: 'upsert', recordJson: JSON.stringify(remote), contentHash: 'remote-hash', lifecycle: 'active' }] });
++  assert.equal((await repo.get(note.id)).title, note.title);
++  assert.deepEqual(await audio.chunks(recording.id), beforeChunks);
++  assert.deepEqual(await audio.get(recording.id), beforeRecording);
++  assert.equal((await audio.listAnchors(recording.id))[0].id, 'anchor-local');
++  const state = await repo.getSyncState();
++  assert.equal(state.conflicts.find(row => row.kind === 'audio-review').localOnly, true);
++  assert.deepEqual(state.conflicts.find(row => row.kind === 'audio-review').remoteRecord, remote);
++  assert.equal((await repo.getSyncOverview()).noteStatuses.find(row => row.id === note.id).status, 'needs-review');
++  assert.equal((await createNotesRepository(indexedDB, name).getSyncOverview()).noteStatuses.find(row => row.id === note.id).status, 'needs-review');
++});
++
+ test('future note record schemas remain preserved but cannot be edited or organized as schema v1', async () => {
+   const { repo } = repository();
+   const future = { ...makeEmptyNote(100, 'future-record'), schemaVersion: 2, futureMetadata: { keep: true } };
+diff --git a/spikes/phase-00/gate1/web/app/lib/sync-client.mjs b/spikes/phase-00/gate1/web/app/lib/sync-client.mjs
+index d4062d1..1ce4ed0 100644
+--- a/spikes/phase-00/gate1/web/app/lib/sync-client.mjs
++++ b/spikes/phase-00/gate1/web/app/lib/sync-client.mjs
+@@ -18,14 +18,27 @@ export async function synchronize({ repository, fetcher = fetch, locks = globalT
+   await locks.request('noteos-web-sync', { mode: 'exclusive', ifAvailable: true }, async lock => {
+     if (!lock) { result.status = 'waiting'; return; }
+     onState('syncing');
++    const finalStatus = async fallback => {
++      const overview = await repository.getSyncOverview?.();
++      if (!overview) return fallback;
++      if (overview.recovery || overview.conflicts || overview.quarantined || overview.blockedPending) return 'needs-review';
++      if (overview.eligiblePending) return 'pending';
++      if (overview.mediaLocalOnly || overview.recordings) return 'media-local-only';
++      return overview.paired ? 'synced' : 'saved-device';
++    };
+     try {
+       if (!initialize && !(await repository.hasExistingDatabase())) { result.status = 'saved-device'; return; }
+       const local = await repository.getSyncState();
+-      if (local.state.recovery) throw new Error('This browser has pending sync recovery review.');
+-      if (local.state.paired !== true) { result.status = 'saved-device'; return; }
++      if (local.state.recovery) { result.status = 'needs-review'; return; }
++      if (local.state.paired !== true) { result.status = await finalStatus('saved-device'); return; }
+       let server;
+       try { server = await request('status', undefined, fetcher); }
+-      catch (error) { if (error.status === 401) await repository.setSyncPaired(false); if (error.status === 401 || error.status === 503 || !globalThis.navigator?.onLine) { result.status = 'saved-device'; return; } throw error; }
++      catch (error) {
++        if (error.status === 401) await repository.setSyncPaired(false);
++        if (error.status === 401) { result.status = await finalStatus('saved-device'); return; }
++        if (error.status === 503 || error instanceof TypeError || !globalThis.navigator?.onLine) { result.status = await finalStatus('pending'); return; }
++        throw error;
++      }
+       const previous = local.state.history ?? null;
+       try { assertHistoryContinuity(previous, server); }
+       catch (error) { await repository.saveSyncRecovery(error.message, server); throw error; }
+@@ -39,24 +52,44 @@ export async function synchronize({ repository, fetcher = fetch, locks = globalT
+         if (!pulled.hasMore) break;
+         if (page === 99) throw new Error('Sync pull reached its bounded page limit.');
+       }
+-      for (const op of await repository.listSyncOutbox(100)) {
+-        const pendingRecord = JSON.parse(op.recordJson);
+-        const currentBaseline = await repository.getSyncBaseline?.(op.entityId);
+-        const payload = { protocolVersion: 1, operations: [{ operationId: op.operationId, entityId: op.entityId, baseServerVersion: currentBaseline?.serverVersion ?? 0, ownerApproved: true, recordingCount: 0, type: 'upsert', recordJson: JSON.stringify(pendingRecord) }] };
+-        try {
+-          const pushed = await request('push', payload, fetcher);
+-          await repository.acknowledgeSyncOperations(pushed.acknowledgements.map(ack => ({ operationId: ack.operationId, baseline: { id: ack.id, serverVersion: ack.serverVersion, localRevision: ack.localRevision, contentHash: ack.contentHash, lifecycle: ack.lifecycle } })));
+-          result.pushed += pushed.acknowledgements.length;
+-        } catch (error) {
+-          if (error.status === 409 && error.body?.conflict) await repository.recordSyncConflict(op.operationId, { ...error.body.conflict, serverEpoch: error.body.serverEpoch });
+-          else throw error;
++      // Keep each request small and refresh the baseline after every ACK. This preserves
++      // the ordered serverVersion chain for multiple local revisions of one note.
++      // The hard cap and task yields keep a large offline queue from monopolizing a tab.
++      const blockedEntities = new Set();
++      for (let batch = 0; batch < 5; batch++) {
++        const operations = await repository.listSyncOutbox(100);
++        if (!operations.length) break;
++        for (const op of operations) {
++          if (blockedEntities.has(op.entityId)) continue;
++          const pendingRecord = JSON.parse(op.recordJson);
++          const currentBaseline = await repository.getSyncBaseline?.(op.entityId);
++          const payload = { protocolVersion: 1, operations: [{ operationId: op.operationId, entityId: op.entityId, baseServerVersion: currentBaseline?.serverVersion ?? 0, ownerApproved: true, recordingCount: 0, type: 'upsert', recordJson: op.recordJson }] };
++          try {
++            const pushed = await request('push', payload, fetcher);
++            await repository.acknowledgeSyncOperations(pushed.acknowledgements.map(ack => ({ operationId: ack.operationId, baseline: { id: ack.id, serverVersion: ack.serverVersion, localRevision: ack.localRevision, contentHash: ack.contentHash, lifecycle: ack.lifecycle } })), { serverEpoch: pushed.serverEpoch, serverCursor: pushed.serverCursor });
++            result.pushed += pushed.acknowledgements.length;
++          } catch (error) {
++            if (error.status === 409 && error.body?.conflict) {
++              await repository.recordSyncConflict(op.operationId, { ...error.body.conflict, serverEpoch: error.body.serverEpoch });
++              blockedEntities.add(op.entityId);
++            }
++            else if ((error.status === 400 || error.status === 413) && repository.quarantineSyncOperation) await repository.quarantineSyncOperation(op.operationId, error.message);
++            else {
++              result.status = await finalStatus('pending');
++              result.error = error.message;
++              result.serverCursor = (await repository.getSyncState()).state.history?.serverCursor ?? 0;
++              return;
++            }
++          }
++          // Yield to rendering and input handling while draining large queues.
++          await new Promise(resolve => setTimeout(resolve, 0));
+         }
++        await new Promise(resolve => setTimeout(resolve, 0));
+       }
+-      const finalState = await repository.getSyncState();
+-      result.status = finalState.conflicts.length ? 'needs-review' : 'synced';
+-      result.serverCursor = finalState.state.history?.serverCursor ?? 0;
++      result.status = await finalStatus('pending');
++      result.serverCursor = (await repository.getSyncState()).state.history?.serverCursor ?? 0;
+     } catch (error) {
+-      if (error.status === undefined && (error instanceof TypeError || !globalThis.navigator?.onLine)) { result.status = 'waiting'; return; }
++      if (error.status === undefined && (error instanceof TypeError || !globalThis.navigator?.onLine)) { result.status = await finalStatus('pending'); result.error = error.message; return; }
+       result.status = 'needs-review'; result.error = error.message; throw error;
+     } finally { onState(result.status); }
+   });
+diff --git a/spikes/phase-00/gate1/web/app/lib/sync-client.test.mjs b/spikes/phase-00/gate1/web/app/lib/sync-client.test.mjs
+new file mode 100644
+index 0000000..01f9b24
+--- /dev/null
++++ b/spikes/phase-00/gate1/web/app/lib/sync-client.test.mjs
+@@ -0,0 +1,121 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import { synchronize } from './sync-client.mjs';
++
++function queue(size = 150) {
++  return Array.from({ length: size }, (_, index) => {
++    const localRevision = index + 1;
++    const record = { id: 'same-note', title: `Revision ${localRevision}`, revision: localRevision, lifecycle: 'active', schemaVersion: 1, document: { schemaVersion: 1, type: 'doc', content: [] } };
++    return { operationId: `operation-${String(index + 1).padStart(16, '0')}`, entityId: record.id, localRevision, recordJson: JSON.stringify(record), createdAt: index };
++  });
++}
++
++function fixture(size = 150) {
++  const rows = queue(size), baselines = new Map(), acked = [], mutations = new Map();
++  const repository = {
++    hasExistingDatabase: async () => true,
++    getSyncState: async () => ({ state: { paired: true, history: { serverEpoch: 'epoch-a', serverCursor: 0 } }, conflicts: [], quarantine: [] }),
++    setSyncPaired: async () => {},
++    saveSyncRecovery: async () => {},
++    commitSyncPull: async ({ serverEpoch, serverCursor }) => { repository.history = { serverEpoch, serverCursor }; },
++    listSyncOutbox: async limit => rows.slice(0, limit),
++    getSyncBaseline: async id => baselines.get(id) ?? null,
++    acknowledgeSyncOperations: async (acks, history) => {
++      for (const ack of acks) {
++        const index = rows.findIndex(row => row.operationId === ack.operationId);
++        if (index >= 0) rows.splice(index, 1);
++        acked.push(ack.operationId); baselines.set(ack.baseline.id, ack.baseline);
++      }
++      repository.history = history;
++    },
++    recordSyncConflict: async (operationId, conflict) => {
++      const operation = rows.find(row => row.operationId === operationId);
++      if (!operation) return;
++      for (let index = rows.length - 1; index >= 0; index--) if (rows[index].entityId === operation.entityId) rows.splice(index, 1);
++      fixture.conflicts = (fixture.conflicts ?? 0) + 1;
++    },
++    quarantineSyncOperation: async operationId => { const index = rows.findIndex(row => row.operationId === operationId); if (index >= 0) rows.splice(index, 1); },
++    getSyncOverview: async () => ({ recovery: null, conflicts: fixture.conflicts ?? 0, quarantined: 0, blockedPending: 0, eligiblePending: rows.length, mediaLocalOnly: 0, recordings: 0, paired: true }),
++  };
++  repository.getSyncState = async () => ({ state: { paired: true, history: repository.history ?? { serverEpoch: 'epoch-a', serverCursor: 0 } }, conflicts: [], quarantine: [] });
++  return { repository, rows, baselines, acked, mutations };
++}
++
++function lockManager() { return { request: async (_name, _options, callback) => callback({ name: 'noteos-web-sync' }) }; }
++function jsonResponse(body, status = 200) { return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } }); }
++
++function serverFor(fixture, { outageAt = Infinity, loseAckAt = Infinity } = {}) {
++  let cursor = fixture.serverCursor ?? 0, serverVersion = fixture.serverVersion ?? 0, requestNumber = 0;
++  return async (url, init) => {
++    const action = String(url).split('/').at(-1);
++    if (action === 'status') return jsonResponse({ serverEpoch: 'epoch-a', serverCursor: cursor });
++    if (action === 'pull') return jsonResponse({ serverEpoch: 'epoch-a', serverCursor: cursor, nextCursor: cursor, hasMore: false, changes: [] });
++    if (action !== 'push') throw new Error(`Unexpected sync action ${action}`);
++    const operation = JSON.parse(init.body).operations[0]; requestNumber++;
++    const prior = fixture.mutations.get(operation.operationId);
++    let ack;
++    if (prior) ack = prior;
++    else {
++      if (operation.baseServerVersion !== serverVersion) return jsonResponse({ error: 'stale_base' }, 409);
++      serverVersion++; cursor++; fixture.serverVersion = serverVersion; fixture.serverCursor = cursor;
++      ack = { operationId: operation.operationId, id: operation.entityId, serverVersion, localRevision: JSON.parse(operation.recordJson).revision, contentHash: `hash-${serverVersion}`, lifecycle: 'active' };
++      fixture.mutations.set(operation.operationId, ack);
++    }
++    if (requestNumber === loseAckAt) throw new TypeError('ACK connection lost after server commit');
++    if (requestNumber === outageAt) throw new TypeError('Server unavailable');
++    return jsonResponse({ acknowledgements: [ack], serverEpoch: 'epoch-a', serverCursor: cursor });
++  };
++}
++
++test('150 same-note revisions drain in bounded cycles and an outage leaves a durable Pending queue', async () => {
++  const state = fixture();
++  const first = await synchronize({ repository: state.repository, fetcher: serverFor(state, { outageAt: 101 }), locks: lockManager() });
++  assert.equal(first.status, 'pending');
++  assert.equal(first.pushed, 100);
++  assert.equal(state.rows.length, 50);
++  assert.equal(state.acked.length, 100);
++  assert.deepEqual(state.acked, queue().slice(0, 100).map(row => row.operationId));
++
++  const reloadedRepository = state.repository;
++  const retry = await synchronize({ repository: reloadedRepository, fetcher: serverFor(state), locks: lockManager() });
++  assert.equal(retry.status, 'synced');
++  assert.equal(state.rows.length, 0);
++  assert.equal(state.mutations.size, 150);
++  assert.equal(state.acked.length, 150);
++  assert.equal(state.baselines.get('same-note').serverVersion, 150);
++});
++
++test('lost ACK on a later operation replays the stable ID without duplicating the server mutation', async () => {
++  const state = fixture();
++  const first = await synchronize({ repository: state.repository, fetcher: serverFor(state, { loseAckAt: 125 }), locks: lockManager() });
++  assert.equal(first.status, 'pending');
++  assert.equal(first.pushed, 124);
++  assert.equal(state.rows.length, 26);
++  const lostId = queue()[124].operationId;
++  assert.equal(state.mutations.has(lostId), true);
++
++  const second = await synchronize({ repository: state.repository, fetcher: serverFor(state), locks: lockManager() });
++  assert.equal(second.status, 'synced');
++  assert.equal(state.mutations.size, 150);
++  assert.equal(state.acked.filter(id => id === lostId).length, 1);
++  assert.equal(state.baselines.get('same-note').serverVersion, 150);
++});
++
++test('a push conflict blocks later same-note revisions while unrelated notes continue', async () => {
++  const state = fixture(3), other = state.rows[2];
++  other.entityId = 'other-note'; other.recordJson = JSON.stringify({ ...JSON.parse(other.recordJson), id: 'other-note' });
++  const attempted = [];
++  const fetcher = async (url, init) => {
++    const action = String(url).split('/').at(-1);
++    if (action === 'status') return jsonResponse({ serverEpoch: 'epoch-a', serverCursor: 0 });
++    if (action === 'pull') return jsonResponse({ serverEpoch: 'epoch-a', serverCursor: 0, nextCursor: 0, hasMore: false, changes: [] });
++    const operation = JSON.parse(init.body).operations[0]; attempted.push(operation.entityId);
++    if (operation.entityId === 'same-note') return jsonResponse({ error: 'conflict', serverEpoch: 'epoch-a', conflict: { operationId: operation.operationId, id: operation.entityId, actualVersion: 1, remote: { record: { ...JSON.parse(operation.recordJson), title: 'Remote version', revision: 9 } } } }, 409);
++    return jsonResponse({ acknowledgements: [{ operationId: operation.operationId, id: operation.entityId, serverVersion: 1, localRevision: 3, contentHash: 'hash-other', lifecycle: 'active' }], serverEpoch: 'epoch-a', serverCursor: 1 });
++  };
++  const result = await synchronize({ repository: state.repository, fetcher, locks: lockManager() });
++  assert.equal(result.status, 'needs-review');
++  assert.deepEqual(attempted, ['same-note', 'other-note']);
++  assert.equal(state.rows.length, 0);
++  assert.equal(state.acked.length, 1);
++});
+diff --git a/spikes/phase-00/gate1/web/app/page.tsx b/spikes/phase-00/gate1/web/app/page.tsx
+index 89e6bc6..eb528f9 100644
+--- a/spikes/phase-00/gate1/web/app/page.tsx
++++ b/spikes/phase-00/gate1/web/app/page.tsx
+@@ -31,6 +31,7 @@ function preferencesFromStorage() {
+ 
+ export default function Home() {
+   const [notes, setNotes] = useState<any[]>([]);
++  const [syncNotes, setSyncNotes] = useState<Record<string, any>>({});
+   const [query, setQuery] = useState('');
+   const [sort, setSort] = useState<SortMode>('updated');
+   const [selectedTags, setSelectedTags] = useState<string[]>([]);
+@@ -48,7 +49,12 @@ export default function Home() {
+   const captureGate = useRef(new QuickCaptureSaveGate());
+ 
+   const refresh = useCallback(async (clearError = true) => {
+-    try { setNotes(await createNotesRepository().list()); if (clearError) setError(''); }
++    try {
++      const repository = createNotesRepository();
++      const [nextNotes, overview] = await Promise.all([repository.list(), repository.getSyncOverview()]);
++      setNotes(nextNotes); setSyncNotes(Object.fromEntries(overview.noteStatuses.map((row: any) => [row.id, row])));
++      if (clearError) setError('');
++    }
+     catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not open local notes.'); }
+     finally { setReady(true); }
+   }, []);
+@@ -67,6 +73,12 @@ export default function Home() {
+     void refresh();
+   }, [refresh]);
+ 
++  useEffect(() => {
++    const onCommit = () => void refresh(false);
++    window.addEventListener('noteos:local-note-commit', onCommit);
++    return () => window.removeEventListener('noteos:local-note-commit', onCommit);
++  }, [refresh]);
++
+   useEffect(() => {
+     if (!preferencesReady) return;
+     try { localStorage.setItem(HOME_PREFERENCES_KEY, JSON.stringify({ query, sort, tags: selectedTags })); }
+@@ -169,7 +181,7 @@ export default function Home() {
+       <div className="note-card-top"><span className="note-pin-state">{note.pinned ? 'Pinned' : ''}</span>{note.schemaVersion === 1 && <button className="pin-button" type="button" disabled={busyPinIds.includes(note.id)} aria-label={note.pinned ? `Unpin ${note.title || 'Untitled note'}` : `Pin ${note.title || 'Untitled note'}`} aria-pressed={Boolean(note.pinned)} onClick={() => void togglePin(note)}>{note.pinned ? '★ Pinned' : '☆ Pin'}</button>}</div>
+       <Link className="note-card-link" href={`/notes/${encodeURIComponent(note.id)}`}><h2>{note.title || 'Untitled note'}</h2><p className="note-preview">{textOf(note.document) || 'Start with a thought…'}</p><span className="note-open-label">Open note ↗</span></Link>
+       {Array.isArray(note.tags) && note.tags.length > 0 && <div className="note-card-tags" aria-label={`Tags for ${note.title || 'Untitled note'}`}>{note.tags.map((tag: string) => <button key={tagKey(tag)} type="button" className="tag-chip" aria-label={`Filter by ${tag}`} onClick={() => toggleTag(tag)}>{tag}</button>)}</div>}
+-      <div className="note-meta"><span>{new Date(note.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span><span>{note.pinned ? 'Pinned first' : 'On this device'}</span></div>
++      <div className="note-meta"><span>{new Date(note.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span><span>{syncNotes[note.id]?.status === 'media-local-only' ? (syncNotes[note.id]?.textSynced ? 'Text synced · audio local' : 'Audio local · text not synced') : syncNotes[note.id]?.status === 'needs-review' ? 'Sync needs review' : syncNotes[note.id]?.status === 'pending' ? 'Text pending' : note.pinned ? 'Pinned first' : 'On this device'}</span></div>
+     </article>)}</section>
+       : <div className="empty-state"><h2>{ready ? (hasFilters ? 'No notes match these filters' : 'A fresh page') : 'Opening your notes…'}</h2><p>{ready ? (hasFilters ? 'Clear a tag or try another search to see more notes.' : 'Create a note to get your thoughts started.') : 'Everything is stored on this device.'}</p>{ready && hasFilters && <button className="btn" onClick={() => { setQuery(''); setSelectedTags([]); }}>Clear search and filters</button>}{ready && !hasFilters && <button className="btn btn-primary" onClick={createNote}>Create your first note</button>}</div>}
+   </>;
+diff --git a/spikes/phase-00/gate1/web/app/sync/page.tsx b/spikes/phase-00/gate1/web/app/sync/page.tsx
+index 5acdd6a..0166017 100644
+--- a/spikes/phase-00/gate1/web/app/sync/page.tsx
++++ b/spikes/phase-00/gate1/web/app/sync/page.tsx
+@@ -21,6 +21,7 @@ export default function SyncSetup() {
+   const [recovery, setRecovery] = useState(false);
+   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+   const [defaultEnrollment, setDefaultEnrollment] = useState(false);
++  const [overview, setOverview] = useState<any>(null);
+   const [syncStatus, setSyncStatus] = useState('Saved on device');
+   const [enrollmentSummary, setEnrollmentSummary] = useState('');
+   const repository = createNotesRepository();
+@@ -61,7 +62,8 @@ export default function SyncSetup() {
+       else { setError(cause.message); setState('Connection needs review.'); }
+     }
+   }
+-  useEffect(() => { setOrigin(location.origin); void connection(); }, []);
++  async function refreshOverview() { try { setOverview(await repository.getSyncOverview()); } catch { setOverview(null); } }
++  useEffect(() => { setOrigin(location.origin); void connection(); void refreshOverview(); }, []);
+   async function run(action: () => Promise<void>) {
+     if (busy) return; setBusy(true); setError('');
+     try { await action(); } catch (cause: any) { setError(cause.message); } finally { setBusy(false); }
+@@ -70,6 +72,7 @@ export default function SyncSetup() {
+     setPreview(null); const next = await discoverLocal(); setLocal(next);
+     setSelectedIds(next.candidates.filter((row: any) => !row.enrolled).map((row: any) => row.id));
+     const saved = await repository.getSyncState(); setDefaultEnrollment(saved.state.defaultEnrollment === true);
++    await refreshOverview();
+   }
+   async function enrollSelected() {
+     const before = local?.candidates.filter((row: any) => row.enrolled).length ?? 0, count = selectedIds.length;
+@@ -79,8 +82,8 @@ export default function SyncSetup() {
+   }
+   async function syncNow() {
+     const result = await synchronize({ repository, initialize: true, onState: value => setSyncStatus(value) });
+-    setSyncStatus(result.status === 'needs-review' ? 'Needs review' : result.status === 'synced' ? 'Synced' : 'Saved on device');
+-    setLocal(await discoverLocal()); await connection();
++    setSyncStatus(({ 'needs-review': 'Needs review', synced: 'Text synced', pending: 'Pending', 'media-local-only': 'Audio stays on this device', 'saved-device': 'Saved on device' } as Record<string,string>)[result.status] ?? 'Saved on device');
++    setLocal(await discoverLocal()); await refreshOverview(); await connection();
+   }
+   return <div className="sync-setup">
+     <header className="page-heading"><div><p className="eyebrow">Private connection</p><h1 className="page-title">Sync Setup</h1><p className="page-lede">Prepare a connection at your own pace.</p></div></header>
+@@ -110,6 +113,12 @@ export default function SyncSetup() {
+       {preview && <div className="sync-preview" aria-label="Bootstrap comparison"><p>{preview.serverEmpty ? 'The server has no user data. This cannot establish conflicts between your populated devices.' : 'Compared against the server’s current records. Matching IDs alone do not mean matching content.'}</p><dl>{[['toUpload','Would upload'],['toDownload','Would download'],['identical','Identical text-only'],['collidingIds','IDs needing review'],['audioRequiresReview','Audio requires review']].map(([key,title]) => <div key={key}><dt>{title}</dt><dd>{preview[key].length}</dd></div>)}</dl><p>Preview only. No note records were changed. Notes with recordings are ineligible for a future text-only pilot until media-presence safety is implemented. Delete Forever across devices is unavailable.</p></div>}
+     </section>
+     <section className="backup-panel"><h2 className="section-title">Sync now</h2><p>{syncStatus}. Local edits are saved first. Unpaired browsers and unavailable servers keep working offline.</p><button className="btn btn-primary" disabled={busy || !server || recovery} onClick={() => run(syncNow)}>Sync now</button></section>
++    {overview && <section className="backup-panel" aria-label="Local sync status"><h2 className="section-title">Local sync status</h2>
++      <p>{overview.eligiblePending} pending text changes · {overview.blockedPending} blocked changes · {overview.quarantined} quarantined · {overview.recordings} local recordings.</p>
++      {overview.mediaLocalOnly > 0 && <p role="status">{overview.mediaLocalOnly} notes have audio that stays on this device; {overview.textSyncedWithMedia} of those notes also have acknowledged text. This is not a full-data backup.</p>}
++      {overview.conflictRecords.length > 0 && <div role="status"><h3>Needs review · local copies</h3>{overview.conflictRecords.map((conflict: any) => <p key={conflict.id}>{conflict.kind}: {conflict.conflictNoteId ? 'a conflict copy is saved on this device and was not uploaded' : 'local and remote versions are preserved on this device'}.</p>)}<p>To retain a conflict copy as a separate note, inspect this browser’s notes and explicitly approve that copy.</p></div>}
++      {overview.recovery && <p role="alert">Sync is paused for recovery review: {overview.recovery.reason}</p>}
++    </section>}
+     {error && <p className="notice error" role="alert">{error}</p>}
+     <p className="storage-caption">Tailnet access and device authentication do not provide application-level E2EE. <Link href="/">Continue with local notes</Link>.</p>
+   </div>;
+diff --git a/spikes/phase-00/gate1/web/app/ui/audio-recorder.tsx b/spikes/phase-00/gate1/web/app/ui/audio-recorder.tsx
+index c724a17..09ea529 100644
+--- a/spikes/phase-00/gate1/web/app/ui/audio-recorder.tsx
++++ b/spikes/phase-00/gate1/web/app/ui/audio-recorder.tsx
+@@ -276,7 +276,7 @@ export function AudioRecorder({ noteId, disabled = false, openSignal = 0, onActi
+   return <section className={`audio-panel ${active ? 'is-recording' : ''}`} aria-labelledby="audio-title">
+     <header className="audio-heading"><div className="audio-title-row"><div><p className="eyebrow">On this device</p><h2 id="audio-title" className="section-title">Audio</h2></div><span className="audio-count">{recordings.length} {recordings.length === 1 ? 'recording' : 'recordings'}</span></div><button className="audio-toggle" type="button" aria-expanded={expanded || Boolean(active)} aria-controls="audio-panel-content" disabled={Boolean(active) || starting} onClick={() => setExpanded((value) => !value)}>{expanded ? 'Hide' : 'Show'} recordings <span aria-hidden="true">{expanded ? '−' : '+'}</span></button></header>
+     <div id="audio-panel-content" className="audio-panel-content" hidden={!expanded && !active}>
+-    <p className="audio-copy">Private local audio. Full Archive V2 includes recordings; Legacy JSON V1 does not. Audio is never uploaded.</p>
++    <p className="audio-copy">Private local audio. Text sync does not include these recordings or their anchors; they stay on this device. Full Archive V2 includes recordings; Legacy JSON V1 does not. Audio is never uploaded.</p>
+     <div className="audio-controls">
+       {!active ? <button className="btn btn-primary" disabled={disabled || starting || !audioReady} onClick={() => void startRecording()}>{starting ? 'Starting…' : '● Record audio'}</button> : <><span className="recording-indicator" aria-live="polite">● {active.status === 'paused' ? 'Paused' : 'Recording'} · {formatDuration(elapsed)}</span><button className="tool-button" onClick={() => void addRecordingBookmark()}>⚑ Bookmark</button>{pauseSupported && <button className="btn" onClick={() => void pauseRecording()}>{active.status === 'paused' ? 'Resume' : 'Pause'}</button>}<button className="btn btn-danger" onClick={stopRecording}>Stop and save</button></>}
+       <span className="save-state" aria-live="polite">{statusText}</span>
+diff --git a/spikes/phase-00/gate1/web/app/ui/sync-worker.tsx b/spikes/phase-00/gate1/web/app/ui/sync-worker.tsx
+index 7b5dfc9..212614a 100644
+--- a/spikes/phase-00/gate1/web/app/ui/sync-worker.tsx
++++ b/spikes/phase-00/gate1/web/app/ui/sync-worker.tsx
+@@ -34,6 +34,6 @@ export function SyncWorker() {
+     };
+   }, [debouncedRun, run]);
+ 
+-  const labels: Record<string,string> = { 'saved-device': 'Sync · Saved on device', waiting: 'Sync · Waiting for Mac', syncing: 'Sync · Syncing', synced: 'Sync · Synced', 'needs-review': 'Sync · Needs review' };
++  const labels: Record<string,string> = { 'saved-device': 'Sync · Saved on device', waiting: 'Sync · Waiting for another tab', pending: 'Sync · Pending', syncing: 'Sync · Syncing', synced: 'Sync · Text synced', 'media-local-only': 'Sync · Audio stays on this device', 'needs-review': 'Sync · Needs review' };
+   return <span className={`sync-worker-state state-${status}`} role="status" aria-live="polite">{labels[status] ?? 'Sync · Saved on device'}</span>;
+ }
+diff --git a/spikes/phase-00/gate1/web/package.json b/spikes/phase-00/gate1/web/package.json
+index e7ef7cf..b589968 100644
+--- a/spikes/phase-00/gate1/web/package.json
++++ b/spikes/phase-00/gate1/web/package.json
+@@ -10,6 +10,8 @@
+     "test:mvp": "node --test app/lib/*.test.mjs",
+     "test:sync": "node --test sync-server/*.test.mjs",
+     "test:quick-capture-browser": "node scripts/mvp-05-quick-capture-browser.mjs",
++    "test:sync-browser": "node scripts/sync-web-08-2a-browser.mjs",
++    "test:sync-reliability-browser": "node scripts/sync-reliability-browser.mjs",
+     "test:mvp03-browser": "node scripts/mvp-03-browser.mjs",
+     "test:audio-browser": "node scripts/mvp-02-browser.mjs",
+     "test:documents": "npm --prefix packages/document-engine test",
+diff --git a/spikes/phase-00/gate1/web/scripts/mvp-05-quick-capture-browser.mjs b/spikes/phase-00/gate1/web/scripts/mvp-05-quick-capture-browser.mjs
+index 084fa9b..5c33418 100644
+--- a/spikes/phase-00/gate1/web/scripts/mvp-05-quick-capture-browser.mjs
++++ b/spikes/phase-00/gate1/web/scripts/mvp-05-quick-capture-browser.mjs
+@@ -10,7 +10,7 @@ const { chromium } = require(require.resolve('playwright', { paths: [lens] }));
+ const baseUrl = process.env.NOTEOS_TEST_URL ?? 'http://127.0.0.1:3000';
+ await mkdir(evidence, { recursive: true });
+ const browser = await chromium.launch();
+-const diagnostics = { browser: browser.version(), errors: [], externalRequests: [] };
++const diagnostics = { browser: browser.version(), errors: [], externalRequests: [], quickCaptureWriteLatency: null };
+ const check = (condition, message) => { if (!condition) throw new Error(message); };
+ 
+ async function readAllNotes(page) {
+@@ -32,6 +32,8 @@ async function scenario(name, viewport, run) {
+   page.on('console', (message) => { if (message.type() === 'error') diagnostics.errors.push(`${name}: ${message.text()}`); });
+   page.on('pageerror', (error) => diagnostics.errors.push(`${name}: ${error.message}`));
+   page.on('request', (request) => { if (!request.url().startsWith(baseUrl)) diagnostics.externalRequests.push(`${name}: ${request.url()}`); });
++  await page.goto(`${baseUrl}/icon.svg`);
++  await page.evaluate(() => new Promise((resolve, reject) => { const request = indexedDB.deleteDatabase('noteos-mvp-01'); request.onsuccess = resolve; request.onerror = () => reject(request.error); request.onblocked = () => reject(new Error('A previous synthetic database connection remains open.')); }));
+   try { await run(page); }
+   catch (error) { await page.screenshot({ path: `${evidence}/${name}-failure.png`, fullPage: true }).catch(() => {}); throw error; }
+   finally { await context.close(); }
+@@ -71,6 +73,28 @@ try {
+     await page.locator('.note-card-link').filter({ hasText: 'Ghi chú cho buổi chiều' }).click();
+     await page.locator('.editor-content').waitFor();
+     check((await page.locator('.editor-content').innerText()).includes('東京でアイデアを整理する'), 'Saved Quick Capture did not open in the existing editor.');
++    const samples = [];
++    for (let index = 0; index < 20; index++) {
++      await page.goto(baseUrl);
++      await page.waitForFunction(() => localStorage.getItem('noteos:mvp03:home-preferences') !== null);
++      const capture = page.getByRole('textbox', { name: "What's on your mind?" });
++      const saveButton = page.getByRole('button', { name: 'Save note' });
++      await capture.fill(`Synthetic local write latency ${index + 1}`);
++      const countBefore = (await readAllNotes(page)).length;
++      await page.evaluate(() => { window.__quickCaptureWriteStart = performance.now(); });
++      await saveButton.click();
++      await page.locator('.quick-capture-status').getByText('Saved on this device. Ready for another thought.', { exact: true }).waitFor();
++      await page.waitForFunction(async (expected) => {
++        const request = indexedDB.open('noteos-mvp-01');
++        const db = await new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
++        const tx = db.transaction('notes', 'readonly');
++        const count = await new Promise((resolve, reject) => { const query = tx.objectStore('notes').count(); query.onsuccess = () => resolve(query.result); query.onerror = () => reject(query.error); });
++        db.close(); return count === expected;
++      }, countBefore + 1);
++      samples.push(await page.evaluate(() => performance.now() - window.__quickCaptureWriteStart));
++    }
++    const sorted = [...samples].sort((a, b) => a - b);
++    diagnostics.quickCaptureWriteLatency = { metric: 'Save click to IndexedDB count increment and local saved confirmation', dataset: '20 synthetic one-line notes, local browser storage only', unit: 'ms', iterations: samples.length, p50: sorted[Math.floor((sorted.length - 1) * 0.5)], p95: sorted[Math.ceil((sorted.length - 1) * 0.95)], max: sorted.at(-1), samples };
+   });
+ 
+   await scenario('quick-capture-phone-layout', { width: 390, height: 844 }, async (page) => {
+diff --git a/spikes/phase-00/gate1/web/scripts/sync-origin-isolation.mjs b/spikes/phase-00/gate1/web/scripts/sync-origin-isolation.mjs
+index 973a2da..ae8fd5d 100644
+--- a/spikes/phase-00/gate1/web/scripts/sync-origin-isolation.mjs
++++ b/spikes/phase-00/gate1/web/scripts/sync-origin-isolation.mjs
+@@ -7,12 +7,14 @@ const require = createRequire(import.meta.url);
+ const root = fileURLToPath(new URL('../../../../../', import.meta.url));
+ const { chromium } = require(require.resolve('playwright', { paths: [resolve(root, '../ui-lens')] }));
+ const evidence = process.env.NOTEOS_SYNC_EVIDENCE ?? `${root}/artifacts/review/noteOS-Phase08.2A-Web-Sync-Engine-review/evidence`;
++const httpOrigin = process.env.NOTEOS_SYNC_HTTP_ORIGIN ?? 'http://127.0.0.1:15742';
++const httpPort = Number(new URL(httpOrigin).port);
+ const browser = await chromium.launch();
+ try {
+   const page = await browser.newPage();
+-  const openOrigin = async url => page.goto(url, { waitUntil: 'commit', timeout: 60000 });
++  const openOrigin = async url => { await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 }); await page.waitForFunction(() => document.readyState === 'interactive' || document.readyState === 'complete'); };
+   const countSynthetic = async (seed = false) => page.evaluate(async shouldSeed => {
+-    const request = indexedDB.open('noteos-mvp-01', 3);
++    const request = indexedDB.open('noteos-mvp-01');
+     request.onupgradeneeded = () => { const db = request.result; if (!db.objectStoreNames.contains('notes')) db.createObjectStore('notes', { keyPath: 'id' }); };
+     const db = await new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+     const tx = db.transaction('notes', shouldSeed ? 'readwrite' : 'readonly');
+@@ -22,15 +24,17 @@ try {
+     await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onabort = tx.onerror = () => reject(tx.error); });
+     db.close(); return count;
+   }, seed);
+-  await openOrigin('http://127.0.0.1:15740/');
++  await openOrigin(`${httpOrigin}/icon.svg`);
++  await page.evaluate(() => new Promise((resolve,reject) => { const request=indexedDB.deleteDatabase('noteos-mvp-01');request.onsuccess=resolve;request.onerror=()=>reject(request.error);request.onblocked=()=>reject(new Error('Previous synthetic browser profile is still open')); }));
++  await openOrigin(`${httpOrigin}/`);
+   const firstCount = await countSynthetic(true);
+-  await openOrigin('http://localhost:15740/');
++  await openOrigin(`http://localhost:${httpPort}/`);
+   const secondCount = await countSynthetic(false);
+   if (firstCount < 1 || secondCount !== 0) throw new Error(`Origin storage leaked or seed missing (first=${firstCount}, second=${secondCount}).`);
+-  await openOrigin('http://127.0.0.1:15740/');
++  await openOrigin(`${httpOrigin}/`);
+   const firstCountAfterReturn = await countSynthetic(false);
+   if (firstCountAfterReturn !== firstCount) throw new Error('First-origin record did not remain isolated and durable.');
+-  const result = { result: 'PASS', origins: ['http://127.0.0.1:15740', 'http://localhost:15740'], firstOriginCount: firstCount, secondOriginCount: secondCount, firstOriginAfterReturn: firstCountAfterReturn, syntheticOnly: true };
++  const result = { result: 'PASS', origins: [httpOrigin, `http://localhost:${httpPort}`], firstOriginCount: firstCount, secondOriginCount: secondCount, firstOriginAfterReturn: firstCountAfterReturn, syntheticOnly: true };
+   await writeFile(`${evidence}/origin-isolation.json`, JSON.stringify(result, null, 2) + '\n');
+   console.log(JSON.stringify(result));
+ } finally { await browser.close(); }
+diff --git a/spikes/phase-00/gate1/web/scripts/sync-reliability-browser.mjs b/spikes/phase-00/gate1/web/scripts/sync-reliability-browser.mjs
+new file mode 100644
+index 0000000..c7657c2
+--- /dev/null
++++ b/spikes/phase-00/gate1/web/scripts/sync-reliability-browser.mjs
+@@ -0,0 +1,129 @@
++import { createRequire } from 'node:module';
++import { fileURLToPath } from 'node:url';
++import { mkdir, mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
++import { tmpdir } from 'node:os';
++import { createServer } from 'node:https';
++import http from 'node:http';
++import { execFile, execFileSync } from 'node:child_process';
++import { promisify } from 'node:util';
++import assert from 'node:assert/strict';
++import { randomUUID } from 'node:crypto';
++import { setTimeout as delay } from 'node:timers/promises';
++
++const require = createRequire(import.meta.url), root = fileURLToPath(new URL('../../../../../', import.meta.url));
++const { chromium } = require(require.resolve('playwright', { paths: [process.env.NOTEOS_PLAYWRIGHT_ROOT ?? `${root}/../ui-lens`] }));
++const container = process.env.NOTEOS_SYNC_CONTAINER ?? 'noteos-phase082a1-synthetic-web';
++const httpOrigin = process.env.NOTEOS_SYNC_HTTP_ORIGIN ?? 'http://127.0.0.1:15742';
++const httpPort = Number(new URL(httpOrigin).port);
++const origin = process.env.NOTEOS_SYNC_ORIGIN ?? `https://localhost:${httpPort + 1}`;
++const httpsPort = Number(new URL(origin).port);
++const compose = process.env.NOTEOS_SYNC_COMPOSE ?? 'docker-compose.phase082a1-test.yml';
++const evidence = process.env.NOTEOS_SYNC_EVIDENCE ?? `${root}/artifacts/review/noteOS-Phase08.2A.1-Sync-Reliability-review/evidence`;
++const run = async args => (await promisify(execFile)('docker', args, { maxBuffer: 1024 * 1024 })).stdout.trim();
++const fixture = async action => run(['exec', container, 'node', '/verification/fixture.mjs', action]);
++const sleep = ms => delay(ms);
++const waitFor = async fn => { for (let i = 0; i < 240; i++) { const value = await fn(); if (value) return value; await sleep(250); } throw new Error('Timed out waiting for browser sync reliability state'); };
++const stateOf = page => page.evaluate(async () => {
++  const open = indexedDB.open('noteos-mvp-01'), db = await new Promise((resolve, reject) => { open.onsuccess = () => resolve(open.result); open.onerror = () => reject(open.error); });
++  const names = ['notes', 'syncOutbox', 'syncState', 'syncBaselines', 'syncQuarantine'];
++  const tx = db.transaction(names, 'readonly');
++  const result = await Promise.all(names.map(name => new Promise((resolve, reject) => { const request = tx.objectStore(name).getAll(); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); })));
++  await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onabort = tx.onerror = () => reject(tx.error); });
++  db.close(); return Object.fromEntries(names.map((name, index) => [name, result[index]]));
++});
++async function seedQueue(page, id, titlePrefix) {
++  await page.evaluate(({ id, titlePrefix }) => new Promise((resolve, reject) => {
++    const canonicalText = value => Array.isArray(value) ? `[${value.map(canonicalText).join(',')}]` : value && typeof value === 'object' ? `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonicalText(value[key])}`).join(',')}}` : JSON.stringify(value);
++    const open = indexedDB.open('noteos-mvp-01');
++    open.onsuccess = () => {
++      const db = open.result, tx = db.transaction(['notes', 'syncOutbox', 'syncEnrollment'], 'readwrite'), now = Date.now();
++      const note = { id, title: `${titlePrefix} 0`, document: { schemaVersion: 1, type: 'doc', content: [] }, schemaVersion: 1, createdAt: now, updatedAt: now, lifecycle: 'active', revision: 0, pinned: false, tags: [], privacy: 'PRIVATE_SERVER' };
++      tx.objectStore('notes').put(note); tx.objectStore('syncEnrollment').put({ id, optedIn: true, updatedAt: now });
++      for (let index = 1; index <= 150; index++) {
++        const record = { ...note, title: `${titlePrefix} ${index}`, revision: index, updatedAt: now + index };
++        const operationId = `reliability-${id}-${String(index).padStart(3, '0')}`;
++        tx.objectStore('syncOutbox').put({ operationId, entityId: id, localRevision: index, baseServerVersion: 0, ownerApproved: true, type: 'upsert', recordJson: canonicalText(record), createdAt: now + index });
++      }
++      tx.oncomplete = () => { db.close(); resolve(); }; tx.onabort = tx.onerror = () => reject(tx.error);
++    };
++    open.onerror = () => reject(open.error);
++  }), { id, titlePrefix });
++}
++async function countServer() { return JSON.parse(await fixture('state')); }
++
++await mkdir(evidence, { recursive: true });
++const tlsDir = await mkdtemp(`${tmpdir()}/noteos-phase082a1-tls-`), key = `${tlsDir}/key.pem`, cert = `${tlsDir}/cert.pem`;
++execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', cert, '-days', '1', '-subj', '/CN=localhost', '-addext', 'subjectAltName=DNS:localhost,IP:127.0.0.1'], { stdio: 'ignore' });
++const proxy = createServer({ key: await readFile(key), cert: await readFile(cert) }, (req, res) => {
++  const target = http.request({ hostname: '127.0.0.1', port: httpPort, path: req.url, method: req.method, headers: { ...req.headers, 'x-forwarded-host': req.headers.host, 'x-forwarded-proto': 'https', 'x-forwarded-port': String(httpsPort) } }, upstream => { res.writeHead(upstream.statusCode, upstream.headers); upstream.pipe(res); });
++  target.on('error', () => { res.writeHead(502); res.end(); }); req.pipe(target);
++});
++await new Promise((resolve, reject) => proxy.once('error', reject).listen(httpsPort, '127.0.0.1', resolve));
++const browser = await chromium.launch();
++try {
++  await fixture('init');
++  const context = await browser.newContext({ ignoreHTTPSErrors: true, viewport: { width: 1440, height: 1000 } });
++  context.setDefaultTimeout(30000);
++  const page = await context.newPage();
++  await page.goto(`${origin}/icon.svg`, { waitUntil: 'domcontentloaded' });
++  await page.evaluate(() => new Promise((resolve, reject) => { const request = indexedDB.deleteDatabase('noteos-mvp-01'); request.onsuccess = () => resolve(); request.onerror = () => reject(request.error); request.onblocked = () => reject(new Error('A previous synthetic IndexedDB connection remains open.')); }));
++  await page.goto(`${origin}/sync`, { waitUntil: 'domcontentloaded' });
++  await page.getByText('This browser is not paired.', { exact: true }).waitFor();
++  const code = await fixture('pair');
++  await page.getByLabel('Device label', { exact: true }).fill('Reliability synthetic browser');
++  await page.getByLabel('Pairing code', { exact: true }).fill(code);
++  await page.getByRole('button', { name: 'Pair this browser', exact: true }).click();
++  await page.getByText('This browser is paired. Sync is available after you approve notes.', { exact: true }).waitFor();
++
++  const beforePartialQueue = await countServer();
++  const partialQueueId = `partial-queue-${randomUUID()}`;
++  await seedQueue(page, partialQueueId, 'Partial queue revision');
++  let firstPushes = 0;
++  const abortAt101 = async route => { firstPushes++; if (firstPushes === 101) return route.abort('failed'); return route.continue(); };
++  await context.route('**/api/v1/sync/push', abortAt101);
++  await page.evaluate(() => window.dispatchEvent(new Event('noteos:local-note-commit')));
++  await waitFor(() => Promise.resolve(firstPushes >= 101));
++  await page.locator('.sync-worker-state').filter({ hasText: 'Sync · Pending' }).waitFor();
++  let local = await stateOf(page);
++  console.log('Partial queue after injected outage:', JSON.stringify({ firstPushes, outbox: local.syncOutbox.length, quarantine: local.syncQuarantine.length, status: await page.locator('body').innerText().then(text => text.includes('Pending')) }));
++  assert.equal(local.syncOutbox.length, 50, 'first 100 ACKs must leave 50 operations pending');
++  assert.equal(local.syncOutbox[0].operationId, `reliability-${partialQueueId}-101`);
++  assert.ok(firstPushes >= 101);
++  const partialEvidence = { status: 'PASS', pushesBeforeOutage: firstPushes, acknowledged: 100, pending: local.syncOutbox.length, workerLabel: await page.locator('.sync-worker-state').textContent() };
++  await page.screenshot({ path: `${evidence}/pending-after-100-acks.png`, fullPage: true });
++  await context.unroute('**/api/v1/sync/push', abortAt101);
++  await page.reload({ waitUntil: 'domcontentloaded' });
++  await waitFor(async () => (await stateOf(page)).syncOutbox.length === 0);
++  let server = await countServer();
++  assert.equal(server.noteCount - beforePartialQueue.noteCount, 1); assert.equal(server.operationCount - beforePartialQueue.operationCount, 150); assert.equal(server.eventCount - beforePartialQueue.eventCount, 150);
++  const recoveredEvidence = { status: 'PASS', remainingAfterReload: 0, serverOperationDelta: server.operationCount - beforePartialQueue.operationCount, serverEventDelta: server.eventCount - beforePartialQueue.eventCount };
++
++  const lostAckQueueId = `lost-ack-queue-${randomUUID()}`;
++  await seedQueue(page, lostAckQueueId, 'Lost ACK revision');
++  const beforeLostAck = await countServer(); let lostAckId = '';
++  const dropLaterAck = async route => {
++    const body = route.request().postDataJSON(), operation = body?.operations?.[0];
++    const record = operation ? JSON.parse(operation.recordJson) : null;
++    if (record?.revision === 125 && operation.entityId === lostAckQueueId) { lostAckId = operation.operationId; await route.fetch(); return route.abort('failed'); }
++    return route.continue();
++  };
++  await context.route('**/api/v1/sync/push', dropLaterAck);
++  await page.evaluate(() => window.dispatchEvent(new Event('noteos:local-note-commit')));
++  await page.locator('.sync-worker-state').filter({ hasText: 'Sync · Pending' }).waitFor();
++  local = await stateOf(page);
++  assert.equal(local.syncOutbox.length, 26); assert.equal(lostAckId, `reliability-${lostAckQueueId}-125`);
++  await context.unroute('**/api/v1/sync/push', dropLaterAck);
++  await page.reload({ waitUntil: 'domcontentloaded' });
++  await waitFor(async () => (await stateOf(page)).syncOutbox.length === 0);
++  server = await countServer();
++  assert.equal(server.operationCount - beforeLostAck.operationCount, 150);
++  assert.equal(server.eventCount - beforeLostAck.eventCount, 150);
++  const lostAckEvidence = { status: 'PASS', operationId: lostAckId, localRetries: 1, serverOperationDelta: 150, serverEventDelta: 150 };
++
++  const report = { status: 'PASS', environment: { browser: browser.version(), origin, syntheticDatabase: 'isolated Docker SQLite volume', profile: 'disposable Playwright Chromium context' }, scenarios: { firstHundredAcknowledgedThenOutage: partialEvidence, reloadRecovery: recoveredEvidence, lostAckReplay: lostAckEvidence }, actualIPhoneTest: false };
++  await writeFile(`${evidence}/reliability-browser.json`, JSON.stringify(report, null, 2) + '\n');
++  console.log(JSON.stringify(report, null, 2));
++  await context.close();
++} finally {
++  await browser.close(); await new Promise(resolve => proxy.close(resolve)); await rm(tlsDir, { recursive: true, force: true });
++}
+diff --git a/spikes/phase-00/gate1/web/scripts/sync-web-08-2a-browser.mjs b/spikes/phase-00/gate1/web/scripts/sync-web-08-2a-browser.mjs
+index ae75c1a..bfcd729 100644
+--- a/spikes/phase-00/gate1/web/scripts/sync-web-08-2a-browser.mjs
++++ b/spikes/phase-00/gate1/web/scripts/sync-web-08-2a-browser.mjs
+@@ -12,7 +12,7 @@ import { setTimeout as delay } from 'node:timers/promises';
+ const require=createRequire(import.meta.url), root=fileURLToPath(new URL('../../../../../',import.meta.url));
+ const { chromium, webkit }=require(require.resolve('playwright',{paths:[process.env.NOTEOS_PLAYWRIGHT_ROOT??`${root}/../ui-lens`]}));
+ const evidence=process.env.NOTEOS_SYNC_EVIDENCE??`${root}/artifacts/review/noteOS-Phase08.2A-Web-Sync-Engine-review/evidence`;
+-const container='noteos-phase082a-synthetic-web', origin='https://localhost:15741', trace=[];
++const container=process.env.NOTEOS_SYNC_CONTAINER??'noteos-phase082a-synthetic-web', httpOrigin=process.env.NOTEOS_SYNC_HTTP_ORIGIN??'http://127.0.0.1:15740', httpPort=Number(new URL(httpOrigin).port), origin=process.env.NOTEOS_SYNC_ORIGIN??`https://localhost:${httpPort+1}`, httpsPort=Number(new URL(origin).port), compose=process.env.NOTEOS_SYNC_COMPOSE??'docker-compose.phase082a-test.yml', trace=[];
+ const run=async args=>(await promisify(execFile)('docker',args,{maxBuffer:1024*1024})).stdout.trim();
+ const fixture=async action=>run(['exec',container,'node','/verification/fixture.mjs',action]);
+ const readNote=async(page, title)=>page.evaluate(async wanted=>{
+@@ -21,27 +21,40 @@ const readNote=async(page, title)=>page.evaluate(async wanted=>{
+  const [notes,outbox,state,conflicts]=await Promise.all(['notes','syncOutbox','syncState','syncConflicts'].map(name=>new Promise((ok,fail)=>{const r=tx.objectStore(name).getAll();r.onsuccess=()=>ok(r.result);r.onerror=()=>fail(r.error)})));
+  db.close(); return {note:notes.find(note=>note.title===wanted),notes,outbox,state,conflicts};
+ },title);
+-const countNotes=page=>page.evaluate(async()=>{const open=indexedDB.open('noteos-mvp-01');const db=await new Promise((ok,fail)=>{open.onsuccess=()=>ok(open.result);open.onerror=()=>fail(open.error)});const tx=db.transaction('notes','readonly'),r=tx.objectStore('notes').count();return await new Promise((ok,fail)=>{r.onsuccess=()=>{db.close();ok(r.result)};r.onerror=()=>fail(r.error)})});
++const seedSyntheticQueue=async(page,id)=>page.evaluate(async noteId=>{
++ const canonical=value=>Array.isArray(value)?`[${value.map(canonical).join(',')}]`:value&&typeof value==='object'?`{${Object.keys(value).sort().map(key=>`${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}`:JSON.stringify(value);
++ const open=indexedDB.open('noteos-mvp-01');const db=await new Promise((ok,fail)=>{open.onsuccess=()=>ok(open.result);open.onerror=()=>fail(open.error)});
++ const tx=db.transaction(['notes','syncOutbox','syncEnrollment'],'readwrite'),now=Date.now();
++ const note={id:noteId,title:'Two tabs shared queue 150',document:{schemaVersion:1,type:'doc',content:[]},schemaVersion:1,createdAt:now,updatedAt:now+150,lifecycle:'active',revision:150,pinned:false,tags:[],privacy:'PRIVATE_SERVER'};
++ tx.objectStore('notes').put(note);tx.objectStore('syncEnrollment').put({id:noteId,optedIn:true,updatedAt:now});
++ for(let revision=1;revision<=150;revision++) { const record={...note,title:`Two tabs revision ${revision}`,revision,updatedAt:now+revision};tx.objectStore('syncOutbox').put({operationId:`two-tab-${noteId}-${String(revision).padStart(3,'0')}`,entityId:noteId,localRevision:revision,baseServerVersion:0,ownerApproved:true,type:'upsert',recordJson:canonical(record),createdAt:now+revision}); }
++ await new Promise((ok,fail)=>{tx.oncomplete=ok;tx.onabort=tx.onerror=()=>fail(tx.error)});db.close();
++},id);
++const countNotes=page=>page.evaluate(async()=>{const open=indexedDB.open('noteos-mvp-01');const db=await new Promise((ok,fail)=>{open.onsuccess=()=>ok(open.result);open.onerror=()=>fail(open.error)});if(!db.objectStoreNames.contains('notes')){db.close();return 0;}const tx=db.transaction('notes','readonly'),r=tx.objectStore('notes').count();return await new Promise((ok,fail)=>{r.onsuccess=()=>{db.close();ok(r.result)};r.onerror=()=>fail(r.error)})});
+ const waitFor=async fn=>{for(let i=0;i<160;i++){const value=await fn();if(value)return value;await delay(250)}throw new Error('Timed out waiting for synthetic sync state')};
+ const navigate=(page,url)=>page.goto(url,{waitUntil:'domcontentloaded'});
++const clearSyntheticProfile=page=>page.evaluate(()=>new Promise((resolve,reject)=>{const request=indexedDB.deleteDatabase('noteos-mvp-01');request.onsuccess=()=>resolve();request.onerror=()=>reject(request.error);request.onblocked=()=>reject(new Error('A previous synthetic browser database is still open.'));}));
+ await mkdir(evidence,{recursive:true});
+ const certDir=await mkdtemp(`${tmpdir()}/noteos-phase082a-tls-`), key=`${certDir}/key.pem`, cert=`${certDir}/cert.pem`;
+ execFileSync('openssl',['req','-x509','-newkey','rsa:2048','-nodes','-keyout',key,'-out',cert,'-days','1','-subj','/CN=localhost','-addext','subjectAltName=DNS:localhost,IP:127.0.0.1'],{stdio:'ignore'});
+ const proxy=createServer({key:await readFile(key),cert:await readFile(cert)},(req,res)=>{
+- const target=http.request({hostname:'127.0.0.1',port:15740,path:req.url,method:req.method,headers:{...req.headers,'x-forwarded-host':req.headers.host,'x-forwarded-proto':'https','x-forwarded-port':'15741'}},up=>{res.writeHead(up.statusCode,up.headers);up.pipe(res)});
++ const target=http.request({hostname:'127.0.0.1',port:httpPort,path:req.url,method:req.method,headers:{...req.headers,'x-forwarded-host':req.headers.host,'x-forwarded-proto':'https','x-forwarded-port':String(httpsPort)}},up=>{res.writeHead(up.statusCode,up.headers);up.pipe(res)});
+  target.on('error',()=>{res.writeHead(502);res.end()});req.pipe(target);
+ });
+-await new Promise((resolve,reject)=>proxy.once('error',reject).listen(15741,'127.0.0.1',resolve));
++await new Promise((resolve,reject)=>proxy.once('error',reject).listen(httpsPort,'127.0.0.1',resolve));
++console.log(`Browser proxy ready on 127.0.0.1:${httpsPort} -> ${httpOrigin}`);
+ const browsers=[],results=[];
+ try {
+  await fixture('init');
++ console.log('Synthetic server database initialized.');
+  for(const [name,engine] of [['iPhone-sized WebKit',webkit],['Mac Chromium',chromium]]) {
++  console.log(`Launching ${name}.`);
+   const browser=await engine.launch();browsers.push(browser);
+   const context=await browser.newContext({ignoreHTTPSErrors:true,viewport:name.startsWith('iPhone')?{width:390,height:844}:{width:1440,height:1000},deviceScaleFactor:name.startsWith('iPhone')?3:1,isMobile:name.startsWith('iPhone'),hasTouch:name.startsWith('iPhone')});
+   context.setDefaultTimeout(30000);context.setDefaultNavigationTimeout(30000);
+   if(name.startsWith('iPhone')) globalThis.phoneContext=context; else globalThis.macContext=context;
+   const page=await context.newPage(), errors=[], apiResponses=[]; page.on('pageerror',e=>errors.push(e.message));page.on('response',async r=>{if(r.url().includes('/api/v1/sync/'))apiResponses.push({path:new URL(r.url()).pathname,status:r.status()})});page.on('requestfailed',r=>{if(r.url().includes('_rsc=')&&r.failure()?.errorText!=='cancelled')trace.push({browser:name,step:'rsc-request-failed',error:r.failure()?.errorText??'unknown'});});
+-  await navigate(page,origin+'/sync');await page.getByText('This browser is not paired.',{exact:true}).waitFor();
++  await navigate(page,origin+'/icon.svg');await clearSyntheticProfile(page);await navigate(page,origin+'/sync');console.log(`${name} opened Sync Setup.`);try { await page.getByText('This browser is not paired.',{exact:true}).waitFor(); } catch(error) { console.error('Initial sync connection diagnostic:',JSON.stringify({url:page.url(),body:(await page.locator('body').innerText()).slice(-1600),errors,apiResponses}));throw error; }
+   const code=await fixture('pair');await page.getByLabel('Device label',{exact:true}).fill(name);await page.getByLabel('Pairing code',{exact:true}).fill(code);
+   await page.getByRole('button',{name:'Pair this browser',exact:true}).click();try{await page.getByText('This browser is paired. Sync is available after you approve notes.',{exact:true}).waitFor()}catch(error){console.error('Pair diagnostic:',JSON.stringify({body:(await page.locator('body').innerText()).slice(-1800),apiResponses,errors}));throw error;}
+   const cookie=(await context.cookies()).find(row=>row.name==='__Secure-noteos_sync');assert.ok(cookie?.secure&&cookie?.httpOnly&&cookie?.sameSite==='Strict');
+@@ -50,19 +63,18 @@ try {
+   if(name.startsWith('iPhone')) {
+    await navigate(page,origin);await page.getByRole('textbox',{name:"What's on your mind?"}).waitFor();
+    await page.evaluate(()=>new Promise((ok,fail)=>{const open=indexedDB.open('noteos-mvp-01');open.onsuccess=()=>{const db=open.result;const tx=db.transaction(['notes','recordings'],'readwrite');const note=(id,title,privacy)=>({id,title,document:{schemaVersion:1,type:'doc',content:[{type:'paragraph',content:[{type:'text',text:'既存のノート・ghi chú tổng hợp'}]}]},schemaVersion:1,createdAt:100,updatedAt:100,lifecycle:'active',revision:0,pinned:true,tags:['資料','công việc'],...(privacy?{privacy}:{})});tx.objectStore('notes').add(note('approved-existing','Existing note without privacy'));tx.objectStore('notes').add(note('device-only','Never upload','DEVICE_ONLY'));tx.objectStore('notes').add(note('audio-note','Recording stays local','PRIVATE_SERVER'));tx.objectStore('recordings').add({id:'synthetic-audio',noteId:'audio-note',status:'interrupted'});tx.oncomplete=()=>{db.close();ok()};tx.onabort=tx.onerror=()=>fail(tx.error)};open.onerror=()=>fail(open.error)}));
+-   await navigate(page,origin+'/sync');await page.getByRole('button',{name:'Inspect this browser'}).click();await page.getByText('3 local notes · 1 local recordings · 0 enrolled',{exact:true}).waitFor();
++   await navigate(page,origin+'/sync');await page.getByRole('button',{name:'Inspect this browser'}).click();try { await page.getByText('3 local notes · 1 local recordings · 0 enrolled',{exact:true}).waitFor(); } catch(error) { console.error('Inventory diagnostic:',JSON.stringify({body:(await page.locator('body').innerText()).slice(-2600)}));throw error; }
+    assert.equal(await page.getByText(/Never upload/).count(),0);assert.equal(await page.getByText(/Recording stays local/).count(),0);
+-   await page.getByRole('button',{name:'Approve 1 selected notes'}).click();await page.getByText('1 enrolled',{exact:false}).waitFor();
+-   await page.getByRole('checkbox',{name:/Include new notes created on this browser after enrollment/}).check();
++   await page.getByRole('button',{name:'Approve 1 selected notes'}).click();try { await page.getByText('1 enrolled',{exact:false}).waitFor(); } catch(error) { console.error('Enrollment diagnostic:',JSON.stringify({body:(await page.locator('body').innerText()).slice(-2200)}));throw error; }
+    await page.getByRole('button',{name:'Sync now',exact:true}).click();await waitFor(async()=>JSON.parse(await fixture('state')).noteCount===1);
+    const ids=JSON.parse(await fixture('state')).noteIds;assert.deepEqual(ids,['approved-existing']);
+    trace.push({browser:name,step:'owner-approved-existing-note; DEVICE_ONLY-and-audio-excluded',success:true});
+    await navigate(page,origin);const capture=page.getByRole('textbox',{name:"What's on your mind?"});await capture.fill('Tóm tắt offline 日本語');
+    await context.route('**/api/v1/sync/**',route=>route.abort());
+    await page.getByRole('button',{name:'Save note',exact:true}).click();await page.getByText('Saved on this device. Ready for another thought.',{exact:true}).waitFor();
+-   const local=await readNote(page,'Tóm tắt offline 日本語');assert.ok(local.note);assert.ok(local.outbox.some(op=>op.entityId===local.note.id));
++   const local=await readNote(page,'Tóm tắt offline 日本語');assert.ok(local.note);assert.equal(local.outbox.some(op=>op.entityId===local.note.id),false);
+    await context.unroute('**/api/v1/sync/**');trace.push({browser:name,step:'offline-quick-capture-local-commit-and-outbox-durable',success:true});
+-   await navigate(page,origin+'/sync');await page.getByRole('button',{name:'Sync now',exact:true}).click();await waitFor(async()=>JSON.parse(await fixture('state')).noteCount===2);
++   await navigate(page,origin+'/sync');await page.getByRole('button',{name:'Inspect this browser'}).click();await page.getByRole('button',{name:'Approve 1 selected notes',exact:true}).click();await page.getByRole('button',{name:'Sync now',exact:true}).click();await waitFor(async()=>JSON.parse(await fixture('state')).noteCount===2);
+    await page.screenshot({path:`${evidence}/iphone-sized-webkit-synced.png`,fullPage:true});
+    globalThis.phoneNoteId=local.note.id;results.push({browser:name,version:browser.version(),viewport:'390x844',deviceScaleFactor:3,offlineCapture:true,ownerEnrollment:true});
+   } else {
+@@ -106,22 +118,20 @@ try {
+  const conflicted=await readNote(iphone,'Safari offline version');assert.ok(conflicted.note);const copies=conflicted.notes.filter(row=>row.title==='Mac concurrent version (Sync conflict)');assert.equal(copies.length,1);assert.equal(copies[0].pinned,true);assert.deepEqual(copies[0].tags,['資料','công việc']);assert.match(JSON.stringify(copies[0].document),/既存のノート・ghi chú tổng hợp/);
+  trace.push({scenario:'concurrent-offline-edit-preserves-local-and-remote-copy',success:true,conflictCopies:1});
+ 
+- // Two tabs can request the same queued mutation; the Web Lock serializes each origin.
+- const capturePage=await globalThis.phoneContext.newPage();await navigate(capturePage,origin);await globalThis.phoneContext.route('**/api/v1/sync/**',route=>route.abort());
+- await capturePage.getByRole('textbox',{name:"What's on your mind?"}).fill('Two tabs one operation');const saveCapture=capturePage.getByRole('button',{name:'Save note',exact:true});await waitFor(()=>saveCapture.isEnabled());await saveCapture.click();
+- const queued=await readNote(capturePage,'Two tabs one operation');assert.ok(queued.outbox.some(op=>op.entityId===queued.note.id));await globalThis.phoneContext.unroute('**/api/v1/sync/**');
+- const beforeDuplicate=JSON.parse(await fixture('state'));const [tabA,tabB]=await Promise.all([navigate(iphone,origin+'/sync').then(()=>iphone),globalThis.phoneContext.newPage()]);await navigate(tabB,origin+'/sync');
++ // Two tabs request the same 150-operation queue; the Web Lock serializes each origin.
++ const beforeDuplicate=JSON.parse(await fixture('state'));const capturePage=await globalThis.phoneContext.newPage();await navigate(capturePage,origin+'/icon.svg');await seedSyntheticQueue(capturePage,'two-tabs-one-queue');
++ const [tabA,tabB]=await Promise.all([navigate(iphone,origin+'/sync').then(()=>iphone),globalThis.phoneContext.newPage()]);await navigate(tabB,origin+'/sync');
+  await Promise.all([tabA.getByRole('button',{name:'Sync now',exact:true}).click(),tabB.getByRole('button',{name:'Sync now',exact:true}).click()]);
+- await waitFor(async()=>JSON.parse(await fixture('state')).eventCount===beforeDuplicate.eventCount+1);const afterDuplicate=JSON.parse(await fixture('state'));assert.equal(afterDuplicate.eventCount,beforeDuplicate.eventCount+1);
+- trace.push({scenario:'two-tab-sync-lock',success:true,noDuplicateEvents:true});
++ await waitFor(async()=>JSON.parse(await fixture('state')).eventCount>=beforeDuplicate.eventCount+150);const afterDuplicate=JSON.parse(await fixture('state'));assert.equal(afterDuplicate.eventCount-beforeDuplicate.eventCount,150);assert.equal(afterDuplicate.operationCount-beforeDuplicate.operationCount,150);
++ trace.push({scenario:'two-tab-sync-lock',success:true,queuedOperations:150,serverEvents:afterDuplicate.eventCount-beforeDuplicate.eventCount,noDuplicateEvents:true});
+ 
+- await navigate(mac,'http://127.0.0.1:15740/');await mac.getByRole('textbox',{name:"What's on your mind?"}).fill('Origin isolated synthetic note');await mac.getByRole('button',{name:'Save note',exact:true}).click();
+- await mac.getByRole('status').filter({hasText:'Saved on this device'}).waitFor();assert.equal(await countNotes(mac),1);
+- await navigate(mac,'http://localhost:15740/');await mac.getByRole('textbox',{name:"What's on your mind?"}).waitFor();assert.equal(await countNotes(mac),0);
++ await navigate(mac,`${httpOrigin}/icon.svg`);await clearSyntheticProfile(mac);await navigate(mac,`${httpOrigin}/`);await mac.getByRole('textbox',{name:"What's on your mind?"}).fill('Origin isolated synthetic note');await mac.getByRole('button',{name:'Save note',exact:true}).click();
++ await mac.getByText('Saved on this device. Ready for another thought.',{exact:true}).waitFor();assert.equal(await countNotes(mac),1);
++ await navigate(mac,`http://localhost:${httpPort}/icon.svg`);await clearSyntheticProfile(mac);await navigate(mac,`http://localhost:${httpPort}/`);await mac.getByRole('textbox',{name:"What's on your mind?"}).waitFor();assert.equal(await countNotes(mac),0);
+  trace.push({scenario:'disposable-old-origin-storage-isolation',success:true,firstOriginCount:1,secondOriginCount:0});
+ 
+- const beforeRestart=JSON.parse(await fixture('state'));await run(['compose','-f','docker-compose.phase082a-test.yml','restart','web']);
+- await waitFor(async()=>{try{return (await fetch('http://127.0.0.1:15740/')).status===200}catch{return false}});
++ const beforeRestart=JSON.parse(await fixture('state'));await run(['compose','-f',compose,'restart','web']);
++ await waitFor(async()=>{try{return (await fetch(`${httpOrigin}/`)).status===200}catch{return false}});
+  assert.deepEqual(await fixture('state').then(JSON.parse),beforeRestart);trace.push({scenario:'SQLite-server-restart-preserves-epoch-cursor-records-and-idempotency',success:true});
+ 
+  // Server epoch change is injected only into the disposable SQLite volume.
