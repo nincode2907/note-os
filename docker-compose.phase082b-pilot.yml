@@ -1,0 +1,8 @@
+# Explicitly opt-in configuration for the owner-approved Phase 08.2B text-only pilot.
+# The regular docker-compose.web.yml remains Sync-disabled by default.
+services:
+  web:
+    profiles: ["phase082b-pilot"]
+    environment:
+      NOTEOS_SYNC_ENABLED: "1"
+      NOTEOS_SYNC_ALLOWED_ORIGINS: "https://noteos.tail913fb3.ts.net,http://127.0.0.1:15700,http://localhost:15700"
