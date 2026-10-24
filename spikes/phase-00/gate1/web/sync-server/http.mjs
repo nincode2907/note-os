@@ -5,7 +5,13 @@ import { createHash } from 'node:crypto';
 import { assertNoteRecord } from '../app/lib/note-validation.mjs';
 
 const headers = { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' };
-function response(body, status = 200, extra = {}) { return Response.json(body, { status, headers: { ...headers, ...extra } }); }
+function response(body, status = 200, extra = {}) {
+  const responseHeaders = new Headers(headers);
+  for (const [name, value] of Object.entries(extra)) {
+    for (const entry of Array.isArray(value) ? value : [value]) responseHeaders.append(name, entry);
+  }
+  return Response.json(body, { status, headers: responseHeaders });
+}
 function fail(error, status) { return response({ error }, status); }
 
 export function allowedOrigin(req, env) {
@@ -49,8 +55,10 @@ export async function handleSync(req, action, env = process.env) {
     const origin = allowedOrigin(req, env);
     if (!origin) return fail('origin_denied', 403);
     const cookieName = origin.protocol === 'https:' ? '__Secure-noteos_sync' : 'noteos_sync_local';
+    const aiCookieName = origin.protocol === 'https:' ? '__Secure-noteos_ai' : 'noteos_ai_local';
     const cookie = token => `${cookieName}=${token}; Path=/api/v1/sync; HttpOnly; SameSite=Strict; Max-Age=${token ? 2592000 : 0}${origin.protocol === 'https:' ? '; Secure' : ''}`;
-    if (!['status','pair','revoke','bootstrap/dry-run','bootstrap/commit','push','pull'].includes(action)) return fail('route_not_found', 404);
+    const aiCookie = token => `${aiCookieName}=${token}; Path=/api/v1/ai; HttpOnly; SameSite=Strict; Max-Age=${token ? 2592000 : 0}${origin.protocol === 'https:' ? '; Secure' : ''}`;
+    if (!['status','pair','ai-session','revoke','bootstrap/dry-run','bootstrap/commit','push','pull'].includes(action)) return fail('route_not_found', 404);
     if ((action === 'status' && req.method !== 'GET') || (action !== 'status' && req.method !== 'POST')) return fail('method_not_allowed', 405);
     db = openStore(env.NOTEOS_SYNC_STORAGE);
     if (action === 'pair') {
@@ -58,17 +66,21 @@ export async function handleSync(req, action, env = process.env) {
       if (!body || Object.keys(body).sort().join(',') !== 'code,label' || typeof body.code !== 'string' || !/^[A-Za-z0-9_-]{12}$/.test(body.code) || typeof body.label !== 'string' || !body.label.trim() || body.label.length > 80 || /[\x00-\x1f\x7f]/.test(body.label)) return fail('invalid_pairing_request', 400);
       const result = redeemPairingCode(db, body.code, body.label.trim());
       if (result.error) return fail(result.error, result.status);
-      return response({ device: { id: result.id, label: result.label }, synchronizationActive: false }, 200, { 'Set-Cookie': cookie(result.token) });
+      return response({ device: { id: result.id, label: result.label }, synchronizationActive: false }, 200, { 'Set-Cookie': [cookie(result.token), aiCookie(result.token)] });
     }
     const values = (req.headers.get('cookie') ?? '').split(';').map(v => v.trim()).filter(v => v.startsWith(cookieName + '='));
     const device = values.length === 1 ? authenticate(db, values[0].slice(cookieName.length + 1)) : null;
     if (!device) return fail('authentication_required', 401);
     if (action === 'status') return response({ ...serverMeta(db), device: { id: device.id, label: device.label }, synchronizationActive: false, noteCount: db.prepare("SELECT count(*) n FROM sync_entities WHERE entity_type='note'").get().n });
     const body = await bodyJson(req);
+    if (action === 'ai-session') {
+      if (!body || Object.keys(body).length) return fail('invalid_request', 400);
+      return response({ aiSession: true }, 200, { 'Set-Cookie': aiCookie(values[0].slice(cookieName.length + 1)) });
+    }
     if (action === 'revoke') {
       if (!body || Object.keys(body).length) return fail('invalid_request', 400);
       revokeDevice(db, device.id);
-      return response({ revoked: true }, 200, { 'Set-Cookie': cookie('') });
+      return response({ revoked: true }, 200, { 'Set-Cookie': [cookie(''), aiCookie('')] });
     }
     if (action === 'pull') {
       if (!body || Object.keys(body).sort().join(',') !== 'cursor,limit,protocolVersion' || body.protocolVersion !== 1 || !Number.isSafeInteger(body.cursor) || body.cursor < 0 || !Number.isSafeInteger(body.limit) || body.limit < 1 || body.limit > 100) return fail('invalid_pull_request', 400);

@@ -1,5 +1,6 @@
 import { assertHistoryContinuity } from './sync-protocol.mjs';
 import { synchronizeAudio } from './audio-sync-client.mjs';
+import { deliverAiOutbox } from './ai-sync-client.mjs';
 
 async function request(action, body, fetcher) {
   const response = await fetcher(`/api/v1/sync/${action}`, {
@@ -59,6 +60,7 @@ export async function synchronize({ repository, fetcher = fetch, locks = globalT
       // the ordered serverVersion chain for multiple local revisions of one note.
       // The hard cap and task yields keep a large offline queue from monopolizing a tab.
       const blockedEntities = new Set();
+      const committedAcks = [];
       for (let batch = 0; batch < 5; batch++) {
         const operations = await repository.listSyncOutbox(100);
         if (!operations.length) break;
@@ -70,6 +72,7 @@ export async function synchronize({ repository, fetcher = fetch, locks = globalT
           try {
             const pushed = await request('push', payload, fetcher);
             await repository.acknowledgeSyncOperations(pushed.acknowledgements.map(ack => ({ operationId: ack.operationId, baseline: { id: ack.id, serverVersion: ack.serverVersion, localRevision: ack.localRevision, contentHash: ack.contentHash, lifecycle: ack.lifecycle, privacy: pendingRecord.privacy } })), { serverEpoch: pushed.serverEpoch, serverCursor: pushed.serverCursor });
+            committedAcks.push(...pushed.acknowledgements.map(ack => ({ ...ack, serverEpoch: pushed.serverEpoch })));
             result.pushed += pushed.acknowledgements.length;
           } catch (error) {
             if (error.status === 409 && error.body?.conflict) {
@@ -94,6 +97,7 @@ export async function synchronize({ repository, fetcher = fetch, locks = globalT
         }
         await new Promise(resolve => setTimeout(resolve, 0));
       }
+      if (repository.listPendingAiIntents) result.aiRequests = await deliverAiOutbox({ repository, fetcher, acknowledged: committedAcks });
       result.status = await finalStatus('pending');
       result.retryable = result.status === 'pending';
       result.serverCursor = (await repository.getSyncState()).state.history?.serverCursor ?? 0;

@@ -10,9 +10,10 @@ import { formatSavedAt } from '../../lib/mvp-utils.mjs';
 import { normalizeTagLabel, safeTagsForNoteCopy, tagKey } from '../../lib/note-organization.mjs';
 import { canonicalToMarkdown, createTiptapEditor, validateCanonicalDocument, toTiptapJSON } from '../../../packages/document-engine/src/index.js';
 import { AudioRecorder } from '../../ui/audio-recorder';
+import { AiConsentPanel } from '../../ui/ai-consent-panel';
 import { NoteIcon } from '../../ui/note-icon';
 
-type Note = { id: string; title: string; document: any; schemaVersion: number; createdAt: number; updatedAt: number; lifecycle: 'active' | 'archived' | 'trashed'; revision: number; pinned?: boolean; tags?: string[] };
+type Note = { id: string; title: string; document: any; schemaVersion: number; createdAt: number; updatedAt: number; lifecycle: 'active' | 'archived' | 'trashed'; revision: number; privacy?: string; pinned?: boolean; tags?: string[] };
 
 export default function NoteEditorPage() {
   const params = useParams<{ id: string }>(); const id = params.id; const router = useRouter();
@@ -28,6 +29,8 @@ export default function NoteEditorPage() {
   const recordSchemaSupported = note?.schemaVersion === 1;
   const editable = recordSchemaSupported && validation?.status === 'supported' && note?.lifecycle === 'active';
   const editableRef = useRef(false); editableRef.current = editable;
+  const saveSnapshot = coordinatorRef.current?.snapshot();
+  const aiCanRequest = Boolean(editable && note?.lifecycle === 'active' && !busy && !recovery && !saveSnapshot?.dirty && !saveSnapshot?.inFlight);
   const selectRecovery = (next: any) => { recoveryRef.current = next; setRecovery(next); };
 
   useEffect(() => {
@@ -259,6 +262,7 @@ export default function NoteEditorPage() {
         <form className="tag-entry" onSubmit={(event) => void addTag(event)}><label className="screen-reader" htmlFor="note-tag-input">Add a tag</label><input id="note-tag-input" className="searchbox" list="note-tag-suggestions" maxLength={80} placeholder="Add a tag…" value={tagInput} onChange={(event) => setTagInput(event.target.value)} disabled={!editable || busy || Boolean(recovery)} /><datalist id="note-tag-suggestions">{availableTags.map((tag) => <option value={tag} key={tagKey(tag)} />)}</datalist><button className="btn btn-quiet" type="submit" disabled={!editable || busy || Boolean(recovery) || !tagInput.trim()}>Add tag</button></form>
       </div>
     </section>}
+    {note && note.lifecycle === 'active' && recordSchemaSupported && <AiConsentPanel noteId={note.id} localRevision={note.revision} privacy={note.privacy} lifecycle={note.lifecycle} canRequest={aiCanRequest} />}
     {validation?.status === 'supported' && note?.lifecycle === 'trashed' && <div className="notice">Restore this note to edit it. Its content is preserved below.</div>}
     {validation?.status === 'supported' && editable ? <><div className="editor-toolbar" role="toolbar" aria-label="Text formatting">
       <button className="tool-button mic-trigger" aria-label="Open audio recordings" title="Audio recordings" onClick={() => { setAudioOpenSignal((value) => value + 1); audioPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }); }}><NoteIcon name="mic" /></button><button className="tool-button" aria-label="Bold" title="Bold" onClick={() => editorRef.current?.chain().focus().toggleBold().run()}><NoteIcon name="bold" /></button><button className="tool-button" aria-label="Italic" title="Italic" onClick={() => editorRef.current?.chain().focus().toggleItalic().run()}><NoteIcon name="italic" /></button><button className="tool-button" aria-label="Strike" title="Strike" onClick={() => editorRef.current?.chain().focus().toggleStrike().run()}><NoteIcon name="strike" /></button><button className="tool-button" aria-label="Heading 2" title="Heading 2" onClick={() => editorRef.current?.chain().focus().toggleHeading({ level: 2 }).run()}><NoteIcon name="heading" /></button><button className="tool-button" aria-label="Bullet list" title="Bullet list" onClick={() => editorRef.current?.chain().focus().toggleBulletList().run()}><NoteIcon name="bullets" /></button><button className="tool-button" aria-label="Ordered list" title="Numbered list" onClick={() => editorRef.current?.chain().focus().toggleOrderedList().run()}><NoteIcon name="numbered" /></button><button className="tool-button" aria-label="Checklist" title="Checklist" onClick={toggleChecklist}><NoteIcon name="checklist" /></button><button className="tool-button" aria-label="Quote" title="Quote" onClick={() => editorRef.current?.chain().focus().toggleBlockquote().run()}><NoteIcon name="quote" /></button><button className="tool-button" aria-label="Code block" title="Code block" onClick={() => editorRef.current?.chain().focus().toggleCodeBlock().run()}><NoteIcon name="code" /></button>

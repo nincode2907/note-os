@@ -158,7 +158,7 @@ test('v3 IndexedDB migration adds quarantine while preserving notes, history and
   assert.equal((await reopenedRepository.listSyncOutbox())[0].operationId, operation.operationId);
   assert.equal((await reopenedRepository.getSyncState()).state.history.serverCursor, 9);
   const migrated = await new Promise((resolve, reject) => { const request = indexedDB.open(name); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
-  assert.equal(migrated.version, 5); assert.ok(migrated.objectStoreNames.contains('syncQuarantine')); assert.ok(migrated.objectStoreNames.contains('audioSyncApprovals')); assert.ok(migrated.objectStoreNames.contains('audioSyncState')); assert.ok(migrated.objectStoreNames.contains('audioSyncChunks')); migrated.close();
+  assert.equal(migrated.version, 6); assert.ok(migrated.objectStoreNames.contains('syncQuarantine')); assert.ok(migrated.objectStoreNames.contains('audioSyncApprovals')); assert.ok(migrated.objectStoreNames.contains('audioSyncState')); assert.ok(migrated.objectStoreNames.contains('audioSyncChunks')); assert.ok(migrated.objectStoreNames.contains('aiRequestOutbox')); assert.ok(migrated.objectStoreNames.contains('aiConsentCache')); migrated.close();
 });
 
 test('existing notes require explicit owner enrollment and DEVICE_ONLY or recording-bearing notes are excluded', async () => {

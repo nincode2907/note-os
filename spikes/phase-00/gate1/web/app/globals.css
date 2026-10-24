@@ -129,6 +129,16 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .tag-entry { display: flex; align-items: center; gap: 5px; }
 .tag-entry .searchbox { width: 134px; min-height: 34px; padding: 6px 9px; font-size: 12px; }
 .tag-entry .btn { min-height: 34px; padding: 5px 9px; font-size: 12px; }
+.ai-consent-panel { display: grid; gap: 10px; margin: 14px 0; padding: 15px 17px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); }
+.ai-consent-panel h2 { margin: 0; font-family: Literata, Georgia, serif; font-size: 18px; font-weight: 500; }
+.ai-consent-panel p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.ai-consent-confirm, .ai-request-actions, .ai-request-status { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; }
+.ai-consent-confirm label { display: flex; align-items: flex-start; gap: 8px; max-width: 720px; font-size: 12px; line-height: 1.6; }
+.ai-consent-confirm input { margin-top: 3px; }
+.ai-consent-confirm > p { flex-basis: 100%; }
+.ai-consent-state { color: var(--ink) !important; }
+.ai-request-status { justify-content: space-between; padding-top: 9px; border-top: 1px solid var(--line); }
+.ai-consent-feedback { color: var(--success) !important; }
 .editor-toolbar { display: flex; align-items: center; gap: 3px; width: 100%; overflow-x: auto; overscroll-behavior-inline: contain; padding: 10px 0; border-bottom: 1px solid var(--line); scrollbar-width: thin; }
 .tool-button { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; gap: 7px; min-width: 38px; min-height: 38px; padding: 6px 9px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: #536071; font-size: 13px; font-weight: 650; }
 .tool-button:hover:not(:disabled), .tool-button.is-active { border-color: var(--line); background: var(--surface-soft); }

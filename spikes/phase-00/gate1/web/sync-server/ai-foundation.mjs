@@ -9,6 +9,7 @@ import { serverMeta, transaction } from './storage.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MIGRATION = join(HERE, 'migrations/001-ai-foundation.sql');
+const BRIDGE_MIGRATION = join(HERE, 'migrations/002-ai-consent-bridge.sql');
 const MAX_QUEUE = 1000;
 const MAX_CONSENT_ROWS = 1000;
 const MAX_JOB_ROWS = 10000;
@@ -39,8 +40,10 @@ export function aiFeatureFlags(env = process.env) {
 export function applyAiSchema(db) {
   return transaction(db, () => {
     db.exec(readFileSync(MIGRATION, 'utf8'));
+    const current = db.prepare('SELECT max(version) version FROM ai_schema_migrations').get().version ?? 0;
+    if (current === 1) db.exec(readFileSync(BRIDGE_MIGRATION, 'utf8'));
     const versions = db.prepare('SELECT version FROM ai_schema_migrations ORDER BY version').all().map(row => row.version);
-    if (!versions.includes(1) || versions.some(version => version > 1)) throw new Error('AI migration ledger requires review');
+    if (versions.join(',') !== '1,2') throw new Error('AI migration ledger requires review');
     return versions.at(-1);
   });
 }
@@ -88,32 +91,31 @@ function boundedScopes(scopes) {
   return [...new Set(scopes)].sort();
 }
 
-export function grantNoteConsent(db, noteId, { state = 'APPROVED_LOCAL_ONLY', scopes = ['organize'], providerBoundary = 'MOCK', actorId = null, env = process.env, now = nowDefault() } = {}) {
+function grantNoteConsentInTransaction(db, noteId, { state = 'APPROVED_LOCAL_ONLY', scopes = ['organize'], providerBoundary = 'MOCK', actorId = null, actorDeviceId = null, env = process.env, now = nowDefault() } = {}) {
   if (!aiFeatureFlags(env).organizeEnabled) throw new Error('AI organize is disabled');
   assertNoteId(noteId);
   if (isAiRevocationFailClosed(noteId)) throw new Error('AI consent state is uncertain; persist revocation before granting consent');
   if (!['APPROVED_LOCAL_ONLY','APPROVED_CLOUD_ALLOWED'].includes(state) || !['MOCK','STRICT_LOCAL','EXTERNAL_CLOUD'].includes(providerBoundary)) throw new TypeError('Invalid AI consent');
   const normalizedScopes = boundedScopes(scopes), scopesJson = canonicalJson(normalizedScopes);
-  return transaction(db, () => {
-    const noteRow = db.prepare("SELECT record_json recordJson,lifecycle FROM sync_entities WHERE entity_type='note' AND id=?").get(noteId);
-    if (!noteRow || noteRow.lifecycle !== 'active' || JSON.parse(noteRow.recordJson).lifecycle !== 'active') throw new Error('Consent requires an existing active synced note');
-    const previous = db.prepare('SELECT consent_epoch FROM ai_note_consent WHERE note_id=?').get(noteId);
-    if (!previous && db.prepare('SELECT count(*) AS n FROM ai_note_consent').get().n >= MAX_CONSENT_ROWS) throw new Error('AI consent capacity reached');
-    const consentEpoch = (previous?.consent_epoch ?? 0) + 1;
-    db.prepare(`INSERT INTO ai_note_consent(note_id,state,scopes_json,provider_boundary,consent_epoch,updated_at)
-      VALUES(?,?,?,?,?,?) ON CONFLICT(note_id) DO UPDATE SET state=excluded.state,scopes_json=excluded.scopes_json,
-      provider_boundary=excluded.provider_boundary,consent_epoch=excluded.consent_epoch,updated_at=excluded.updated_at`)
-      .run(noteId, state, scopesJson, providerBoundary, consentEpoch, now);
-    audit(db, { action: 'CONSENT_GRANTED', noteId, actorId, reasonCode: 'explicit_grant', metadata: { state, scopes: normalizedScopes, providerBoundary, consentEpoch }, now });
-    return { noteId, state, scopes: normalizedScopes, providerBoundary, consentEpoch };
-  });
+  const noteRow = db.prepare("SELECT record_json recordJson,lifecycle FROM sync_entities WHERE entity_type='note' AND id=?").get(noteId);
+  if (!noteRow || noteRow.lifecycle !== 'active' || JSON.parse(noteRow.recordJson).lifecycle !== 'active') throw new Error('Consent requires an existing active synced note');
+  const previous = db.prepare('SELECT consent_epoch FROM ai_note_consent WHERE note_id=?').get(noteId);
+  if (!previous && db.prepare('SELECT count(*) AS n FROM ai_note_consent').get().n >= MAX_CONSENT_ROWS) throw new Error('AI consent capacity reached');
+  const consentEpoch = (previous?.consent_epoch ?? 0) + 1;
+  db.prepare(`INSERT INTO ai_note_consent(note_id,state,scopes_json,provider_boundary,consent_epoch,updated_at)
+    VALUES(?,?,?,?,?,?) ON CONFLICT(note_id) DO UPDATE SET state=excluded.state,scopes_json=excluded.scopes_json,
+    provider_boundary=excluded.provider_boundary,consent_epoch=excluded.consent_epoch,updated_at=excluded.updated_at`)
+    .run(noteId, state, scopesJson, providerBoundary, consentEpoch, now);
+  audit(db, { action: 'CONSENT_GRANTED', noteId, actorId, reasonCode: 'explicit_grant', metadata: { state, scopes: normalizedScopes, providerBoundary, consentEpoch, ...(actorDeviceId ? { actorDeviceId } : {}) }, now });
+  return { noteId, state, scopes: normalizedScopes, providerBoundary, consentEpoch };
 }
 
-export function revokeNoteConsent(db, noteId, { actorId = null, reasonCode = 'owner_revoked', now = nowDefault() } = {}) {
+export function grantNoteConsent(db, noteId, options = {}) {
   assertNoteId(noteId);
-  revocationFailClosedNotes.add(noteId);
-  try {
-    const result = transaction(db, () => {
+  return transaction(db, () => grantNoteConsentInTransaction(db, noteId, options));
+}
+
+function revokeNoteConsentInTransaction(db, noteId, { actorId = null, actorDeviceId = null, reasonCode = 'owner_revoked', now = nowDefault() } = {}) {
       const current = db.prepare('SELECT * FROM ai_note_consent WHERE note_id=?').get(noteId);
       if (!current && db.prepare('SELECT count(*) AS n FROM ai_note_consent').get().n >= MAX_CONSENT_ROWS) throw new Error('AI consent capacity reached');
       const alreadyRevoked = current?.state === 'REVOKED';
@@ -131,10 +133,16 @@ export function revokeNoteConsent(db, noteId, { actorId = null, reasonCode = 'ow
       // ai_note_consent is the durable minimal marker. The general audit is best-effort
       // under its logical quota and remains in this transaction when capacity exists.
       if (!alreadyRevoked && db.prepare('SELECT count(*) AS n FROM ai_audit_log').get().n < MAX_AUDIT) {
-        audit(db, { action: 'CONSENT_REVOKED', noteId, actorId, reasonCode, metadata: { consentEpoch, canceledJobs, purgedSuggestions }, now });
+        audit(db, { action: 'CONSENT_REVOKED', noteId, actorId, reasonCode, metadata: { consentEpoch, canceledJobs, purgedSuggestions, ...(actorDeviceId ? { actorDeviceId } : {}) }, now });
       }
       return { noteId, state: 'REVOKED', consentEpoch, canceledJobs, purgedSuggestions, alreadyRevoked };
-    });
+}
+
+export function revokeNoteConsent(db, noteId, options = {}) {
+  assertNoteId(noteId);
+  revocationFailClosedNotes.add(noteId);
+  try {
+    const result = transaction(db, () => revokeNoteConsentInTransaction(db, noteId, options));
     revocationFailClosedNotes.delete(noteId);
     return result;
   } catch (cause) {
@@ -143,6 +151,67 @@ export function revokeNoteConsent(db, noteId, { actorId = null, reasonCode = 'ow
     throw Object.assign(new Error('AI consent revocation was not persisted; inference is paused for this note'), {
       code: 'AI_REVOCATION_NOT_PERSISTED', cause,
     });
+  }
+}
+
+function requestIdentity(requestId) {
+  if (typeof requestId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId)) throw new TypeError('Invalid AI request ID');
+}
+
+function bridgeFailure(code, status = 409) {
+  return Object.assign(new Error(code), { code, status });
+}
+
+export function readAiConsent(db, noteId) {
+  assertNoteId(noteId);
+  const row = db.prepare('SELECT note_id noteId,state,scopes_json scopesJson,provider_boundary providerBoundary,consent_epoch consentEpoch,updated_at updatedAt FROM ai_note_consent WHERE note_id=?').get(noteId);
+  if (!row) return { noteId, state: 'NONE', scopes: [], providerBoundary: null, consentEpoch: null, updatedAt: null };
+  let scopes;
+  try { scopes = JSON.parse(row.scopesJson); } catch { throw new Error('AI consent record is invalid'); }
+  return { noteId: row.noteId, state: row.state, scopes, providerBoundary: row.providerBoundary, consentEpoch: row.consentEpoch, updatedAt: row.updatedAt };
+}
+
+/** Atomically apply a device-scoped, replay-safe consent operation and its receipt. */
+export function applyAiConsentOperation(db, noteId, { action, requestId, actorDeviceId, expectedServerEpoch, expectedServerVersion, expectedContentHash, env = process.env, now = nowDefault() } = {}) {
+  assertNoteId(noteId); requestIdentity(requestId);
+  if (!['GRANT','REVOKE'].includes(action) || typeof actorDeviceId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(actorDeviceId)) throw new TypeError('Invalid AI consent operation');
+  const operation = { action, noteId, actorDeviceId, protocolVersion: 1, ...(action === 'GRANT' ? { scope: 'organize', executionBoundary: 'MOCK', expectedServerEpoch, expectedServerVersion, expectedContentHash } : {}) };
+  const requestHash = sha256(canonicalJson(operation));
+  if (action === 'REVOKE') revocationFailClosedNotes.add(noteId);
+  try {
+    const result = transaction(db, () => {
+      const prior = db.prepare('SELECT request_hash requestHash,actor_device_id actorDeviceId,result_json resultJson FROM ai_consent_operations WHERE request_id=?').get(requestId);
+      if (prior) {
+        if (prior.requestHash !== requestHash || prior.actorDeviceId !== actorDeviceId) throw bridgeFailure('IDEMPOTENCY_CONFLICT');
+        return { ...JSON.parse(prior.resultJson), replayed: true };
+      }
+      let value;
+      if (action === 'GRANT') {
+        const current = db.prepare("SELECT record_json recordJson,lifecycle FROM sync_entities WHERE entity_type='note' AND id=?").get(noteId);
+        if (!current) throw bridgeFailure('SYNC_REQUIRED');
+        const meta = serverMeta(db);
+        const live = db.prepare("SELECT server_version serverVersion,content_hash contentHash FROM sync_entities WHERE entity_type='note' AND id=?").get(noteId);
+        if (expectedServerEpoch !== meta.serverEpoch || !Number.isSafeInteger(expectedServerVersion) || !/^[a-f0-9]{64}$/.test(expectedContentHash ?? '')) throw new TypeError('Invalid consent revision envelope');
+        if (live.serverVersion !== expectedServerVersion || live.contentHash !== expectedContentHash) throw bridgeFailure(live.serverVersion < expectedServerVersion ? 'SYNC_REQUIRED' : 'STALE_REVISION');
+        const note = JSON.parse(current.recordJson);
+        if (current.lifecycle !== 'active' || note.lifecycle !== 'active') throw bridgeFailure('NOTE_INACTIVE');
+        if (note.privacy === undefined || note.privacy === null) throw bridgeFailure('PRIVACY_REQUIRED');
+        if (note.privacy === 'DEVICE_ONLY') throw bridgeFailure('DEVICE_ONLY');
+        if (!['PRIVATE_SERVER','CLOUD_ALLOWED'].includes(note.privacy)) throw bridgeFailure('PRIVACY_UNSUPPORTED');
+        value = grantNoteConsentInTransaction(db, noteId, { state: 'APPROVED_LOCAL_ONLY', scopes: ['organize'], providerBoundary: 'MOCK', actorId: actorDeviceId, actorDeviceId, env, now });
+      } else {
+        const current = db.prepare('SELECT state FROM ai_note_consent WHERE note_id=?').get(noteId);
+        value = current ? revokeNoteConsentInTransaction(db, noteId, { actorId: actorDeviceId, actorDeviceId, now }) : { noteId, state: 'NONE', consentEpoch: null, alreadyRevoked: true };
+      }
+      db.prepare('INSERT INTO ai_consent_operations(request_id,request_hash,actor_device_id,note_id,action,result_json,created_at) VALUES(?,?,?,?,?,?,?)')
+        .run(requestId, requestHash, actorDeviceId, noteId, action, canonicalJson(value), now);
+      return value;
+    });
+    if (action === 'REVOKE') revocationFailClosedNotes.delete(noteId);
+    return result;
+  } catch (cause) {
+    if (action !== 'REVOKE') throw cause;
+    throw Object.assign(new Error('AI consent revocation was not persisted; inference remains disabled'), { code: 'AI_REVOCATION_NOT_PERSISTED', cause });
   }
 }
 
@@ -161,30 +230,89 @@ function sourceForNote(db, noteId, serverVersion) {
   return { note, sourceCursor: event.sourceCursor, contentHash };
 }
 
-export function enqueueAiJob(db, noteId, { serverVersion, env = process.env, analysisPolicyVersion = 'ai-policy-v1', promptSchemaVersion = 1, modelIdentity = 'mock-v1', scope = 'organize', now = nowDefault() } = {}) {
+function enqueueAiJobInTransaction(db, noteId, { serverVersion, env = process.env, analysisPolicyVersion = 'ai-policy-v1', promptSchemaVersion = 1, modelIdentity = 'mock-v1', scope = 'organize', actorDeviceId = null, now = nowDefault() } = {}) {
   assertNoteId(noteId);
   if (isAiRevocationFailClosed(noteId)) throw new Error('AI consent state is uncertain; inference is paused for this note');
   const flags = aiFeatureFlags(env);
   if (!flags.organizeEnabled) throw new Error('AI organize is disabled');
   if (!Number.isSafeInteger(serverVersion) || serverVersion < 1) throw new TypeError('A committed server version is required');
+  const source = sourceForNote(db, noteId, serverVersion);
+  const consent = parseConsent(db.prepare('SELECT * FROM ai_note_consent WHERE note_id=?').get(noteId));
+  const policy = evaluateAiPolicy({ note: source.note, consent, scope, executionBoundary: 'MOCK' });
+  if (!policy.allowed) throw Object.assign(new Error('AI policy rejected request'), { reason: policy.reason });
+  const meta = serverMeta(db);
+  const dedupeKey = sha256(canonicalJson({ noteId, serverEpoch: meta.serverEpoch, serverVersion, sourceCursor: source.sourceCursor, contentHash: source.contentHash, consentEpoch: policy.consentEpoch, scope, analysisPolicyVersion, promptSchemaVersion, modelIdentity, executionBoundary: 'MOCK' }));
+  const prior = db.prepare('SELECT id,status FROM ai_jobs WHERE dedupe_key=?').get(dedupeKey);
+  if (prior) return { id: prior.id, status: prior.status, reused: true };
+  if (db.prepare("SELECT count(*) AS n FROM ai_jobs WHERE status IN ('QUEUED','RUNNING')").get().n >= MAX_QUEUE) throw new Error('AI queue capacity reached');
+  if (db.prepare('SELECT count(*) AS n FROM ai_jobs').get().n >= MAX_JOB_ROWS) throw new Error('AI job retention capacity reached; owner review required');
+  db.prepare("UPDATE ai_jobs SET status='SUPERSEDED',lease_until=NULL,worker_id=NULL,claim_token=NULL,updated_at=? WHERE note_id=? AND target_server_version<? AND status IN ('QUEUED','RUNNING')").run(now, noteId, serverVersion);
+  const id = randomUUID();
+  db.prepare(`INSERT INTO ai_jobs(id,note_id,server_epoch,source_cursor,target_server_version,content_sha256,consent_epoch,
+    analysis_policy_version,prompt_schema_version,model_identity,execution_boundary,dedupe_key,scope,status,attempts,run_after,created_at,updated_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'QUEUED',0,?,?,?)`).run(id,noteId,meta.serverEpoch,source.sourceCursor,serverVersion,source.contentHash,policy.consentEpoch,analysisPolicyVersion,promptSchemaVersion,modelIdentity,'MOCK',dedupeKey,scope,now,now,now);
+  audit(db, { action: 'JOB_ENQUEUED', noteId, jobId: id, actorId: actorDeviceId, reasonCode: 'explicit_request', metadata: { serverVersion, sourceCursor: source.sourceCursor, contentHash: source.contentHash, consentEpoch: policy.consentEpoch, analysisPolicyVersion, promptSchemaVersion, modelIdentity, ...(actorDeviceId ? { actorDeviceId } : {}) }, now });
+  return { id, status: 'QUEUED', reused: false };
+}
+
+export function enqueueAiJob(db, noteId, options = {}) {
+  return transaction(db, () => enqueueAiJobInTransaction(db, noteId, options));
+}
+
+export function createAiAnalysisRequest(db, envelope, { actorDeviceId, env = process.env, now = nowDefault() } = {}) {
+  requestIdentity(envelope?.requestId);
+  assertNoteId(envelope?.noteId);
+  if (typeof actorDeviceId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(actorDeviceId)) throw new TypeError('Invalid AI request actor');
+  const requestHash = sha256(canonicalJson({ ...envelope, actorDeviceId }));
   return transaction(db, () => {
-    const source = sourceForNote(db, noteId, serverVersion);
-    const consent = parseConsent(db.prepare('SELECT * FROM ai_note_consent WHERE note_id=?').get(noteId));
-    const policy = evaluateAiPolicy({ note: source.note, consent, scope, executionBoundary: 'MOCK' });
-    if (!policy.allowed) throw Object.assign(new Error('AI policy rejected request'), { reason: policy.reason });
+    const prior = db.prepare('SELECT request_hash requestHash,actor_device_id actorDeviceId,result_json resultJson FROM ai_analysis_requests WHERE request_id=?').get(envelope.requestId);
+    if (prior) {
+      if (prior.requestHash !== requestHash || prior.actorDeviceId !== actorDeviceId) throw bridgeFailure('IDEMPOTENCY_CONFLICT');
+      return { ...JSON.parse(prior.resultJson), replayed: true };
+    }
+    if (!aiFeatureFlags(env).organizeEnabled) throw bridgeFailure('AI_DISABLED', 503);
+    if (envelope.protocolVersion !== 1 || envelope.scope !== 'organize' || envelope.executionBoundary !== 'MOCK' ||
+      typeof envelope.expectedServerEpoch !== 'string' || envelope.expectedServerEpoch.length < 1 || envelope.expectedServerEpoch.length > 128 ||
+      !Number.isSafeInteger(envelope.expectedServerVersion) || envelope.expectedServerVersion < 1 ||
+      !/^[a-f0-9]{64}$/.test(envelope.expectedContentHash ?? '') || !Number.isSafeInteger(envelope.consentEpoch) || envelope.consentEpoch < 1) throw new TypeError('Invalid AI analysis request');
     const meta = serverMeta(db);
-    const dedupeKey = sha256(canonicalJson({ noteId, serverEpoch: meta.serverEpoch, serverVersion, sourceCursor: source.sourceCursor, contentHash: source.contentHash, consentEpoch: policy.consentEpoch, scope, analysisPolicyVersion, promptSchemaVersion, modelIdentity, executionBoundary: 'MOCK' }));
-    const prior = db.prepare('SELECT id,status FROM ai_jobs WHERE dedupe_key=?').get(dedupeKey);
-    if (prior) return { id: prior.id, status: prior.status, reused: true };
-    if (db.prepare("SELECT count(*) AS n FROM ai_jobs WHERE status IN ('QUEUED','RUNNING')").get().n >= MAX_QUEUE) throw new Error('AI queue capacity reached');
-    if (db.prepare('SELECT count(*) AS n FROM ai_jobs').get().n >= MAX_JOB_ROWS) throw new Error('AI job retention capacity reached; owner review required');
-    db.prepare("UPDATE ai_jobs SET status='SUPERSEDED',lease_until=NULL,worker_id=NULL,claim_token=NULL,updated_at=? WHERE note_id=? AND target_server_version<? AND status IN ('QUEUED','RUNNING')").run(now, noteId, serverVersion);
-    const id = randomUUID();
-    db.prepare(`INSERT INTO ai_jobs(id,note_id,server_epoch,source_cursor,target_server_version,content_sha256,consent_epoch,
-      analysis_policy_version,prompt_schema_version,model_identity,execution_boundary,dedupe_key,scope,status,attempts,run_after,created_at,updated_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'QUEUED',0,?,?,?)`).run(id,noteId,meta.serverEpoch,source.sourceCursor,serverVersion,source.contentHash,policy.consentEpoch,analysisPolicyVersion,promptSchemaVersion,modelIdentity,'MOCK',dedupeKey,scope,now,now,now);
-    audit(db, { action: 'JOB_ENQUEUED', noteId, jobId: id, reasonCode: 'explicit_request', metadata: { serverVersion, sourceCursor: source.sourceCursor, contentHash: source.contentHash, consentEpoch: policy.consentEpoch, analysisPolicyVersion, promptSchemaVersion, modelIdentity }, now });
-    return { id, status: 'QUEUED', reused: false };
+    if (meta.serverEpoch !== envelope.expectedServerEpoch) throw bridgeFailure('SERVER_EPOCH_CHANGED');
+    const live = db.prepare("SELECT server_version serverVersion,record_json recordJson,content_hash contentHash,lifecycle FROM sync_entities WHERE entity_type='note' AND id=?").get(envelope.noteId);
+    if (!live || live.serverVersion < envelope.expectedServerVersion) throw bridgeFailure('SYNC_REQUIRED');
+    if (live.serverVersion > envelope.expectedServerVersion) throw bridgeFailure('STALE_REVISION');
+    let source;
+    try { source = sourceForNote(db, envelope.noteId, envelope.expectedServerVersion); }
+    catch { throw bridgeFailure('STALE_REVISION'); }
+    if (source.contentHash !== envelope.expectedContentHash || live.contentHash !== envelope.expectedContentHash) throw bridgeFailure('STALE_REVISION');
+    if (source.note.privacy === undefined || source.note.privacy === null) throw bridgeFailure('PRIVACY_REQUIRED');
+    if (source.note.privacy === 'DEVICE_ONLY') throw bridgeFailure('DEVICE_ONLY');
+    if (!['PRIVATE_SERVER','CLOUD_ALLOWED'].includes(source.note.privacy)) throw bridgeFailure('PRIVACY_UNSUPPORTED');
+    const consent = parseConsent(db.prepare('SELECT * FROM ai_note_consent WHERE note_id=?').get(envelope.noteId));
+    if (!consent || consent.state === 'REVOKED') throw bridgeFailure('CONSENT_REQUIRED');
+    if (consent.consent_epoch !== envelope.consentEpoch || consent.provider_boundary !== envelope.executionBoundary) throw bridgeFailure('CONSENT_CHANGED');
+    const policy = evaluateAiPolicy({ note: source.note, consent, scope: envelope.scope, executionBoundary: envelope.executionBoundary });
+    if (!policy.allowed) throw bridgeFailure(policy.reason === 'device_only' ? 'DEVICE_ONLY' : 'CONSENT_REQUIRED');
+    const job = enqueueAiJobInTransaction(db, envelope.noteId, { serverVersion: envelope.expectedServerVersion, scope: envelope.scope, actorDeviceId, env, now });
+    const result = { requestId: envelope.requestId, jobId: job.id, status: job.status, reused: job.reused };
+    db.prepare(`INSERT INTO ai_analysis_requests(request_id,request_hash,actor_device_id,note_id,server_epoch,server_version,content_sha256,
+      consent_epoch,scope,execution_boundary,job_id,result_json,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(envelope.requestId, requestHash, actorDeviceId, envelope.noteId, meta.serverEpoch, envelope.expectedServerVersion, source.contentHash,
+        envelope.consentEpoch, envelope.scope, envelope.executionBoundary, job.id, canonicalJson(result), now);
+    return result;
+  });
+}
+
+export function consumeAiBridgeRateLimit(db, deviceId, now = nowDefault()) {
+  if (typeof deviceId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(deviceId) || !Number.isSafeInteger(now) || now < 0) throw new TypeError('Invalid AI API rate-limit input');
+  return transaction(db, () => {
+    const prior = db.prepare('SELECT window_started_at windowStartedAt,request_count requestCount FROM ai_bridge_rate_limits WHERE device_id=?').get(deviceId);
+    if (prior && now >= prior.windowStartedAt && now - prior.windowStartedAt < 60000 && prior.requestCount >= 60) throw bridgeFailure('RATE_LIMITED', 429);
+    const withinWindow = prior && now >= prior.windowStartedAt && now - prior.windowStartedAt < 60000;
+    db.prepare(`INSERT INTO ai_bridge_rate_limits(device_id,window_started_at,request_count) VALUES(?,?,1)
+      ON CONFLICT(device_id) DO UPDATE SET window_started_at=excluded.window_started_at,
+      request_count=CASE WHEN ? THEN ai_bridge_rate_limits.request_count+1 ELSE 1 END`)
+      .run(deviceId, withinWindow ? prior.windowStartedAt : now, withinWindow ? 1 : 0);
+    return { remaining: 60 - (withinWindow ? prior.requestCount + 1 : 1) };
   });
 }
 

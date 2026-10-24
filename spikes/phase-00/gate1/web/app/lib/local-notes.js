@@ -8,7 +8,7 @@ import { sha256 } from '@noble/hashes/sha2.js';
 export { NoteDocumentError } from './note-validation.mjs';
 
 const DATABASE_NAME = 'noteos-mvp-01';
-const DATABASE_VERSION = 5;
+const DATABASE_VERSION = 6;
 const STORE_NAME = 'notes';
 const RECORDINGS_STORE = 'recordings';
 const RECORDING_CHUNKS_STORE = 'recordingChunks';
@@ -21,6 +21,8 @@ const SYNC_QUARANTINE_STORE = 'syncQuarantine';
 const AUDIO_SYNC_APPROVALS_STORE = 'audioSyncApprovals';
 const AUDIO_SYNC_STATE_STORE = 'audioSyncState';
 const AUDIO_SYNC_CHUNKS_STORE = 'audioSyncChunks';
+const AI_REQUEST_OUTBOX_STORE = 'aiRequestOutbox';
+const AI_CONSENT_CACHE_STORE = 'aiConsentCache';
 
 export class NoteNotFoundError extends Error {
   constructor(id) {
@@ -138,6 +140,8 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
             const chunks = database.createObjectStore(AUDIO_SYNC_CHUNKS_STORE, { keyPath: 'id' });
             chunks.createIndex('transferSequence', ['transferId', 'sequence'], { unique: true });
           }
+          if (!database.objectStoreNames.contains(AI_REQUEST_OUTBOX_STORE)) database.createObjectStore(AI_REQUEST_OUTBOX_STORE, { keyPath: 'requestId' });
+          if (!database.objectStoreNames.contains(AI_CONSENT_CACHE_STORE)) database.createObjectStore(AI_CONSENT_CACHE_STORE, { keyPath: 'noteId' });
         };
         request.onsuccess = () => {
           request.result.onversionchange = () => request.result.close();
@@ -314,6 +318,80 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
   async function getSyncBaseline(id) {
     const database = await openDatabase(); const transaction = database.transaction(SYNC_BASELINES_STORE, 'readonly'); const done = transactionResult(transaction);
     const row = await requestResult(transaction.objectStore(SYNC_BASELINES_STORE).get(id)); await done; return row ?? null;
+  }
+
+  async function getAiConsentCache(noteId) {
+    const database = await openDatabase(), tx = database.transaction(AI_CONSENT_CACHE_STORE, 'readonly');
+    const row = await requestResult(tx.objectStore(AI_CONSENT_CACHE_STORE).get(noteId)); await transactionResult(tx); return row ?? null;
+  }
+
+  async function cacheAiConsent(value) {
+    if (!value || typeof value.noteId !== 'string' || !['NONE','APPROVED_LOCAL_ONLY','APPROVED_CLOUD_ALLOWED','REVOKED'].includes(value.state)) throw new TypeError('Invalid AI consent cache entry.');
+    const row = { noteId: value.noteId, state: value.state, scopes: Array.isArray(value.scopes) ? value.scopes.filter(scope => scope === 'organize').slice(0, 1) : [], providerBoundary: ['MOCK','STRICT_LOCAL','EXTERNAL_CLOUD'].includes(value.providerBoundary) ? value.providerBoundary : null, consentEpoch: Number.isSafeInteger(value.consentEpoch) && value.consentEpoch > 0 ? value.consentEpoch : null, updatedAt: Number.isSafeInteger(value.updatedAt) && value.updatedAt >= 0 ? value.updatedAt : Date.now() };
+    const database = await openDatabase(), tx = database.transaction([AI_CONSENT_CACHE_STORE, AI_REQUEST_OUTBOX_STORE], 'readwrite'), done = transactionResult(tx);
+    tx.objectStore(AI_CONSENT_CACHE_STORE).put(row);
+    if (row.state === 'REVOKED') for (const intent of await requestResult(tx.objectStore(AI_REQUEST_OUTBOX_STORE).getAll())) if (intent.noteId === row.noteId && intent.kind === 'analysis' && !['CANCELED','STALE'].includes(intent.status)) tx.objectStore(AI_REQUEST_OUTBOX_STORE).put({ ...intent, status: 'CANCELED', updatedAt: Date.now() });
+    await done; notifySyncStateChanged(); return row;
+  }
+
+  async function createAiAnalysisIntent({ requestId, noteId, localRevision, consentEpoch, now = Date.now() } = {}) {
+    if (typeof requestId !== 'string' || !/^[0-9a-f-]{36}$/i.test(requestId) || typeof noteId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(noteId) || !Number.isSafeInteger(localRevision) || localRevision < 0 || !Number.isSafeInteger(consentEpoch) || consentEpoch < 1 || !Number.isSafeInteger(now) || now < 0) throw new TypeError('Invalid AI analysis intent.');
+    const database = await openDatabase(), tx = database.transaction([STORE_NAME, AI_CONSENT_CACHE_STORE, AI_REQUEST_OUTBOX_STORE], 'readwrite'), done = transactionResult(tx);
+    try {
+      const note = await requestResult(tx.objectStore(STORE_NAME).get(noteId));
+      if (!note || note.revision !== localRevision) throw abort(tx, new NoteConflictError());
+      if (note.lifecycle !== 'active') throw abort(tx, new NoteStateError('Restore this note before requesting analysis.'));
+      if (note.privacy === 'DEVICE_ONLY') throw abort(tx, new NoteStateError('This note is DEVICE_ONLY. AI will not change its privacy setting.'));
+      if (!['PRIVATE_SERVER','CLOUD_ALLOWED'].includes(note.privacy)) throw abort(tx, new NoteStateError('This note does not have eligible server privacy.'));
+      const consent = await requestResult(tx.objectStore(AI_CONSENT_CACHE_STORE).get(noteId));
+      if (!consent || consent.state !== 'APPROVED_LOCAL_ONLY' || consent.providerBoundary !== 'MOCK' || consent.consentEpoch !== consentEpoch || !consent.scopes.includes('organize')) throw abort(tx, new NoteStateError('Refresh and explicitly approve organize consent before requesting analysis.'));
+      const store = tx.objectStore(AI_REQUEST_OUTBOX_STORE), prior = await requestResult(store.get(requestId));
+      if (prior) {
+        if (prior.kind !== 'analysis' || prior.noteId !== noteId || prior.localRevision !== localRevision || prior.consentEpoch !== consentEpoch) throw abort(tx, new NoteStateError('This request ID was already used for a different AI intent.'));
+        await done; return { ...prior, reused: true };
+      }
+      await makeAiOutboxSpace(store);
+      const intent = { requestId, kind: 'analysis', noteId, localRevision, consentEpoch, scope: 'organize', executionBoundary: 'MOCK', status: 'WAITING_FOR_SYNC', createdAt: now, updatedAt: now };
+      store.add(intent); await done; notifySyncStateChanged(); return intent;
+    } catch (error) { try { await done; } catch {} throw error; }
+  }
+
+  async function queueAiConsentRevoke({ requestId, noteId, now = Date.now() } = {}) {
+    if (typeof requestId !== 'string' || !/^[0-9a-f-]{36}$/i.test(requestId) || typeof noteId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(noteId) || !Number.isSafeInteger(now) || now < 0) throw new TypeError('Invalid AI revocation intent.');
+    const database = await openDatabase(), tx = database.transaction([AI_CONSENT_CACHE_STORE, AI_REQUEST_OUTBOX_STORE], 'readwrite'), done = transactionResult(tx);
+    const intents = tx.objectStore(AI_REQUEST_OUTBOX_STORE), prior = await requestResult(intents.get(requestId));
+    if (prior) { if (prior.kind !== 'revoke' || prior.noteId !== noteId) { abort(tx, new NoteStateError('This request ID was already used for a different AI intent.')); try { await done; } catch {} throw new NoteStateError('This request ID was already used for a different AI intent.'); } await done; return { ...prior, reused: true }; }
+    await makeAiOutboxSpace(intents);
+    tx.objectStore(AI_CONSENT_CACHE_STORE).put({ noteId, state: 'REVOKE_PENDING', scopes: [], providerBoundary: 'MOCK', consentEpoch: null, updatedAt: now });
+    for (const intent of await requestResult(intents.getAll())) if (intent.noteId === noteId && intent.kind === 'analysis' && !['CANCELED','STALE'].includes(intent.status)) intents.put({ ...intent, status: 'CANCELED', updatedAt: now });
+    intents.add({ requestId, kind: 'revoke', noteId, status: 'WAITING_FOR_NETWORK', createdAt: now, updatedAt: now });
+    await done; notifySyncStateChanged(); return { requestId, kind: 'revoke', noteId, status: 'WAITING_FOR_NETWORK', createdAt: now, updatedAt: now };
+  }
+
+  async function makeAiOutboxSpace(store) {
+    const rows = await requestResult(store.getAll());
+    if (rows.length < 1000) return;
+    const terminal = rows.filter(row => ['QUEUED','CANCELED','STALE','NEEDS_CONSENT','ERROR','REVOKED'].includes(row.status))
+      .sort((left, right) => left.updatedAt - right.updatedAt || left.createdAt - right.createdAt || left.requestId.localeCompare(right.requestId));
+    if (!terminal.length) throw new NoteStateError('The local AI request queue is full. Connect to deliver or cancel pending intents.');
+    store.delete(terminal[0].requestId);
+  }
+
+  /** @param {string|null} [noteId] */
+  async function listAiIntents(noteId = null) {
+    const database = await openDatabase(), tx = database.transaction(AI_REQUEST_OUTBOX_STORE, 'readonly'), rows = await requestResult(tx.objectStore(AI_REQUEST_OUTBOX_STORE).getAll()); await transactionResult(tx);
+    return rows.filter(row => noteId === null || row.noteId === noteId).sort((left,right) => left.createdAt - right.createdAt || left.requestId.localeCompare(right.requestId));
+  }
+
+  async function listPendingAiIntents() {
+    return (await listAiIntents()).filter(row => row.status === 'WAITING_FOR_SYNC' || row.status === 'WAITING_FOR_NETWORK');
+  }
+
+  async function updateAiIntent(requestId, status, { jobId = null, serverStatus = null } = {}) {
+    if (!['WAITING_FOR_SYNC','WAITING_FOR_NETWORK','QUEUED','CANCELED','STALE','NEEDS_CONSENT','ERROR','REVOKED'].includes(status)) throw new TypeError('Invalid AI intent state.');
+    const database = await openDatabase(), tx = database.transaction(AI_REQUEST_OUTBOX_STORE, 'readwrite'), done = transactionResult(tx), store = tx.objectStore(AI_REQUEST_OUTBOX_STORE);
+    try { const row = await requestResult(store.get(requestId)); if (!row) { await done; return null; } const updated = { ...row, status, updatedAt: Date.now(), ...(typeof jobId === 'string' ? { jobId } : {}), ...(typeof serverStatus === 'string' ? { serverStatus } : {}) }; store.put(updated); await done; notifySyncStateChanged(); return updated; }
+    catch (error) { try { await done; } catch {} throw error; }
   }
 
   async function recordSyncConflict(operationId, conflict) {
@@ -663,7 +741,7 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
     }
   }
 
-  return { list, get, hasExistingDatabase, create, createIfMissing, save, updateOrganization, setLifecycle, deleteForever, importNotes, snapshotArchive, importArchive, setSyncEnrollment, authorizePrivateServerAudio, getAudioSyncReadiness, setDefaultSyncEnrollment, listSyncOutbox, getSyncState, getSyncOverview, quarantineSyncOperation, getSyncBaseline, setSyncPaired, saveSyncRecovery, recordSyncConflict, commitSyncPull, acknowledgeSyncOperations };
+  return { list, get, hasExistingDatabase, create, createIfMissing, save, updateOrganization, setLifecycle, deleteForever, importNotes, snapshotArchive, importArchive, setSyncEnrollment, authorizePrivateServerAudio, getAudioSyncReadiness, setDefaultSyncEnrollment, listSyncOutbox, getSyncState, getSyncOverview, quarantineSyncOperation, getSyncBaseline, setSyncPaired, saveSyncRecovery, recordSyncConflict, commitSyncPull, acknowledgeSyncOperations, getAiConsentCache, cacheAiConsent, createAiAnalysisIntent, queueAiConsentRevoke, listAiIntents, listPendingAiIntents, updateAiIntent };
 }
 
 function assertAudioTimestamp(value, label) {
@@ -700,6 +778,8 @@ export function createAudioRepository(indexedDBFactory = globalThis.indexedDB, d
           if (!database.objectStoreNames.contains(AUDIO_SYNC_APPROVALS_STORE)) database.createObjectStore(AUDIO_SYNC_APPROVALS_STORE, { keyPath: 'noteId' });
           if (!database.objectStoreNames.contains(AUDIO_SYNC_STATE_STORE)) database.createObjectStore(AUDIO_SYNC_STATE_STORE, { keyPath: 'recordingId' });
           if (!database.objectStoreNames.contains(AUDIO_SYNC_CHUNKS_STORE)) { const store = database.createObjectStore(AUDIO_SYNC_CHUNKS_STORE, { keyPath: 'id' }); store.createIndex('transferSequence', ['transferId', 'sequence'], { unique: true }); }
+          if (!database.objectStoreNames.contains(AI_REQUEST_OUTBOX_STORE)) database.createObjectStore(AI_REQUEST_OUTBOX_STORE, { keyPath: 'requestId' });
+          if (!database.objectStoreNames.contains(AI_CONSENT_CACHE_STORE)) database.createObjectStore(AI_CONSENT_CACHE_STORE, { keyPath: 'noteId' });
         };
         request.onsuccess = () => { request.result.onversionchange = () => request.result.close(); resolve(request.result); };
         request.onerror = () => reject(request.error ?? new Error('Could not open local audio storage.'));
