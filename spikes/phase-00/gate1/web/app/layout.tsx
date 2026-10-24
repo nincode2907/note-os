@@ -4,12 +4,12 @@ import { AppShell } from './ui/app-shell';
 
 export const metadata: Metadata = {
   title: 'noteOS — notes that stay yours',
-  applicationName: 'noteOS',
+  applicationName: 'Note OS',
   description: 'Private notes stored on this device.',
-  appleWebApp: { capable: true, title: 'noteOS', statusBarStyle: 'default' },
+  appleWebApp: { capable: true, title: 'Note OS', statusBarStyle: 'default' },
   icons: {
     icon: [{ url: '/icons/noteos-192.png', sizes: '192x192', type: 'image/png' }],
-    apple: [{ url: '/apple-icon.png', sizes: '180x180', type: 'image/png' }],
+    apple: [{ url: '/apple-touch-icon.png', sizes: '180x180', type: 'image/png' }],
   },
 };
 export const viewport: Viewport = { width: 'device-width', initialScale: 1, themeColor: '#f7f5f0' };

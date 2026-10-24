@@ -1,5 +1,5 @@
 const CACHE_PREFIX = 'noteos-pwa-shell-';
-const CACHE_NAME = `${CACHE_PREFIX}0001`;
+const CACHE_NAME = `${CACHE_PREFIX}0002`;
 const LEGACY_CACHE_NAMES = ['noteos-gate1-shell-v1'];
 const MAX_DYNAMIC_ENTRIES = 80;
 const SHELL_ASSETS = [
@@ -11,6 +11,7 @@ const SHELL_ASSETS = [
   '/icons/noteos-512.png',
   '/icons/noteos-maskable-512.png',
   '/apple-icon.png',
+  '/apple-touch-icon.png',
 ];
 
 function isSyncApi(url) {
@@ -94,7 +95,8 @@ self.addEventListener('fetch', event => {
 
   const immutableAsset = url.pathname.startsWith('/_next/static/')
     || (url.pathname.startsWith('/icons/') && url.pathname.endsWith('.png'))
-    || url.pathname === '/apple-icon.png';
+    || url.pathname === '/apple-icon.png'
+    || url.pathname === '/apple-touch-icon.png';
   event.respondWith((async () => {
     if (immutableAsset) {
       const existing = await cachedResponse(request);

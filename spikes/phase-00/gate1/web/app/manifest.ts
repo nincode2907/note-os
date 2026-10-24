@@ -3,8 +3,8 @@ import type { MetadataRoute } from 'next';
 export default function manifest(): MetadataRoute.Manifest {
   return {
     id: '/',
-    name: 'noteOS',
-    short_name: 'noteOS',
+    name: 'Note OS',
+    short_name: 'Note OS',
     description: 'Private notes saved on this device.',
     start_url: '/',
     scope: '/',
