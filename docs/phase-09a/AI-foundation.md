@@ -13,7 +13,7 @@
 - Privacy is explicit. Missing privacy and `DEVICE_ONLY` are excluded from server Sync; `PRIVATE_SERVER` and `CLOUD_ALLOWED` do not mean AI consent.
 - Existing organization rules allow up to 20 normalized unique tags, 32 characters per tag. Canonical Note v1 has no category property.
 - The active production Web container is not rebuilt automatically from source. Audio remains disabled.
-- The inspected iPhone prototype has no native Sync API client. No consent transfer or mobile-to-Mac revision path was found.
+- iPhone Safari Web Text Sync passed the owner-confirmed Phase 08.2B physical-device acceptance: iPhone↔Mac text sync, offline replay and conflict preservation were reported PASS. Codex did not perform or independently observe those device interactions. Installed PWA physical acceptance remains pending. Expo Native has no confirmed Sync client.
 
 ## Architecture decisions and R11 reconciliation
 
@@ -25,8 +25,10 @@
 6. Before dispatch and before publishing, the queue rechecks feature flags, server epoch, exact source revision/hash, active lifecycle, consent state/epoch, and the claim token. Results after revocation, source change, epoch change, or lease loss are discarded.
 7. The only implemented provider adapter is an injected in-process Mock Provider, and the job runner refuses to execute it unless `NODE_ENV=test`. The production code has no AI route, gateway URL, HTTP client, fallback, credentials, tool calls, or network request. `STRICT_LOCAL` requires an explicit attestation decision and is not implemented; external cloud execution is rejected in 09A even with a cloud grant.
 8. Category, summary, tasks, tags, and related-note proposals remain derived sidecar data. No apply workflow is present. Related candidates are deterministic title/tag matches and require a caller-supplied per-candidate consent check.
+9. Phase 09A.1 hardens revocation without changing Sync Protocol v1 or the AI schema: consent epoch/state, active job cancellation, and suggestion payload purge share one SQLite transaction. The `ai_note_consent` row is the durable minimal revocation marker; a single general audit event is appended only when its logical quota has room.
+10. Publish, invalid-output and retry paths sample an injected clock after acquiring the final write transaction, then require a live lease (`lease_until > publishNow`), matching worker ID and fencing token. Policy/source/epoch/flags are also rechecked before any publish or retry mutation.
 
-This follows the R11 privacy, immutable-source, sidecar, and fenced-queue findings. It narrows R11's proposed “outbox in the note commit” until AI consent and request intent have a versioned client contract; no AI work is enqueued merely because Text Sync pushes a note. R11's Mac worker/API and local Gateway are deferred, consistent with 09A's no-inference boundary. The foundation does not imply that mobile Sync, Gateway access, local hardware execution, or production migration is ready.
+This follows the R11 privacy, immutable-source, sidecar, and fenced-queue findings. It narrows R11's proposed “outbox in the note commit” until AI consent and request intent have a versioned client contract; no AI work is enqueued merely because Text Sync pushes a note. R11's Mac worker/API and local Gateway are deferred, consistent with 09A's no-inference boundary. The remaining AI integration gap is explicit Consent/Analysis Request transport, not the absence of all iPhone-to-Mac Sync. Expo Native Sync remains unconfirmed, and installed PWA physical acceptance remains pending.
 
 ## Consent and provider matrix
 
@@ -73,6 +75,16 @@ stateDiagram-v2
 
 No provider runs inside a SQLite transaction. A stale worker cannot publish after its lease token changes. No suggestion updates a note; future application must be a client-authored, revision-CAS save followed by ordinary Sync and an auditable per-item decision.
 
+## Consent revocation and erasure limits
+
+Revocation advances the consent epoch once, sets `REVOKED`, cancels queued/running jobs, and replaces every non-empty suggestion `payload_json` for that note with `{}` in the same transaction. Unreviewed `PENDING_REVIEW` and `STALE` suggestions become `REVOKED`; `ACCEPTED` and `REJECTED` decision statuses remain as minimal decision metadata, while their text payload is also purged. Canonical note rows and any owner-approved note edits are never modified.
+
+The `ai_note_consent` row's note ID, `REVOKED` state, consent epoch, and `updated_at` timestamp remain as the durable revocation marker even when the general audit table is at its 10,000-row logical quota. When space is available, one bounded `CONSENT_REVOKED` event records only epoch and job/suggestion counts. Existing audit rows are never deleted to make room. Repeating revocation is idempotent: it keeps the epoch/timestamp, reasserts cancellation/purge, and does not add another audit event.
+
+If SQLite cannot persist the transaction (for example, a read-only/full filesystem or I/O failure), the call raises `AI_REVOCATION_NOT_PERSISTED`; it does not report success. A process-local fail-closed latch blocks grants, enqueue and Mock dispatch for that note until a revoke retry commits. This is not a cross-process durable switch: 09B-0 must define one authoritative revocation/worker control plane before any multi-process inference is enabled. In 09A.1 the only provider is test-only Mock, and production AI remains disabled.
+
+Payload purge removes the live logical row content, but does not promise physical secure erasure. SQLite WAL frames may retain prior page bytes until checkpoint/truncation; storage wear leveling can also retain blocks. No immutable Sync history, prior database copy, backup, snapshot, or old WAL is automatically rewritten or deleted. Backup retention, checkpoint policy, encryption/key rotation, and any separate backup purge remain explicit owner/operator decisions.
+
 ## Mock Provider and output schema v1
 
 The adapter contract carries an explicit boundary (`STRICT_LOCAL`, `EXTERNAL_CLOUD`, or `MOCK`) and only `MOCK` is accepted by the 09A worker. The mock receives one committed note, its source version and hash, and returns an object (or strict JSON string). It never invokes HTTP or a model.
@@ -103,5 +115,5 @@ No Docker image was built and no Docker resource, container, volume or productio
 ## Known blockers and 09B recommendation
 
 **Phase 09A foundation:** safe to accept for code review after the commit and evidence bundle are inspected; it is default-off and has no production route.  
-**Before a 09B/09C integration:** resolve how explicit AI request/consent is carried from Web and iPhone without silently changing Sync v1; decide whether enqueue must join the note-commit transaction; define owner/scope/retention; inspect worker topology and API authentication. The mobile Sync client is absent.  
+**Before a 09B/09C integration:** resolve how explicit AI request/consent is carried from the accepted iPhone Safari Web Sync path and future native/PWA clients without silently changing Sync v1; decide whether enqueue must join the note-commit transaction; define owner/scope/retention; inspect worker topology and API authentication. The 09B-0 proposal is in `09B-0-consent-request-contract.md`.
 **Before any real inference or pilot:** separately prove local execution and Gateway reachability or explicitly approve a remote provider, review logs/retention/secrets, run staged feature and migration review, obtain owner pilot approval, and verify actual-device paths as needed. Production schema v3 remains postponed and no AI schema migration has been deployed.

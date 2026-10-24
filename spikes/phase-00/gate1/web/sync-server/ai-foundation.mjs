@@ -19,9 +19,14 @@ const ALLOWED_SCOPES = new Set(['organize']);
 const OUTPUT_KEYS = ['categorySuggestion','insufficientContext','relatedCandidates','schemaVersion','shortSummary','tagCandidates','taskCandidates','uncertainty'];
 const sha256 = value => createHash('sha256').update(value).digest('hex');
 const nowDefault = () => Date.now();
+const revocationFailClosedNotes = new Set();
 const assertNoteId = noteId => {
   if (typeof noteId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(noteId)) throw new TypeError('Invalid note ID');
 };
+
+export function isAiRevocationFailClosed(noteId) {
+  return revocationFailClosedNotes.has(noteId);
+}
 
 export function aiFeatureFlags(env = process.env) {
   return Object.freeze({
@@ -86,6 +91,7 @@ function boundedScopes(scopes) {
 export function grantNoteConsent(db, noteId, { state = 'APPROVED_LOCAL_ONLY', scopes = ['organize'], providerBoundary = 'MOCK', actorId = null, env = process.env, now = nowDefault() } = {}) {
   if (!aiFeatureFlags(env).organizeEnabled) throw new Error('AI organize is disabled');
   assertNoteId(noteId);
+  if (isAiRevocationFailClosed(noteId)) throw new Error('AI consent state is uncertain; persist revocation before granting consent');
   if (!['APPROVED_LOCAL_ONLY','APPROVED_CLOUD_ALLOWED'].includes(state) || !['MOCK','STRICT_LOCAL','EXTERNAL_CLOUD'].includes(providerBoundary)) throw new TypeError('Invalid AI consent');
   const normalizedScopes = boundedScopes(scopes), scopesJson = canonicalJson(normalizedScopes);
   return transaction(db, () => {
@@ -105,20 +111,39 @@ export function grantNoteConsent(db, noteId, { state = 'APPROVED_LOCAL_ONLY', sc
 
 export function revokeNoteConsent(db, noteId, { actorId = null, reasonCode = 'owner_revoked', now = nowDefault() } = {}) {
   assertNoteId(noteId);
-  return transaction(db, () => {
-    const current = db.prepare('SELECT * FROM ai_note_consent WHERE note_id=?').get(noteId);
-    if (!current && db.prepare('SELECT count(*) AS n FROM ai_note_consent').get().n >= MAX_CONSENT_ROWS) throw new Error('AI consent capacity reached');
-    const consentEpoch = (current?.consent_epoch ?? 0) + 1;
-    db.prepare(`INSERT INTO ai_note_consent(note_id,state,scopes_json,provider_boundary,consent_epoch,updated_at)
-      VALUES(?,'REVOKED','[]','MOCK',?,?) ON CONFLICT(note_id) DO UPDATE SET state='REVOKED',scopes_json='[]',
-      consent_epoch=excluded.consent_epoch,updated_at=excluded.updated_at`).run(noteId, consentEpoch, now);
-    db.prepare(`UPDATE ai_jobs SET status='CANCELED',lease_until=NULL,worker_id=NULL,claim_token=NULL,updated_at=?
-      WHERE note_id=? AND status IN ('QUEUED','RUNNING')`).run(now, noteId);
-    db.prepare("UPDATE ai_suggestions SET status='REVOKED',updated_at=? WHERE note_id=? AND status='PENDING_REVIEW'").run(now, noteId);
-    audit(db, { action: 'CONSENT_REVOKED', noteId, actorId, reasonCode, metadata: { consentEpoch }, now });
-    audit(db, { action: 'SUGGESTION_REVOKED', noteId, reasonCode: 'consent_revoked', metadata: { consentEpoch }, now });
-    return { noteId, state: 'REVOKED', consentEpoch };
-  });
+  revocationFailClosedNotes.add(noteId);
+  try {
+    const result = transaction(db, () => {
+      const current = db.prepare('SELECT * FROM ai_note_consent WHERE note_id=?').get(noteId);
+      if (!current && db.prepare('SELECT count(*) AS n FROM ai_note_consent').get().n >= MAX_CONSENT_ROWS) throw new Error('AI consent capacity reached');
+      const alreadyRevoked = current?.state === 'REVOKED';
+      const consentEpoch = (current?.consent_epoch ?? 0) + (alreadyRevoked ? 0 : 1);
+      const revokedAt = alreadyRevoked ? current.updated_at : now;
+      db.prepare(`INSERT INTO ai_note_consent(note_id,state,scopes_json,provider_boundary,consent_epoch,updated_at)
+        VALUES(?,'REVOKED','[]','MOCK',?,?) ON CONFLICT(note_id) DO UPDATE SET state='REVOKED',scopes_json='[]',
+        consent_epoch=excluded.consent_epoch,updated_at=excluded.updated_at`).run(noteId, consentEpoch, revokedAt);
+      const canceledJobs = db.prepare(`UPDATE ai_jobs SET status='CANCELED',lease_until=NULL,worker_id=NULL,claim_token=NULL,updated_at=?
+        WHERE note_id=? AND status IN ('QUEUED','RUNNING')`).run(now, noteId).changes;
+      const purgedSuggestions = db.prepare(`UPDATE ai_suggestions SET
+        status=CASE WHEN status IN ('PENDING_REVIEW','STALE') THEN 'REVOKED' ELSE status END,
+        payload_json='{}',updated_at=? WHERE note_id=? AND (payload_json<>'{}' OR status IN ('PENDING_REVIEW','STALE'))`).run(now, noteId).changes;
+
+      // ai_note_consent is the durable minimal marker. The general audit is best-effort
+      // under its logical quota and remains in this transaction when capacity exists.
+      if (!alreadyRevoked && db.prepare('SELECT count(*) AS n FROM ai_audit_log').get().n < MAX_AUDIT) {
+        audit(db, { action: 'CONSENT_REVOKED', noteId, actorId, reasonCode, metadata: { consentEpoch, canceledJobs, purgedSuggestions }, now });
+      }
+      return { noteId, state: 'REVOKED', consentEpoch, canceledJobs, purgedSuggestions, alreadyRevoked };
+    });
+    revocationFailClosedNotes.delete(noteId);
+    return result;
+  } catch (cause) {
+    // Keep this process fail-closed until a later revocation retry commits. A caller
+    // must surface the error; never acknowledge an unpersisted revoke as successful.
+    throw Object.assign(new Error('AI consent revocation was not persisted; inference is paused for this note'), {
+      code: 'AI_REVOCATION_NOT_PERSISTED', cause,
+    });
+  }
 }
 
 function sourceForNote(db, noteId, serverVersion) {
@@ -138,6 +163,7 @@ function sourceForNote(db, noteId, serverVersion) {
 
 export function enqueueAiJob(db, noteId, { serverVersion, env = process.env, analysisPolicyVersion = 'ai-policy-v1', promptSchemaVersion = 1, modelIdentity = 'mock-v1', scope = 'organize', now = nowDefault() } = {}) {
   assertNoteId(noteId);
+  if (isAiRevocationFailClosed(noteId)) throw new Error('AI consent state is uncertain; inference is paused for this note');
   const flags = aiFeatureFlags(env);
   if (!flags.organizeEnabled) throw new Error('AI organize is disabled');
   if (!Number.isSafeInteger(serverVersion) || serverVersion < 1) throw new TypeError('A committed server version is required');
@@ -289,6 +315,7 @@ export function validateAiSuggestion(value, note, { authorizedRelatedIds = [] } 
 }
 
 function currentEligible(db, job, env) {
+  if (isAiRevocationFailClosed(job.note_id)) return { allowed: false, reason: 'revocation_state_uncertain' };
   const meta = serverMeta(db);
   if (meta.serverEpoch !== job.server_epoch) return { allowed: false, reason: 'server_epoch_changed' };
   let source;
@@ -302,73 +329,105 @@ function currentEligible(db, job, env) {
   return { allowed: true, note: source.note };
 }
 
+function readClock(clock) {
+  const value = clock();
+  if (!Number.isSafeInteger(value) || value < 0) throw new TypeError('Invalid AI worker clock');
+  return value;
+}
+
+function hasLiveClaim(db, job, workerId, now) {
+  return Boolean(db.prepare(`SELECT 1 FROM ai_jobs WHERE id=? AND status='RUNNING' AND worker_id=? AND claim_token=? AND lease_until>?`)
+    .get(job.id, workerId, job.claim_token, now));
+}
+
 export function createMockProvider({ output, onInvoke = () => {} } = {}) {
   if (!output) throw new TypeError('Mock output is required');
   return Object.freeze({ identity: 'mock-v1', executionBoundary: 'MOCK', async analyze(input) { onInvoke(input); return structuredClone(output); } });
 }
 
 /** One manually/event-triggered job at a time. There is deliberately no polling loop. */
-export async function runOneAiJob(db, { workerId, provider, env = process.env, now = nowDefault(), leaseMs = 30000 } = {}) {
+export async function runOneAiJob(db, { workerId, provider, env = process.env, now = nowDefault(), clock = nowDefault, leaseMs = 30000 } = {}) {
   const flags = aiFeatureFlags(env);
   if (!flags.organizeEnabled || !flags.inferenceEnabled) return { status: 'disabled', invoked: false };
   if (env.NODE_ENV !== 'test') return { status: 'mock_provider_test_only', invoked: false };
   if (!provider || provider.identity !== 'mock-v1' || provider.executionBoundary !== 'MOCK' || typeof provider.analyze !== 'function') return { status: 'provider_rejected', invoked: false };
   const job = claimAiJob(db, workerId, { now, leaseMs });
   if (!job) return { status: 'idle', invoked: false };
-  const before = currentEligible(db, job, env);
-  if (!before.allowed) {
-    transaction(db, () => {
-      const changed = db.prepare("UPDATE ai_jobs SET status='CANCELED',lease_until=NULL,worker_id=NULL,claim_token=NULL,updated_at=? WHERE id=? AND claim_token=?").run(now, job.id, job.claim_token).changes;
-      if (changed) audit(db, { action: 'JOB_CANCELED', noteId: job.note_id, jobId: job.id, actorId: workerId, reasonCode: before.reason, metadata: {}, now });
-    });
-    return { status: 'canceled', reason: before.reason, invoked: false };
-  }
+  const dispatch = transaction(db, () => {
+    const eligible = currentEligible(db, job, env);
+    const dispatchNow = readClock(clock);
+    if (!hasLiveClaim(db, job, workerId, dispatchNow)) return { allowed: false, reason: 'lease_expired_or_lost' };
+    if (!eligible.allowed) {
+      const changed = db.prepare("UPDATE ai_jobs SET status='CANCELED',lease_until=NULL,worker_id=NULL,claim_token=NULL,updated_at=? WHERE id=? AND worker_id=? AND claim_token=?")
+        .run(dispatchNow, job.id, workerId, job.claim_token).changes;
+      if (changed) audit(db, { action: 'JOB_CANCELED', noteId: job.note_id, jobId: job.id, actorId: workerId, reasonCode: eligible.reason, metadata: {}, now: dispatchNow });
+      return { allowed: false, reason: eligible.reason };
+    }
+    return { allowed: true, note: eligible.note };
+  });
+  if (!dispatch.allowed) return { status: dispatch.reason === 'lease_expired_or_lost' ? 'discarded' : 'canceled', reason: dispatch.reason, invoked: false };
   let result;
   try {
     // The provider boundary is checked again immediately before the only allowed adapter call.
     if (provider.identity !== job.model_identity || provider.executionBoundary !== job.execution_boundary) throw new Error('Provider identity or boundary mismatch');
-    result = await provider.analyze(Object.freeze({ note: structuredClone(before.note), sourceVersion: job.target_server_version, contentHash: job.content_sha256 }));
+    result = await provider.analyze(Object.freeze({ note: structuredClone(dispatch.note), sourceVersion: job.target_server_version, contentHash: job.content_sha256 }));
   } catch {
-    return retryAfterProviderFailure(db, job, now);
+    return retryAfterProviderFailure(db, job, workerId, clock, env);
   }
   let validated;
-  try { validated = validateAiSuggestion(result, before.note); }
+  try { validated = validateAiSuggestion(result, dispatch.note); }
   catch {
-    transaction(db, () => {
-      const changed = db.prepare("UPDATE ai_jobs SET status='FAILED_NEEDS_REVIEW',lease_until=NULL,worker_id=NULL,claim_token=NULL,updated_at=? WHERE id=? AND claim_token=?").run(now, job.id, job.claim_token).changes;
-      if (changed) audit(db, { action: 'JOB_FAILED_NEEDS_REVIEW', noteId: job.note_id, jobId: job.id, actorId: workerId, reasonCode: 'invalid_provider_output', metadata: { attempt: job.attempts }, now });
+    return transaction(db, () => {
+      const eligible = currentEligible(db, job, env);
+      const publishNow = readClock(clock);
+      if (!hasLiveClaim(db, job, workerId, publishNow)) return { status: 'discarded', invoked: true, reason: 'lease_expired_or_lost' };
+      if (!eligible.allowed) {
+        db.prepare("UPDATE ai_jobs SET status='CANCELED',lease_until=NULL,worker_id=NULL,claim_token=NULL,updated_at=? WHERE id=? AND worker_id=? AND claim_token=?")
+          .run(publishNow, job.id, workerId, job.claim_token);
+        return { status: 'discarded', invoked: true, reason: eligible.reason };
+      }
+      const changed = db.prepare("UPDATE ai_jobs SET status='FAILED_NEEDS_REVIEW',lease_until=NULL,worker_id=NULL,claim_token=NULL,updated_at=? WHERE id=? AND worker_id=? AND claim_token=?")
+        .run(publishNow, job.id, workerId, job.claim_token).changes;
+      if (changed) audit(db, { action: 'JOB_FAILED_NEEDS_REVIEW', noteId: job.note_id, jobId: job.id, actorId: workerId, reasonCode: 'invalid_provider_output', metadata: { attempt: job.attempts }, now: publishNow });
+      return { status: changed ? 'FAILED_NEEDS_REVIEW' : 'discarded', invoked: true, ...(changed ? { reason: 'invalid_provider_output' } : { reason: 'lease_lost' }) };
     });
-    return { status: 'FAILED_NEEDS_REVIEW', invoked: true, reason: 'invalid_provider_output' };
   }
   return transaction(db, () => {
     const eligible = currentEligible(db, job, env);
-    const owned = db.prepare("SELECT 1 FROM ai_jobs WHERE id=? AND status='RUNNING' AND claim_token=? AND lease_until>?").get(job.id, job.claim_token, now);
+    const publishNow = readClock(clock);
+    const owned = hasLiveClaim(db, job, workerId, publishNow);
     if (!eligible.allowed || !owned) {
-      if (owned) db.prepare("UPDATE ai_jobs SET status='CANCELED',lease_until=NULL,worker_id=NULL,claim_token=NULL,updated_at=? WHERE id=? AND claim_token=?").run(now, job.id, job.claim_token);
-      return { status: 'discarded', invoked: true, reason: eligible.allowed ? 'lease_lost' : eligible.reason };
+      if (owned && !eligible.allowed) db.prepare("UPDATE ai_jobs SET status='CANCELED',lease_until=NULL,worker_id=NULL,claim_token=NULL,updated_at=? WHERE id=? AND worker_id=? AND claim_token=?").run(publishNow, job.id, workerId, job.claim_token);
+      return { status: 'discarded', invoked: true, reason: !eligible.allowed ? eligible.reason : 'lease_expired_or_lost' };
     }
     const suggestionId = randomUUID(), payload = canonicalJson(validated);
     db.prepare("INSERT INTO ai_suggestions(id,job_id,note_id,target_server_version,content_sha256,schema_version,status,payload_json,provider_identity,created_at,updated_at) VALUES(?,?,?,?,?,1,'PENDING_REVIEW',?,?,?,?)")
-      .run(suggestionId,job.id,job.note_id,job.target_server_version,job.content_sha256,payload,provider.identity,now,now);
-    db.prepare("UPDATE ai_jobs SET status='COMPLETED',lease_until=NULL,worker_id=NULL,claim_token=NULL,updated_at=? WHERE id=? AND claim_token=?").run(now, job.id, job.claim_token);
-    audit(db, { action: 'JOB_COMPLETED', noteId: job.note_id, jobId: job.id, actorId: workerId, reasonCode: 'suggestion_created', metadata: { suggestionId, provider: 'mock-v1', schemaVersion: 1 }, now });
+      .run(suggestionId,job.id,job.note_id,job.target_server_version,job.content_sha256,payload,provider.identity,publishNow,publishNow);
+    db.prepare("UPDATE ai_jobs SET status='COMPLETED',lease_until=NULL,worker_id=NULL,claim_token=NULL,updated_at=? WHERE id=? AND worker_id=? AND claim_token=?").run(publishNow, job.id, workerId, job.claim_token);
+    audit(db, { action: 'JOB_COMPLETED', noteId: job.note_id, jobId: job.id, actorId: workerId, reasonCode: 'suggestion_created', metadata: { suggestionId, provider: 'mock-v1', schemaVersion: 1 }, now: publishNow });
     return { status: 'COMPLETED', invoked: true, suggestionId };
   });
 }
 
-function retryAfterProviderFailure(db, job, now) {
+function retryAfterProviderFailure(db, job, workerId, clock, env) {
   return transaction(db, () => {
-    const owned = db.prepare("SELECT 1 FROM ai_jobs WHERE id=? AND status='RUNNING' AND claim_token=?").get(job.id, job.claim_token);
-    if (!owned) return { status: 'discarded', invoked: true, reason: 'lease_lost' };
+    const eligible = currentEligible(db, job, env);
+    const publishNow = readClock(clock);
+    if (!hasLiveClaim(db, job, workerId, publishNow)) return { status: 'discarded', invoked: true, reason: 'lease_expired_or_lost' };
+    if (!eligible.allowed) {
+      db.prepare("UPDATE ai_jobs SET status='CANCELED',lease_until=NULL,worker_id=NULL,claim_token=NULL,updated_at=? WHERE id=? AND worker_id=? AND claim_token=?")
+        .run(publishNow, job.id, workerId, job.claim_token);
+      return { status: 'discarded', invoked: true, reason: eligible.reason };
+    }
     if (job.attempts >= MAX_ATTEMPTS) {
-      db.prepare("UPDATE ai_jobs SET status='FAILED_NEEDS_REVIEW',lease_until=NULL,worker_id=NULL,claim_token=NULL,updated_at=? WHERE id=?").run(now, job.id);
-      audit(db, { action: 'JOB_FAILED_NEEDS_REVIEW', noteId: job.note_id, jobId: job.id, reasonCode: 'attempt_limit', metadata: { attempts: job.attempts }, now });
+      db.prepare("UPDATE ai_jobs SET status='FAILED_NEEDS_REVIEW',lease_until=NULL,worker_id=NULL,claim_token=NULL,updated_at=? WHERE id=? AND worker_id=? AND claim_token=?").run(publishNow, job.id, workerId, job.claim_token);
+      audit(db, { action: 'JOB_FAILED_NEEDS_REVIEW', noteId: job.note_id, jobId: job.id, reasonCode: 'attempt_limit', metadata: { attempts: job.attempts }, now: publishNow });
       return { status: 'FAILED_NEEDS_REVIEW', invoked: true };
     }
     const delay = Math.min(300000, 1000 * (2 ** Math.max(0, job.attempts - 1)));
-    db.prepare("UPDATE ai_jobs SET status='QUEUED',run_after=?,lease_until=NULL,worker_id=NULL,claim_token=NULL,updated_at=? WHERE id=?").run(now + delay, now, job.id);
-    audit(db, { action: 'JOB_RETRIED', noteId: job.note_id, jobId: job.id, reasonCode: 'provider_timeout_or_error', metadata: { attempts: job.attempts, delayMs: delay }, now });
-    return { status: 'QUEUED', invoked: true, runAfter: now + delay };
+    db.prepare("UPDATE ai_jobs SET status='QUEUED',run_after=?,lease_until=NULL,worker_id=NULL,claim_token=NULL,updated_at=? WHERE id=? AND worker_id=? AND claim_token=?").run(publishNow + delay, publishNow, job.id, workerId, job.claim_token);
+    audit(db, { action: 'JOB_RETRIED', noteId: job.note_id, jobId: job.id, reasonCode: 'provider_timeout_or_error', metadata: { attempts: job.attempts, delayMs: delay }, now: publishNow });
+    return { status: 'QUEUED', invoked: true, runAfter: publishNow + delay };
   });
 }
 

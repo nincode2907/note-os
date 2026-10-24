@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 import { openStore, serverMeta, transaction, appendChange } from './storage.mjs';
 import { handleSync } from './http.mjs';
 import {
-  aiFeatureFlags, applyAiSchema, claimAiJob, createMockProvider, enqueueAiJob,
+  aiFeatureFlags, applyAiSchema, claimAiJob, createMockProvider, enqueueAiJob, isAiRevocationFailClosed,
   evaluateAiPolicy, grantNoteConsent, recoverExpiredAiJobs, relatedNoteCandidates,
   revokeNoteConsent, runOneAiJob, validateAiSuggestion,
 } from './ai-foundation.mjs';
@@ -99,7 +99,47 @@ test('explicit consent grants and revocation advance consent epoch and cancel qu
   assert.equal(revoked.consentEpoch, 2);
   assert.equal(db.prepare('SELECT status FROM ai_jobs WHERE id=?').get(job.id).status, 'CANCELED');
   assert.equal(db.prepare('SELECT count(*) n FROM ai_suggestions').get().n, 0);
-  assert.deepEqual(db.prepare('SELECT action FROM ai_audit_log ORDER BY id').all().map(row => row.action), ['CONSENT_GRANTED','JOB_ENQUEUED','CONSENT_REVOKED','SUGGESTION_REVOKED']);
+  assert.deepEqual(db.prepare('SELECT action FROM ai_audit_log ORDER BY id').all().map(row => row.action), ['CONSENT_GRANTED','JOB_ENQUEUED','CONSENT_REVOKED']);
+});
+
+test('revocation purges derived payloads across every supported suggestion state and preserves canonical edits', t => {
+  const { db, note } = setup(t); grant(db, note);
+  const readyJob = enqueueAiJob(db, note.id, { serverVersion: 1, env: enabled, modelIdentity: 'mock-ready', now: 1999 });
+  const updated = { ...note, revision: 4, updatedAt: 30, title: 'Owner approved title' };
+  commitNote(db, updated, 2);
+  const expectedCanonical = db.prepare("SELECT record_json FROM sync_entities WHERE entity_type='note' AND id=?").get(note.id).record_json;
+  const statuses = ['PENDING_REVIEW','STALE','REJECTED','ACCEPTED','REVOKED'];
+  assert.throws(() => db.prepare(`INSERT INTO ai_suggestions(id,job_id,note_id,target_server_version,content_sha256,schema_version,status,payload_json,provider_identity,created_at,updated_at)
+    VALUES('ready-not-supported',?,?,1,?,1,'READY','{}','mock-v1',1,1)`).run(readyJob.id,note.id,'a'.repeat(64)), /CHECK/);
+  for (const [index, status] of statuses.entries()) {
+    const job = enqueueAiJob(db, note.id, { serverVersion: 2, env: enabled, modelIdentity: `mock-${index}`, now: 2000 + index });
+    db.prepare("UPDATE ai_jobs SET status='COMPLETED' WHERE id=?").run(job.id);
+    db.prepare(`INSERT INTO ai_suggestions(id,job_id,note_id,target_server_version,content_sha256,schema_version,status,payload_json,provider_identity,created_at,updated_at)
+      VALUES(?,?,?,?,?,1,?,?,?,1,1)`).run(`suggestion-${index}`,job.id,note.id,2,'a'.repeat(64),status,JSON.stringify({ privateText: `derived-${status}` }),'mock-v1');
+  }
+  const beforeEpoch = db.prepare('SELECT consent_epoch FROM ai_note_consent WHERE note_id=?').get(note.id).consent_epoch;
+  const revoked = revokeNoteConsent(db, note.id, { now: 3000 });
+  assert.equal(revoked.purgedSuggestions, statuses.length);
+  assert.equal(revoked.consentEpoch, beforeEpoch + 1);
+  assert.deepEqual(db.prepare('SELECT status,payload_json FROM ai_suggestions ORDER BY id').all().map(row => [row.status,row.payload_json]), [
+    ['REVOKED','{}'], ['REVOKED','{}'], ['REJECTED','{}'], ['ACCEPTED','{}'], ['REVOKED','{}'],
+  ]);
+  assert.equal(db.prepare("SELECT record_json FROM sync_entities WHERE entity_type='note' AND id=?").get(note.id).record_json, expectedCanonical);
+});
+
+test('new consent epoch cannot reuse or reveal a completed suggestion from an older consent epoch', async t => {
+  const { db, note } = setup(t); grant(db, note);
+  const oldJob = enqueue(db, note);
+  const completed = await runOneAiJob(db, { workerId: 'worker-a', provider: createMockProvider({ output: resultFixture() }), env: enabled, now: 2000, clock: () => 2001 });
+  assert.equal(completed.status, 'COMPLETED');
+  revokeNoteConsent(db, note.id, { now: 2100 });
+  const oldSuggestion = db.prepare('SELECT status,payload_json FROM ai_suggestions WHERE job_id=?').get(oldJob.id);
+  assert.deepEqual([oldSuggestion.status,oldSuggestion.payload_json], ['REVOKED','{}']);
+  grant(db, note, { now: 2200 });
+  const newJob = enqueue(db, note, { now: 2300 });
+  assert.notEqual(newJob.id, oldJob.id);
+  const oldSuggestionAfter = db.prepare('SELECT status,payload_json FROM ai_suggestions WHERE job_id=?').get(oldJob.id);
+  assert.deepEqual([oldSuggestionAfter.status,oldSuggestionAfter.payload_json], [oldSuggestion.status,oldSuggestion.payload_json]);
 });
 
 test('privacy policy rejection before enqueue produces zero provider invocations', t => {
@@ -121,6 +161,71 @@ test('job, dedupe receipt and audit insert roll back together when durable audit
   assert.throws(() => enqueue(db, note), /audit capacity/);
   assert.equal(db.prepare('SELECT count(*) n FROM ai_jobs').get().n, 0);
   assert.equal(db.prepare('SELECT count(*) n FROM ai_audit_log').get().n, 10000);
+});
+
+test('revocation succeeds at MAX_AUDIT and MAX_AUDIT-1 without deleting audit history', t => {
+  for (const targetRows of [9999, 10000]) {
+    const { db, note } = setup(t, { note: noteFixture(`audit-cap-${targetRows}`) }); grant(db, note);
+    enqueue(db, note);
+    const existing = db.prepare('SELECT count(*) n FROM ai_audit_log').get().n;
+    const insert = db.prepare("INSERT INTO ai_audit_log(action,reason_code,metadata_json,created_at) VALUES('JOB_ENQUEUED','synthetic_capacity','{}',?)");
+    for (let index = existing; index < targetRows; index++) insert.run(index + 1);
+    const before = db.prepare('SELECT count(*) n FROM ai_audit_log').get().n;
+    const revoked = revokeNoteConsent(db, note.id, { now: 4000 });
+    assert.equal(revoked.state, 'REVOKED');
+    assert.equal(db.prepare('SELECT state FROM ai_note_consent WHERE note_id=?').get(note.id).state, 'REVOKED');
+    assert.equal(db.prepare('SELECT count(*) n FROM ai_audit_log').get().n, Math.min(10000, before + (targetRows === 9999 ? 1 : 0)));
+    assert.equal(db.prepare("SELECT status FROM ai_jobs WHERE note_id=?").get(note.id).status, 'CANCELED');
+  }
+});
+
+test('revocation succeeds when consent, jobs and suggestions are at their logical row caps', t => {
+  const { db, note } = setup(t); grant(db, note); const epoch = serverMeta(db).serverEpoch;
+  const hash = 'a'.repeat(64), insertJob = db.prepare(`INSERT INTO ai_jobs(id,note_id,server_epoch,source_cursor,target_server_version,content_sha256,consent_epoch,
+    analysis_policy_version,prompt_schema_version,model_identity,execution_boundary,dedupe_key,scope,status,attempts,run_after,lease_until,worker_id,claim_token,created_at,updated_at)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  const insertSuggestion = db.prepare(`INSERT INTO ai_suggestions(id,job_id,note_id,target_server_version,content_sha256,schema_version,status,payload_json,provider_identity,created_at,updated_at)
+    VALUES(?,?,?,?,?,1,?,?,?,1,1)`);
+  for (let index = 0; index < 10000; index++) {
+    const id = `cap-job-${index}`, status = index === 0 ? 'QUEUED' : index === 1 ? 'RUNNING' : 'COMPLETED';
+    insertJob.run(id,note.id,epoch,1,1,hash,1,'policy-v1',1,'mock-v1','MOCK',createHash('sha256').update(id).digest('hex'),'organize',status,1,1,status === 'RUNNING' ? 99999 : null,status === 'RUNNING' ? 'worker-a' : null,status === 'RUNNING' ? `token-${index}` : null,1,1);
+    const suggestionStatus = ['PENDING_REVIEW','STALE','REJECTED','ACCEPTED','REVOKED'][index % 5];
+    insertSuggestion.run(`cap-suggestion-${index}`,id,note.id,1,hash,suggestionStatus,JSON.stringify({ secret: `synthetic-${index}` }),'mock-v1');
+  }
+  const insertConsent = db.prepare("INSERT INTO ai_note_consent(note_id,state,scopes_json,provider_boundary,consent_epoch,updated_at) VALUES(?,'APPROVED_LOCAL_ONLY','[\"organize\"]','MOCK',1,1)");
+  for (let index = 0; index < 999; index++) insertConsent.run(`consent-cap-${index}`);
+  const insertAudit = db.prepare("INSERT INTO ai_audit_log(action,reason_code,metadata_json,created_at) VALUES('JOB_ENQUEUED','synthetic_capacity','{}',?)");
+  const existingAudit = db.prepare('SELECT count(*) n FROM ai_audit_log').get().n;
+  for (let index = existingAudit; index < 10000; index++) insertAudit.run(index + 1);
+  assert.equal(db.prepare('SELECT count(*) n FROM ai_note_consent').get().n, 1000);
+  assert.equal(db.prepare('SELECT count(*) n FROM ai_jobs').get().n, 10000);
+  assert.equal(db.prepare('SELECT count(*) n FROM ai_suggestions').get().n, 10000);
+  assert.equal(db.prepare('SELECT count(*) n FROM ai_audit_log').get().n, 10000);
+  const canonicalBefore = db.prepare("SELECT record_json FROM sync_entities WHERE entity_type='note' AND id=?").get(note.id).record_json;
+  const first = revokeNoteConsent(db, note.id, { now: 5000 });
+  assert.equal(first.canceledJobs, 2); assert.equal(first.purgedSuggestions, 10000);
+  assert.equal(db.prepare("SELECT count(*) n FROM ai_suggestions WHERE note_id=? AND payload_json<>'{}'").get(note.id).n, 0);
+  assert.equal(db.prepare("SELECT count(*) n FROM ai_jobs WHERE note_id=? AND status IN ('QUEUED','RUNNING')").get(note.id).n, 0);
+  assert.equal(db.prepare("SELECT record_json FROM sync_entities WHERE entity_type='note' AND id=?").get(note.id).record_json, canonicalBefore);
+  const second = revokeNoteConsent(db, note.id, { now: 9000 });
+  assert.equal(second.alreadyRevoked, true); assert.equal(second.consentEpoch, first.consentEpoch);
+  assert.equal(db.prepare('SELECT updated_at FROM ai_note_consent WHERE note_id=?').get(note.id).updated_at, 5000);
+  assert.equal(db.prepare('SELECT count(*) n FROM ai_audit_log').get().n, 10000);
+});
+
+test('SQLite persistence failure is not acknowledged and fail-closes inference until revoke retry commits', async t => {
+  const { db, note } = setup(t); grant(db, note); enqueue(db, note);
+  db.exec('PRAGMA query_only=ON');
+  assert.throws(() => revokeNoteConsent(db, note.id, { now: 3000 }), error => error.code === 'AI_REVOCATION_NOT_PERSISTED');
+  db.exec('PRAGMA query_only=OFF');
+  assert.equal(isAiRevocationFailClosed(note.id), true);
+  let calls = 0;
+  const result = await runOneAiJob(db, { workerId: 'worker-a', provider: createMockProvider({ output: resultFixture(), onInvoke: () => calls++ }), env: enabled, now: 2000, clock: () => 2001 });
+  assert.equal(result.status, 'canceled'); assert.equal(result.reason, 'revocation_state_uncertain'); assert.equal(calls, 0);
+  assert.equal(db.prepare('SELECT state FROM ai_note_consent WHERE note_id=?').get(note.id).state, 'APPROVED_CLOUD_ALLOWED');
+  revokeNoteConsent(db, note.id, { now: 4000 });
+  assert.equal(isAiRevocationFailClosed(note.id), false);
+  assert.equal(db.prepare('SELECT state FROM ai_note_consent WHERE note_id=?').get(note.id).state, 'REVOKED');
 });
 
 test('disabled organize flag blocks consent, enqueue and provider invocation with zero side effects', async t => {
@@ -203,8 +308,9 @@ test('late worker cannot publish after revocation during provider call', async t
   let finish; let entered;
   const started = new Promise(resolve => { entered = resolve; });
   const delayed = { identity: 'mock-v1', executionBoundary: 'MOCK', analyze: async () => { entered(); return new Promise(resolve => { finish = resolve; }); } };
-  const work = runOneAiJob(db, { workerId: 'worker-a', provider: delayed, env: enabled, now: 2000, leaseMs: 10000 });
-  await started; revokeNoteConsent(db, note.id, { now: 2100 }); finish(resultFixture());
+  let clockNow = 2001;
+  const work = runOneAiJob(db, { workerId: 'worker-a', provider: delayed, env: enabled, now: 2000, clock: () => clockNow, leaseMs: 10000 });
+  await started; clockNow = 2100; revokeNoteConsent(db, note.id, { now: 2100 }); finish(resultFixture());
   assert.equal((await work).status, 'discarded');
   assert.equal(db.prepare('SELECT count(*) n FROM ai_suggestions').get().n, 0);
   assert.equal(db.prepare('SELECT status FROM ai_jobs').get().status, 'CANCELED');
@@ -214,11 +320,47 @@ test('late worker with expired fencing token cannot publish after reclaim', asyn
   const { db, note } = setup(t); grant(db, note); const queued = enqueue(db, note);
   let finish; let entered; const started = new Promise(resolve => { entered = resolve; });
   const delayed = { identity: 'mock-v1', executionBoundary: 'MOCK', analyze: async () => { entered(); return new Promise(resolve => { finish = resolve; }); } };
-  const oldWorker = runOneAiJob(db, { workerId: 'worker-a', provider: delayed, env: enabled, now: 2000, leaseMs: 1000 });
+  let clockNow = 2001;
+  const oldWorker = runOneAiJob(db, { workerId: 'worker-a', provider: delayed, env: enabled, now: 2000, clock: () => clockNow, leaseMs: 1000 });
   await started; recoverExpiredAiJobs(db, { now: 3000 }); const newClaim = claimAiJob(db, 'worker-b', { now: 4000, leaseMs: 10000 });
-  assert.equal(newClaim.id, queued.id); finish(resultFixture());
+  assert.equal(newClaim.id, queued.id); clockNow = 4001; finish(resultFixture());
   assert.equal((await oldWorker).status, 'discarded'); assert.equal(db.prepare('SELECT claim_token FROM ai_jobs').get().claim_token, newClaim.claim_token);
   assert.equal(db.prepare('SELECT count(*) n FROM ai_suggestions').get().n, 0);
+});
+
+test('publish checks the injected clock immediately before commit: before, at and after lease deadline', async t => {
+  for (const [publishNow, expected] of [[2999,'COMPLETED'],[3000,'discarded'],[3001,'discarded']]) {
+    await t.test(`publish time ${publishNow}`, async t => {
+      const note = noteFixture(`deadline-${publishNow}`), { db } = setup(t, { note }); grant(db, note); enqueue(db, note);
+      const provider = { identity: 'mock-v1', executionBoundary: 'MOCK', analyze: async () => resultFixture() };
+      let reads = 0;
+      const result = await runOneAiJob(db, { workerId: 'worker-a', provider, env: enabled, now: 2000, leaseMs: 1000, clock: () => reads++ === 0 ? 2001 : publishNow });
+      assert.equal(result.status, expected);
+      assert.equal(db.prepare('SELECT count(*) n FROM ai_suggestions').get().n, expected === 'COMPLETED' ? 1 : 0);
+      if (expected !== 'COMPLETED') {
+        assert.equal(db.prepare('SELECT status FROM ai_jobs').get().status, 'RUNNING');
+        assert.equal(recoverExpiredAiJobs(db, { now: publishNow })[0].status, 'QUEUED');
+      }
+    });
+  }
+});
+
+test('invalid-output and provider-error paths do not mutate an expired or differently owned lease', async t => {
+  const invalidNote = noteFixture('invalid-expired');
+  const { db } = setup(t, { note: invalidNote }); grant(db, invalidNote); enqueue(db, invalidNote);
+  const invalid = createMockProvider({ output: { ...resultFixture(), extra: true } });
+  let invalidClockReads = 0;
+  const invalidResult = await runOneAiJob(db, { workerId: 'worker-a', provider: invalid, env: enabled, now: 2000, leaseMs: 1000, clock: () => invalidClockReads++ === 0 ? 2001 : 3000 });
+  assert.deepEqual(invalidResult, { status: 'discarded', invoked: true, reason: 'lease_expired_or_lost' });
+  assert.equal(db.prepare('SELECT status FROM ai_jobs').get().status, 'RUNNING');
+  assert.equal(db.prepare('SELECT count(*) n FROM ai_suggestions').get().n, 0);
+
+  const failureNote = noteFixture('timeout-expired'); commitNote(db, failureNote, 1); grant(db, failureNote); enqueue(db, failureNote);
+  const timeout = { identity: 'mock-v1', executionBoundary: 'MOCK', analyze: async () => { throw new Error('synthetic timeout'); } };
+  let failureClockReads = 0;
+  const failureResult = await runOneAiJob(db, { workerId: 'worker-a', provider: timeout, env: enabled, now: 4000, leaseMs: 1000, clock: () => failureClockReads++ === 0 ? 4001 : 5000 });
+  assert.deepEqual(failureResult, { status: 'discarded', invoked: true, reason: 'lease_expired_or_lost' });
+  assert.equal(db.prepare("SELECT status FROM ai_jobs WHERE note_id=?").get(failureNote.id).status, 'RUNNING');
 });
 
 test('server epoch change cancels an otherwise current job before provider dispatch', async t => {
@@ -226,17 +368,17 @@ test('server epoch change cancels an otherwise current job before provider dispa
   db.prepare('UPDATE sync_server_meta SET server_epoch=? WHERE singleton=1').run('new-server-epoch');
   let calls = 0;
   const provider = createMockProvider({ output: resultFixture(), onInvoke: () => calls++ });
-  const result = await runOneAiJob(db, { workerId: 'worker-a', provider, env: enabled, now: 2000 });
+  const result = await runOneAiJob(db, { workerId: 'worker-a', provider, env: enabled, now: 2000, clock: () => 2001 });
   assert.equal(result.status, 'canceled'); assert.equal(result.reason, 'server_epoch_changed'); assert.equal(calls, 0);
 });
 
 test('provider timeout uses bounded retry and no automatic busy polling', async t => {
   const { db, note } = setup(t); grant(db, note); const job = enqueue(db, note);
   const failed = { identity: 'mock-v1', executionBoundary: 'MOCK', analyze: async () => { throw new Error('synthetic timeout'); } };
-  const result = await runOneAiJob(db, { workerId: 'worker-a', provider: failed, env: enabled, now: 2000 });
-  assert.deepEqual(result, { status: 'QUEUED', invoked: true, runAfter: 3000 });
-  assert.equal(db.prepare('SELECT run_after FROM ai_jobs WHERE id=?').get(job.id).run_after, 3000);
-  assert.deepEqual(await runOneAiJob(db, { workerId: 'worker-a', provider: failed, env: enabled, now: 2001 }), { status: 'idle', invoked: false });
+  const result = await runOneAiJob(db, { workerId: 'worker-a', provider: failed, env: enabled, now: 2000, clock: () => 2001 });
+  assert.deepEqual(result, { status: 'QUEUED', invoked: true, runAfter: 3001 });
+  assert.equal(db.prepare('SELECT run_after FROM ai_jobs WHERE id=?').get(job.id).run_after, 3001);
+  assert.deepEqual(await runOneAiJob(db, { workerId: 'worker-a', provider: failed, env: enabled, now: 2001, clock: () => 2002 }), { status: 'idle', invoked: false });
 });
 
 test('invalid provider payload fails closed; a rejected policy never invokes the provider', async t => {
@@ -245,7 +387,7 @@ test('invalid provider payload fails closed; a rejected policy never invokes the
   const rejection = await runOneAiJob(db, { workerId: 'worker-a', provider: createMockProvider({ output: resultFixture(), onInvoke: () => calls++ }), env: { ...enabled, NOTEOS_AI_INFERENCE_ENABLED: '0' }, now: 2000 });
   assert.equal(rejection.status, 'disabled'); assert.equal(calls, 0);
   const bad = createMockProvider({ output: { ...resultFixture(), extra: true }, onInvoke: () => calls++ });
-  const invalid = await runOneAiJob(db, { workerId: 'worker-a', provider: bad, env: enabled, now: 2000 });
+  const invalid = await runOneAiJob(db, { workerId: 'worker-a', provider: bad, env: enabled, now: 2000, clock: () => 2001 });
   assert.equal(invalid.status, 'FAILED_NEEDS_REVIEW'); assert.equal(calls, 1);
   assert.equal(db.prepare("SELECT status FROM ai_jobs WHERE id=?").get(job.id).status, 'FAILED_NEEDS_REVIEW');
   assert.equal(db.prepare('SELECT count(*) n FROM ai_suggestions').get().n, 0);
@@ -254,7 +396,7 @@ test('invalid provider payload fails closed; a rejected policy never invokes the
 test('verified output is published only as a sidecar and leaves Sync note state byte-for-byte unchanged', async t => {
   const { db, note } = setup(t); grant(db, note); enqueue(db, note);
   const before = snapshotSync(db);
-  const result = await runOneAiJob(db, { workerId: 'worker-a', provider: createMockProvider({ output: resultFixture() }), env: enabled, now: 2000 });
+  const result = await runOneAiJob(db, { workerId: 'worker-a', provider: createMockProvider({ output: resultFixture() }), env: enabled, now: 2000, clock: () => 2001 });
   assert.equal(result.status, 'COMPLETED');
   assert.deepEqual(snapshotSync(db), before);
   const suggestion = db.prepare('SELECT status,payload_json,provider_identity,target_server_version,content_sha256 FROM ai_suggestions').get();
