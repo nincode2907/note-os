@@ -71,6 +71,11 @@ function notifyLocalCommit() {
   try { const channel = new BroadcastChannel('noteos-local-commits'); channel.postMessage({ type: 'committed' }); channel.close(); } catch {}
 }
 
+function notifySyncStateChanged() {
+  try { globalThis.dispatchEvent?.(new Event('noteos:sync-state-changed')); } catch {}
+  try { const channel = new BroadcastChannel('noteos-local-commits'); channel.postMessage({ type: 'sync-state-changed' }); channel.close(); } catch {}
+}
+
 export function makeEmptyNote(now = Date.now(), id = crypto.randomUUID()) {
   return {
     id,
@@ -250,9 +255,10 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
     transaction.objectStore(SYNC_STATE_STORE).put({ key: 'recovery', value: { reason, serverHistory, at: Date.now() } }); await done;
   }
 
-  async function setSyncPaired(value) {
+  async function setSyncPaired(value, { notify = true } = {}) {
     const database = await openDatabase(); const transaction = database.transaction(SYNC_STATE_STORE, 'readwrite'); const done = transactionResult(transaction);
     transaction.objectStore(SYNC_STATE_STORE).put({ key: 'paired', value: Boolean(value) }); await done;
+    if (notify) notifySyncStateChanged();
   }
 
   async function getSyncState() {

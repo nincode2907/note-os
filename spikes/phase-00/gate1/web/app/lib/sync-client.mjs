@@ -13,10 +13,10 @@ async function request(action, body, fetcher) {
 
 /** @param {{repository:any,fetcher?:typeof fetch,locks?:LockManager,onState?:(state:string)=>void,initialize?:boolean}} options */
 export async function synchronize({ repository, fetcher = fetch, locks = globalThis.navigator?.locks, onState = (_state) => {}, initialize = false }) {
-  if (!locks?.request) throw new Error('This browser cannot safely coordinate sync workers across tabs.');
-  let result = { status: 'waiting', pulled: 0, pushed: 0 };
+  if (!locks?.request) return { status: 'needs-review', error: 'This browser cannot safely coordinate sync workers across tabs.', pulled: 0, pushed: 0, retryable: false };
+  let result = { status: 'waiting', pulled: 0, pushed: 0, retryable: false };
   await locks.request('noteos-web-sync', { mode: 'exclusive', ifAvailable: true }, async lock => {
-    if (!lock) { result.status = 'waiting'; return; }
+    if (!lock) { result.status = 'waiting'; result.retryable = false; return; }
     onState('syncing');
     const finalStatus = async fallback => {
       const overview = await repository.getSyncOverview?.();
@@ -34,9 +34,11 @@ export async function synchronize({ repository, fetcher = fetch, locks = globalT
       let server;
       try { server = await request('status', undefined, fetcher); }
       catch (error) {
-        if (error.status === 401) await repository.setSyncPaired(false);
-        if (error.status === 401) { result.status = await finalStatus('saved-device'); return; }
-        if (error.status === 503 || error instanceof TypeError || !globalThis.navigator?.onLine) { result.status = await finalStatus('pending'); return; }
+        if (error.status === 401) await repository.setSyncPaired(false, { notify: false });
+        if (error.status === 401) { result.status = 'needs-pairing'; return; }
+        if (error.status === 408 || error.status === 429 || error.status >= 500 || error instanceof TypeError || !globalThis.navigator?.onLine) {
+          result.status = 'waiting-connection'; result.retryable = true; result.error = error.message; return;
+        }
         throw error;
       }
       const previous = local.state.history ?? null;
@@ -75,7 +77,12 @@ export async function synchronize({ repository, fetcher = fetch, locks = globalT
             }
             else if ((error.status === 400 || error.status === 413) && repository.quarantineSyncOperation) await repository.quarantineSyncOperation(op.operationId, error.message);
             else {
-              result.status = await finalStatus('pending');
+              if (error.status === 401) {
+                await repository.setSyncPaired(false, { notify: false });
+                result.status = 'needs-pairing';
+              } else if (error.status === 408 || error.status === 429 || error.status >= 500 || error instanceof TypeError || !globalThis.navigator?.onLine) {
+                result.status = 'waiting-connection'; result.retryable = true;
+              } else result.status = 'needs-review';
               result.error = error.message;
               result.serverCursor = (await repository.getSyncState()).state.history?.serverCursor ?? 0;
               return;
@@ -87,9 +94,16 @@ export async function synchronize({ repository, fetcher = fetch, locks = globalT
         await new Promise(resolve => setTimeout(resolve, 0));
       }
       result.status = await finalStatus('pending');
+      result.retryable = result.status === 'pending';
       result.serverCursor = (await repository.getSyncState()).state.history?.serverCursor ?? 0;
     } catch (error) {
-      if (error.status === undefined && (error instanceof TypeError || !globalThis.navigator?.onLine)) { result.status = await finalStatus('pending'); result.error = error.message; return; }
+      if (error.status === 401) {
+        await repository.setSyncPaired(false, { notify: false });
+        result.status = 'needs-pairing'; result.error = error.message; return;
+      }
+      if (error.status === 408 || error.status === 429 || error.status >= 500 || error.status === undefined && (error instanceof TypeError || !globalThis.navigator?.onLine)) {
+        result.status = 'waiting-connection'; result.retryable = true; result.error = error.message; return;
+      }
       result.status = 'needs-review'; result.error = error.message; throw error;
     } finally { onState(result.status); }
   });

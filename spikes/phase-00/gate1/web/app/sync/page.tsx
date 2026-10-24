@@ -22,8 +22,10 @@ export default function SyncSetup() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [defaultEnrollment, setDefaultEnrollment] = useState(false);
   const [overview, setOverview] = useState<any>(null);
-  const [syncStatus, setSyncStatus] = useState('Saved on device');
+  const [syncStatus, setSyncStatus] = useState('Saved on this device');
   const [enrollmentSummary, setEnrollmentSummary] = useState('');
+  const [localSummary, setLocalSummary] = useState<any>(null);
+  const [standalone, setStandalone] = useState(false);
   const repository = createNotesRepository();
 
   async function api(action: string, data?: any) {
@@ -63,7 +65,13 @@ export default function SyncSetup() {
     }
   }
   async function refreshOverview() { try { setOverview(await repository.getSyncOverview()); } catch { setOverview(null); } }
-  useEffect(() => { setOrigin(location.origin); void connection(); void refreshOverview(); }, []);
+  useEffect(() => {
+    setOrigin(location.origin);
+    setStandalone(window.matchMedia('(display-mode: standalone)').matches || (navigator as any).standalone === true);
+    void discoverLocal().then(next => setLocalSummary({ noteCount: next.noteCount, recordingCount: next.recordingCount, databasePresent: next.databasePresent }))
+      .catch(() => setLocalSummary({ unavailable: true }));
+    void connection(); void refreshOverview();
+  }, []);
   async function run(action: () => Promise<void>) {
     if (busy) return; setBusy(true); setError('');
     try { await action(); } catch (cause: any) { setError(cause.message); } finally { setBusy(false); }
@@ -78,18 +86,27 @@ export default function SyncSetup() {
     const before = local?.candidates.filter((row: any) => row.enrolled).length ?? 0, count = selectedIds.length;
     await repository.setSyncEnrollment(selectedIds, true);
     setEnrollmentSummary(`Enrollment count: ${before} before · ${before + count} after. ${count} notes were added to this browser’s approved sync scope.`);
-    setLocal(await discoverLocal()); setSelectedIds([]);
+    const next = await discoverLocal(); setLocal(next); setLocalSummary({ noteCount: next.noteCount, recordingCount: next.recordingCount, databasePresent: next.databasePresent }); setSelectedIds([]);
   }
   async function syncNow() {
     const result = await synchronize({ repository, initialize: true, onState: value => setSyncStatus(value) });
-    setSyncStatus(({ 'needs-review': 'Needs review', synced: 'Text synced', pending: 'Pending', 'media-local-only': 'Audio stays on this device', 'saved-device': 'Saved on device' } as Record<string,string>)[result.status] ?? 'Saved on device');
+    setSyncStatus(({ 'needs-review': 'Needs review', synced: 'Synced to Mac', pending: 'Waiting to sync', 'waiting-connection': 'Waiting for connection', 'media-local-only': 'Audio stays on this device', 'needs-pairing': 'Pair this installation', 'saved-device': 'Saved on this device' } as Record<string,string>)[result.status] ?? 'Saved on this device');
     setLocal(await discoverLocal()); await refreshOverview(); await connection();
   }
   return <div className="sync-setup">
     <header className="page-heading"><div><p className="eyebrow">Private connection</p><h1 className="page-title">Sync Setup</h1><p className="page-lede">Prepare a connection at your own pace.</p></div></header>
     <div className="notice" role="status"><strong>Text sync only.</strong> Audio bytes are never transferred, Delete Forever stays local, and no note is enrolled until you approve its scope here.</div>
+    <section className="backup-panel" aria-label="Home Screen app storage">
+      <h2 className="section-title">Install noteOS</h2>
+      <p>{standalone
+        ? 'This Home Screen installation has its own local notes store. Safari data remains in Safari; nothing has been copied or deleted.'
+        : 'If you add noteOS to the Home Screen, that app may have a separate local notes store from this browser tab.'}</p>
+      <p>{localSummary?.unavailable ? 'The local note count is unavailable in this browser. No database was created or changed to check it.' : localSummary ? `${localSummary.noteCount} local notes and ${localSummary.recordingCount} local recordings in this installation.` : 'Checking this installation’s local note count…'}</p>
+      {server && <p>{server.noteCount} already-approved notes on the private server. Pairing a new installation pulls those records; it does not enroll this installation’s local notes.</p>}
+      <Link className="btn btn-secondary" href="/pwa-guide">Install and Safari → Home Screen guide</Link>
+    </section>
     <section className="backup-panel"><h2 className="section-title">Saved locally</h2>
-      <p>Current origin: <code className="sync-origin">{origin}</code></p><p>Localhost, the private HTTPS address, and each browser on each device have separate storage. Saved locally does not mean synced.</p>
+      <p>Current origin: <code className="sync-origin">{origin}</code></p><p>Safari, the Home Screen app, localhost, the private HTTPS address, and each browser have separate storage. Saved locally does not mean synced.</p>
       <button className="btn btn-secondary" disabled={busy} onClick={() => run(inspect)}>Inspect this browser</button>
       {local && <div className="sync-inventory"><p>{local.noteCount} local notes · {local.recordingCount} local recordings · {local.candidates.filter((row: any) => row.enrolled).length} enrolled</p><p>{local.excludedCount} notes are currently excluded. Notes with explicit DEVICE_ONLY privacy or recordings are never offered for this text-only sync.</p>
         {enrollmentSummary && <p role="status">{enrollmentSummary}</p>}

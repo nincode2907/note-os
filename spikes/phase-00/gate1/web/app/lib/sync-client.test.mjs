@@ -70,7 +70,7 @@ function serverFor(fixture, { outageAt = Infinity, loseAckAt = Infinity } = {}) 
 test('150 same-note revisions drain in bounded cycles and an outage leaves a durable Pending queue', async () => {
   const state = fixture();
   const first = await synchronize({ repository: state.repository, fetcher: serverFor(state, { outageAt: 101 }), locks: lockManager() });
-  assert.equal(first.status, 'pending');
+  assert.equal(first.status, 'waiting-connection');
   assert.equal(first.pushed, 100);
   assert.equal(state.rows.length, 50);
   assert.equal(state.acked.length, 100);
@@ -88,7 +88,7 @@ test('150 same-note revisions drain in bounded cycles and an outage leaves a dur
 test('lost ACK on a later operation replays the stable ID without duplicating the server mutation', async () => {
   const state = fixture();
   const first = await synchronize({ repository: state.repository, fetcher: serverFor(state, { loseAckAt: 125 }), locks: lockManager() });
-  assert.equal(first.status, 'pending');
+  assert.equal(first.status, 'waiting-connection');
   assert.equal(first.pushed, 124);
   assert.equal(state.rows.length, 26);
   const lostId = queue()[124].operationId;
@@ -118,4 +118,31 @@ test('a push conflict blocks later same-note revisions while unrelated notes con
   assert.deepEqual(attempted, ['same-note', 'other-note']);
   assert.equal(state.rows.length, 0);
   assert.equal(state.acked.length, 1);
+});
+
+test('an unreachable paired server never reports synced, even with an empty outbox', async () => {
+  const state = fixture(0);
+  const result = await synchronize({
+    repository: state.repository,
+    fetcher: async () => { throw new TypeError('Tailnet server unreachable'); },
+    locks: lockManager(),
+  });
+  assert.equal(result.status, 'waiting-connection');
+  assert.equal(result.retryable, true);
+});
+
+test('transient pull failures wait for connection and expired pairing is reported separately', async () => {
+  const state = fixture(0);
+  let paired = true;
+  state.repository.setSyncPaired = async value => { paired = value; };
+  const unavailable = await synchronize({ repository: state.repository, locks: lockManager(), fetcher: async url => {
+    if (String(url).endsWith('/status')) return jsonResponse({ serverEpoch: 'epoch-a', serverCursor: 0 });
+    return jsonResponse({ error: 'temporarily unavailable' }, 503);
+  } });
+  assert.equal(unavailable.status, 'waiting-connection');
+  assert.equal(unavailable.retryable, true);
+  const expired = await synchronize({ repository: state.repository, locks: lockManager(), fetcher: async () => jsonResponse({ error: 'authentication_required' }, 401) });
+  assert.equal(expired.status, 'needs-pairing');
+  assert.equal(expired.retryable, false);
+  assert.equal(paired, false);
 });

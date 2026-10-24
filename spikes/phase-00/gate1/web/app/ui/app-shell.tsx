@@ -17,6 +17,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [usage, setUsage] = useState('Local storage');
   useEffect(() => {
+    if (!('serviceWorker' in navigator)) return;
+    let alive = true;
+    const register = () => {
+      void navigator.serviceWorker.register('/sw.js', { scope: '/', updateViaCache: 'none' })
+        .then(registration => { if (alive) return registration.update(); })
+        .catch(() => {});
+    };
+    register();
+    const onVisible = () => { if (document.visibilityState === 'visible') register(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { alive = false; document.removeEventListener('visibilitychange', onVisible); };
+  }, []);
+  useEffect(() => {
     let active = true;
     navigator.storage?.persist?.().catch(() => false);
     navigator.storage?.estimate?.().then((result) => {
