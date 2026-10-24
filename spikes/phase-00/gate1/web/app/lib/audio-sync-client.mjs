@@ -9,7 +9,7 @@ async function api(action, { method = 'GET', body, binaryBody, expectBinary = fa
   const response = await fetcher(`/api/v1/sync/media/${action}`, { method, credentials: 'same-origin', cache: 'no-store', headers: binaryBody ? { 'Content-Type': 'application/octet-stream', 'X-NoteOS-Sync': '1' } : body === undefined ? {} : { 'Content-Type': 'application/json', 'X-NoteOS-Sync': '1' }, ...(body === undefined && binaryBody === undefined ? {} : { body: binaryBody ?? JSON.stringify(body) }) });
   if (response.status === 204) return null;
   const data = expectBinary ? response : await response.json();
-  if (!response.ok) throw Object.assign(new Error(expectBinary ? 'Audio transfer request failed.' : data.error ?? 'Audio transfer request failed.'), { status: response.status, body: data });
+  if (!response.ok) throw Object.assign(new Error(expectBinary ? `Audio transfer request failed (${response.status}: ${data.error ?? 'unknown'}).` : data.error ?? 'Audio transfer request failed.'), { status: response.status, body: data });
   return data;
 }
 async function digestBlob(blob) {
@@ -37,8 +37,16 @@ async function ensureLocalState(recordingId, repository = audioRepository) {
 async function uploadRecording(recording, state, fetcher, onProgress, repository) {
   const rows = await repository.chunks(recording.id);
   if (recording.status !== 'complete' || !rows.length) return { ...state, status: 'saved-local', error: 'incomplete_recording' };
+  if (rows.length !== recording.chunkCount || rows.some((row, index) => row.sequence !== index)) return { ...state, status: 'needs-review', conflict: { error: 'audio_local_chunks_incomplete' } };
   let manifest = await makeManifest(recording, rows, state.transferId ?? crypto.randomUUID(), state.serverVersion ?? 0);
+  if (state.sha256 && state.sha256 !== manifest.sha256) return { ...state, status: 'needs-review', conflict: { error: 'audio_local_bytes_changed', expectedSha256: state.sha256, localSha256: manifest.sha256 } };
   const requestedMetadataHash = audioMetadataHash(manifest.recording, manifest.anchors, manifest.sha256, manifest.totalBytes);
+  if (recording.ownerId === 'audio-sync') {
+    if (!state.sha256 || state.sha256 !== manifest.sha256) return { ...state, status: 'needs-review', conflict: { error: 'audio_local_bytes_changed' } };
+    if (state.lastMetadataHash === requestedMetadataHash) return state;
+    const updated = await api('metadata', { method: 'POST', body: { recordingId: recording.id, baseServerVersion: state.serverVersion, anchors: manifest.anchors, recordingMetadata: { title: manifest.recording.title, updatedAt: manifest.recording.updatedAt } }, fetcher });
+    return { ...state, status: 'verified-here', serverVersion: updated.serverVersion, serverCursor: updated.serverCursor, totalBytes: manifest.totalBytes, verifiedBytes: manifest.totalBytes, sha256: manifest.sha256, lastMetadataHash: requestedMetadataHash, audioCursor: state.audioCursor ?? 0 };
+  }
   if (state.lastMetadataHash && state.lastMetadataHash !== requestedMetadataHash) manifest = await makeManifest(recording, rows, crypto.randomUUID(), state.serverVersion ?? 0);
   const { source, ...wireManifest } = manifest;
   const start = await api('uploads', { method: 'POST', body: { manifest: wireManifest }, fetcher });
@@ -67,8 +75,7 @@ async function downloadChange(change, fetcher, onProgress, repository) {
   const transferId = state.status === 'downloading' && state.sha256 === change.sha256 ? state.transferId : crypto.randomUUID();
   const manifest = { protocolVersion: 1, transferId, baseServerVersion: change.serverVersion, recording: change.recording, anchors: change.anchors, sha256: change.sha256, totalBytes: change.totalBytes, chunkSize: change.chunkSize, chunks: change.chunks };
   validateAudioManifest(manifest);
-  if (state.status === 'verified-here' && state.sha256 === manifest.sha256) { await api('verify', { method: 'POST', body: { recordingId: change.recording.id, sha256: manifest.sha256 }, fetcher }); return state; }
-  state = { ...state, transferId, status: 'downloading', totalBytes: manifest.totalBytes, sha256: manifest.sha256, serverVersion: change.serverVersion, manifest };
+  state = { ...state, transferId, status: 'downloading', verifiedBytes: 0, totalBytes: manifest.totalBytes, sha256: manifest.sha256, serverVersion: change.serverVersion, manifest };
   await repository.putSyncState(state);
   const saved = new Map((await repository.listDownloadedChunks(transferId)).map(row => [row.sequence, row]));
   const blobParts = [];
@@ -82,6 +89,8 @@ async function downloadChange(change, fetcher, onProgress, repository) {
       await repository.putDownloadedChunk(transferId, index, part, manifest.chunks[index].sha256);
     }
     blobParts.push(part); onProgress?.({ recordingId: change.recording.id, verifiedBytes: blobParts.reduce((sum,item) => sum+item.size,0), totalBytes: manifest.totalBytes });
+    state = { ...state, verifiedBytes: blobParts.reduce((sum,item) => sum+item.size,0) };
+    await repository.putSyncState(state);
   }
   const blob = new Blob(blobParts, { type: manifest.recording.mimeType });
   if (await digestBlob(blob) !== manifest.sha256 || blob.size !== manifest.totalBytes) throw new Error('audio_object_digest_mismatch');
@@ -94,8 +103,50 @@ async function downloadChange(change, fetcher, onProgress, repository) {
     await repository.putSyncState(conflict); return conflict;
   }
   await api('verify', { method: 'POST', body: { recordingId: recording.id, sha256: manifest.sha256 }, fetcher });
-  const next = { ...state, status: 'verified-here', verifiedBytes: manifest.totalBytes, totalBytes: manifest.totalBytes, sha256: manifest.sha256 };
+  const next = { ...state, status: 'verified-here', verifiedBytes: manifest.totalBytes, totalBytes: manifest.totalBytes, sha256: manifest.sha256, lastMetadataHash: audioMetadataHash(manifest.recording, manifest.anchors, manifest.sha256, manifest.totalBytes) };
   await repository.putSyncState(next); return next;
+}
+
+async function verifyExistingLocalMedia(change, fetcher, repository) {
+  const id = change.recording.id;
+  const local = await repository.get(id);
+  if (!local) return { status: 'missing' };
+  if (local.id !== id || local.noteId !== change.recording.noteId) return { status: 'collision', local };
+  const rows = await repository.chunks(id);
+  if (local.status !== 'complete' || !rows.length || rows.some((row, index) => row.sequence !== index) || rows.length !== local.chunkCount) {
+    return local.ownerId === 'audio-sync' ? { status: 'damaged', local } : { status: 'collision', local };
+  }
+  const localManifest = await makeManifest(local, rows, crypto.randomUUID(), 0);
+  if (localManifest.sha256 !== change.sha256 || localManifest.totalBytes !== change.totalBytes) {
+    return local.ownerId === 'audio-sync' ? { status: 'damaged', local } : { status: 'collision', local };
+  }
+  const expectedMetadataHash = audioMetadataHash(change.recording, change.anchors, change.sha256, change.totalBytes);
+  const actualMetadataHash = audioMetadataHash(localManifest.recording, localManifest.anchors, localManifest.sha256, localManifest.totalBytes);
+  if (actualMetadataHash !== expectedMetadataHash) return { status: 'metadata-conflict', local, localManifest };
+  await api('verify', { method: 'POST', body: { recordingId: id, sha256: change.sha256 }, fetcher });
+  const state = await ensureLocalState(id, repository);
+  const verified = { ...state, status: 'verified-here', sha256: change.sha256, totalBytes: change.totalBytes, verifiedBytes: change.totalBytes, serverVersion: change.serverVersion, lastMetadataHash: expectedMetadataHash };
+  await repository.putSyncState(verified);
+  return { status: 'verified', state: verified };
+}
+
+async function processChange(change, fetcher, onProgress, repository) {
+  const approval = await repository.getSyncApproval(change.recording.noteId);
+  if (!approval?.approved) return 'not-approved';
+  const local = await verifyExistingLocalMedia(change, fetcher, repository);
+  if (local.status === 'verified') return 'verified';
+  let state = await ensureLocalState(change.recording.id, repository);
+  if (local.status === 'collision' || local.status === 'metadata-conflict') {
+    const conflict = { ...state, status: 'needs-review', sha256: change.sha256, conflict: { error: local.status === 'collision' ? 'audio_local_recording_collision' : 'audio_metadata_changed', remote: { ...change, recording: change.recording, anchors: change.anchors }, serverVersion: change.serverVersion }, localRecordingId: change.recording.id };
+    await repository.putSyncState(conflict);
+    return 'needs-review';
+  }
+  if (local.status === 'damaged') {
+    state = { ...state, status: 'needs-download', sha256: change.sha256, serverVersion: change.serverVersion };
+    await repository.putSyncState(state);
+  }
+  await downloadChange(change, fetcher, onProgress, repository);
+  return 'downloaded';
 }
 
 /** Runs inside the existing text sync cycle; all audio work is independently resumable and best-effort. */
@@ -105,14 +156,16 @@ export async function synchronizeAudio({ fetcher = fetch, locks = globalThis.nav
   await locks.request('noteos-web-audio-sync', { mode: 'exclusive', ifAvailable: true }, async lock => {
     if (!lock) { result.status = 'waiting'; return; }
     try {
-      await api('status', { fetcher });
+      const serverStatus = await api('status', { fetcher });
       const approvals = await repository.listSyncApprovals();
       const discovered = [];
       for (const approval of approvals) {
         const approved = await api('approve', { method: 'POST', body: { noteId: approval.noteId, approved: approval.approved === true }, fetcher });
-        if (approval.approved === true) discovered.push(...(approved.recordings ?? []));
+        if (approval.approved === true && approved.approved === true) discovered.push(...(approved.recordings ?? []));
       }
       for (const recording of await repository.listSyncCandidates()) {
+        const readiness = await repository.getAudioSyncReadiness?.(recording.noteId);
+        if (readiness && (!readiness.textAcknowledged || !readiness.enrolled)) continue;
         const state = await ensureLocalState(recording.id, repository);
         if (state.status === 'needs-review') continue;
         let updated;
@@ -127,15 +180,39 @@ export async function synchronizeAudio({ fetcher = fetch, locks = globalThis.nav
         await repository.putSyncState(updated); result.transferred++;
       }
       const cursorState = await repository.getSyncStateForRecording('__cursor__') ?? { recordingId: '__cursor__', audioCursor: 0 };
-      const page = await api('changes', { method: 'POST', body: { protocolVersion: 1, cursor: cursorState.audioCursor ?? 0, limit: 100 }, fetcher });
-      const changes = [...new Map([...discovered, ...page.changes].map(change => [`${change.recording.id}:${change.serverVersion}`, change])).values()];
-      for (const change of changes) {
-        const approved = await repository.getSyncApproval(change.recording.noteId);
-        if (!approved?.approved) continue;
-        if (change.deviceVerified) { result.transferred++; continue; }
-        await downloadChange(change, fetcher, onProgress, repository); result.transferred++;
+      let epoch = serverStatus.serverEpoch;
+      let cursor = cursorState.audioEpoch === epoch ? cursorState.audioCursor ?? 0 : 0;
+      const processed = new Set();
+      for (const change of discovered) {
+        const key = `${change.recording.id}:${change.serverVersion}`;
+        if (processed.has(key)) continue;
+        processed.add(key); await processChange(change, fetcher, onProgress, repository); result.transferred++;
       }
-      await repository.putSyncState({ recordingId: '__cursor__', audioCursor: page.nextCursor });
+      let restartedForEpoch = false;
+      for (let pageNumber = 0; pageNumber < 1000; pageNumber++) {
+        let page;
+        try { page = await api('changes', { method: 'POST', body: { protocolVersion: 1, cursor, limit: 100 }, fetcher }); }
+        catch (error) {
+          if (error.status === 409 && error.body?.error === 'cursor_ahead' && error.body.serverEpoch && error.body.serverEpoch !== epoch && !restartedForEpoch) {
+            epoch = error.body.serverEpoch; cursor = 0; restartedForEpoch = true; pageNumber--; continue;
+          }
+          throw error;
+        }
+        if (page.serverEpoch !== epoch) {
+          if (restartedForEpoch) throw new Error('Audio server epoch changed repeatedly during recovery.');
+          epoch = page.serverEpoch; cursor = 0; restartedForEpoch = true; pageNumber--; continue;
+        }
+        for (const change of page.changes) {
+          const key = `${change.recording.id}:${change.serverVersion}`;
+          if (processed.has(key)) continue;
+          await processChange(change, fetcher, onProgress, repository); processed.add(key); result.transferred++;
+        }
+        if (page.nextCursor < cursor || (page.hasMore && page.nextCursor === cursor)) throw new Error('Audio cursor did not advance while more changes were available.');
+        cursor = page.nextCursor;
+        await repository.putSyncState({ recordingId: '__cursor__', audioCursor: cursor, audioEpoch: epoch });
+        if (!page.hasMore) break;
+        if (pageNumber === 999) throw new Error('Audio changes reached the bounded recovery page limit.');
+      }
       result.status = result.transferred ? 'transferred' : 'idle';
     } catch (error) {
       result.status = error.status === 503 ? 'transfer-unavailable' : error.status === 401 ? 'needs-pairing' : error.status === 409 ? 'needs-review' : 'waiting-connection';

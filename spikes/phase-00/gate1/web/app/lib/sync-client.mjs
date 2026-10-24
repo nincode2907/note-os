@@ -69,7 +69,7 @@ export async function synchronize({ repository, fetcher = fetch, locks = globalT
           const payload = { protocolVersion: 1, operations: [{ operationId: op.operationId, entityId: op.entityId, baseServerVersion: currentBaseline?.serverVersion ?? 0, ownerApproved: true, recordingCount: 0, type: 'upsert', recordJson: op.recordJson }] };
           try {
             const pushed = await request('push', payload, fetcher);
-            await repository.acknowledgeSyncOperations(pushed.acknowledgements.map(ack => ({ operationId: ack.operationId, baseline: { id: ack.id, serverVersion: ack.serverVersion, localRevision: ack.localRevision, contentHash: ack.contentHash, lifecycle: ack.lifecycle } })), { serverEpoch: pushed.serverEpoch, serverCursor: pushed.serverCursor });
+            await repository.acknowledgeSyncOperations(pushed.acknowledgements.map(ack => ({ operationId: ack.operationId, baseline: { id: ack.id, serverVersion: ack.serverVersion, localRevision: ack.localRevision, contentHash: ack.contentHash, lifecycle: ack.lifecycle, privacy: pendingRecord.privacy } })), { serverEpoch: pushed.serverEpoch, serverCursor: pushed.serverCursor });
             result.pushed += pushed.acknowledgements.length;
           } catch (error) {
             if (error.status === 409 && error.body?.conflict) {

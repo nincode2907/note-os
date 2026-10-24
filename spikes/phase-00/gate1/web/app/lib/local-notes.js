@@ -193,6 +193,39 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
     } catch (error) { abort(transaction, error); try { await done; } catch {} throw error; }
   }
 
+  async function authorizePrivateServerAudio(noteId, { confirmDeviceOnlyChange = false } = {}) {
+    if (typeof noteId !== 'string' || !noteId) throw new TypeError('A note must be selected explicitly.');
+    const database = await openDatabase();
+    const tx = database.transaction([STORE_NAME, SYNC_ENROLLMENT_STORE, SYNC_OUTBOX_STORE, SYNC_BASELINES_STORE], 'readwrite');
+    const done = transactionResult(tx);
+    try {
+      const notes = tx.objectStore(STORE_NAME), note = await requestResult(notes.get(noteId));
+      if (!note) throw abort(tx, new NoteNotFoundError(noteId));
+      if (note.privacy === 'DEVICE_ONLY' && confirmDeviceOnlyChange !== true) throw abort(tx, new NoteStateError('This note is DEVICE_ONLY. Confirm the privacy change explicitly before authorizing private-server sync.'));
+      const updated = note.privacy === 'PRIVATE_SERVER' ? note : { ...note, privacy: 'PRIVATE_SERVER', revision: note.revision + 1, updatedAt: Date.now() };
+      if (updated !== note) notes.put(updated);
+      tx.objectStore(SYNC_ENROLLMENT_STORE).put({ id: noteId, optedIn: true, updatedAt: Date.now() });
+      const baseline = await requestResult(tx.objectStore(SYNC_BASELINES_STORE).get(noteId));
+      if (baseline?.privacy !== 'PRIVATE_SERVER') {
+        tx.objectStore(SYNC_OUTBOX_STORE).add({ operationId: crypto.randomUUID(), entityId: noteId, localRevision: updated.revision, baseServerVersion: baseline?.serverVersion ?? 0, ownerApproved: true, type: 'upsert', purpose: 'audio-privacy', recordJson: canonicalJson(updated), createdAt: Date.now() });
+      }
+      await done; notifyLocalCommit();
+      return { note: updated, textAcknowledged: baseline?.privacy === 'PRIVATE_SERVER', enrolled: true };
+    } catch (error) { abort(tx, error); try { await done; } catch {} throw error; }
+  }
+
+  async function getAudioSyncReadiness(noteId) {
+    const database = await openDatabase();
+    const tx = database.transaction([STORE_NAME, SYNC_BASELINES_STORE, SYNC_ENROLLMENT_STORE], 'readonly');
+    const [note, baseline, enrollment] = await Promise.all([
+      requestResult(tx.objectStore(STORE_NAME).get(noteId)),
+      requestResult(tx.objectStore(SYNC_BASELINES_STORE).get(noteId)),
+      requestResult(tx.objectStore(SYNC_ENROLLMENT_STORE).get(noteId)),
+    ]);
+    await transactionResult(tx);
+    return { privacy: note?.privacy, baselinePrivacy: baseline?.privacy, serverVersion: baseline?.serverVersion ?? 0, enrolled: enrollment?.optedIn === true, textAcknowledged: Boolean(note && baseline?.privacy === note.privacy && ['PRIVATE_SERVER', 'CLOUD_ALLOWED'].includes(note.privacy)) };
+  }
+
   async function setDefaultSyncEnrollment(value) {
     const database = await openDatabase();
     const transaction = database.transaction(SYNC_STATE_STORE, 'readwrite');
@@ -205,7 +238,7 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
     const database = await openDatabase(); const transaction = database.transaction([SYNC_OUTBOX_STORE, RECORDINGS_STORE, STORE_NAME, SYNC_ENROLLMENT_STORE], 'readonly'); const done = transactionResult(transaction);
     const [rows, recordings, notes, enrolled] = await Promise.all([requestResult(transaction.objectStore(SYNC_OUTBOX_STORE).getAll()), requestResult(transaction.objectStore(RECORDINGS_STORE).getAll()), requestResult(transaction.objectStore(STORE_NAME).getAll()), requestResult(transaction.objectStore(SYNC_ENROLLMENT_STORE).getAll())]); await done;
     const audioNotes = new Set(recordings.map(row => row.noteId)), noteMap = new Map(notes.map(row => [row.id,row])), enrolledSet = new Set(enrolled.filter(row => row.optedIn).map(row => row.id));
-    return rows.filter(row => !audioNotes.has(row.entityId) && noteMap.get(row.entityId)?.privacy !== 'DEVICE_ONLY' && enrolledSet.has(row.entityId)).sort((a,b) => a.createdAt-b.createdAt || a.entityId.localeCompare(b.entityId) || a.localRevision-b.localRevision || a.operationId.localeCompare(b.operationId)).slice(0, limit);
+    return rows.filter(row => (row.purpose === 'audio-privacy' || !audioNotes.has(row.entityId)) && noteMap.get(row.entityId)?.privacy !== 'DEVICE_ONLY' && enrolledSet.has(row.entityId)).sort((a,b) => a.createdAt-b.createdAt || a.entityId.localeCompare(b.entityId) || a.localRevision-b.localRevision || a.operationId.localeCompare(b.operationId)).slice(0, limit);
   }
 
   async function getSyncOverview() {
@@ -221,7 +254,7 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
     const enrollmentSet = new Set(enrollments.filter(row => row.optedIn).map(row => row.id));
     const audioCounts = new Map();
     for (const recording of recordings) audioCounts.set(recording.noteId, (audioCounts.get(recording.noteId) ?? 0) + 1);
-    const eligible = outbox.filter(row => !audioCounts.has(row.entityId) && noteMap.get(row.entityId)?.privacy !== 'DEVICE_ONLY' && enrollmentSet.has(row.entityId));
+    const eligible = outbox.filter(row => (row.purpose === 'audio-privacy' || !audioCounts.has(row.entityId)) && noteMap.get(row.entityId)?.privacy !== 'DEVICE_ONLY' && enrollmentSet.has(row.entityId));
     const eligibleIds = new Set(eligible.map(row => row.operationId));
     const blocked = outbox.filter(row => !eligibleIds.has(row.operationId));
     const pendingNotes = new Set(eligible.map(row => row.entityId));
@@ -324,7 +357,7 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
         const lostAck = remote && entityOperations.find(operation => operation.localRevision === remote.revision && operation.recordJson === canonicalJson(remote));
         if (lostAck) {
           outbox.delete(lostAck.operationId);
-          baselines.put({ id: change.id, serverVersion: change.serverVersion, localRevision: remote.revision, contentHash: change.contentHash, lifecycle: change.lifecycle });
+          baselines.put({ id: change.id, serverVersion: change.serverVersion, localRevision: remote.revision, contentHash: change.contentHash, lifecycle: change.lifecycle, privacy: remote.privacy });
           continue;
         }
         if (localRecordings > 0) {
@@ -339,7 +372,7 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
               const copy = { ...remote, id: conflictId, title: `${remote.title || 'Untitled note'} (Sync conflict)`, revision: 0, updatedAt: Date.now(), lifecycle: remote.lifecycle };
               notes.add(copy); transaction.objectStore(SYNC_CONFLICTS_STORE).put({ id: conflictId, noteId: change.id, conflictNoteId: conflictId, kind: 'edit-edit', localOnly: true, status: 'needs-review', localRecord: current, remoteRecord: remote, serverCursor: change.cursor, serverEpoch, serverVersion: change.serverVersion, createdAt: Date.now() });
             }
-          } else if (!localPending && remote) baselines.put({ id: change.id, serverVersion: change.serverVersion, localRevision: current.revision, contentHash: change.contentHash, lifecycle: change.lifecycle });
+          } else if (!localPending && remote) baselines.put({ id: change.id, serverVersion: change.serverVersion, localRevision: current.revision, contentHash: change.contentHash, lifecycle: change.lifecycle, privacy: remote.privacy });
           else if (!remote) transaction.objectStore(SYNC_CONFLICTS_STORE).put({ id: `delete:${change.id}`, noteId: change.id, kind: 'edit-delete', localOnly: true, status: 'needs-review', localRecord: current, remoteRecord: null, serverCursor: change.cursor, serverEpoch, serverVersion: change.serverVersion, createdAt: Date.now() });
           if (localPending) for (const pending of entityOperations) {
             transaction.objectStore(SYNC_QUARANTINE_STORE).put({ ...pending, reason: 'Blocked because a remote change arrived while this note had pending edits.', quarantinedAt: Date.now(), status: 'needs-review' });
@@ -355,7 +388,7 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
           }
         } else if (!current) { notes.add(remote); transaction.objectStore(SYNC_ENROLLMENT_STORE).put({ id: change.id, optedIn: true, updatedAt: Date.now() }); }
         else if (canonicalJson(current) !== canonicalJson(remote)) notes.put(remote);
-        baselines.put({ id: change.id, serverVersion: change.serverVersion, localRevision: remote?.revision ?? current?.revision ?? 0, contentHash: change.contentHash, lifecycle: change.lifecycle });
+        baselines.put({ id: change.id, serverVersion: change.serverVersion, localRevision: remote?.revision ?? current?.revision ?? 0, contentHash: change.contentHash, lifecycle: change.lifecycle, privacy: remote?.privacy ?? current?.privacy });
       }
       transaction.objectStore(SYNC_STATE_STORE).put({ key: 'history', serverEpoch, serverCursor });
       await done;
@@ -630,7 +663,7 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
     }
   }
 
-  return { list, get, hasExistingDatabase, create, createIfMissing, save, updateOrganization, setLifecycle, deleteForever, importNotes, snapshotArchive, importArchive, setSyncEnrollment, setDefaultSyncEnrollment, listSyncOutbox, getSyncState, getSyncOverview, quarantineSyncOperation, getSyncBaseline, setSyncPaired, saveSyncRecovery, recordSyncConflict, commitSyncPull, acknowledgeSyncOperations };
+  return { list, get, hasExistingDatabase, create, createIfMissing, save, updateOrganization, setLifecycle, deleteForever, importNotes, snapshotArchive, importArchive, setSyncEnrollment, authorizePrivateServerAudio, getAudioSyncReadiness, setDefaultSyncEnrollment, listSyncOutbox, getSyncState, getSyncOverview, quarantineSyncOperation, getSyncBaseline, setSyncPaired, saveSyncRecovery, recordSyncConflict, commitSyncPull, acknowledgeSyncOperations };
 }
 
 function assertAudioTimestamp(value, label) {
@@ -831,20 +864,24 @@ export function createAudioRepository(indexedDBFactory = globalThis.indexedDB, d
   }
   async function setSyncApproval(noteId, approved) {
     if (typeof approved !== 'boolean') throw new TypeError('Audio approval must be explicit.');
-    const database = await openDatabase(), tx = database.transaction([STORE_NAME, SYNC_BASELINES_STORE, AUDIO_SYNC_APPROVALS_STORE], 'readwrite'), done = transactionResult(tx);
+    const database = await openDatabase(), tx = database.transaction([STORE_NAME, SYNC_BASELINES_STORE, SYNC_ENROLLMENT_STORE, AUDIO_SYNC_APPROVALS_STORE], 'readwrite'), done = transactionResult(tx);
     try {
       const note = await requestResult(tx.objectStore(STORE_NAME).get(noteId));
       if (!note || !['PRIVATE_SERVER', 'CLOUD_ALLOWED'].includes(note.privacy)) throw abort(tx, new NoteStateError('Audio sync requires an existing note explicitly classified PRIVATE_SERVER or CLOUD_ALLOWED.'));
-      if (approved && !(await requestResult(tx.objectStore(SYNC_BASELINES_STORE).get(noteId)))) throw abort(tx, new NoteStateError('Sync this note text first, then approve audio for this note.'));
+      if (approved) {
+        const baseline = await requestResult(tx.objectStore(SYNC_BASELINES_STORE).get(noteId));
+        const enrollment = await requestResult(tx.objectStore(SYNC_ENROLLMENT_STORE).get(noteId));
+        if (!baseline || baseline.privacy !== note.privacy || enrollment?.optedIn !== true) throw abort(tx, new NoteStateError('Approve private-server text sync for this note and wait for its privacy setting to be acknowledged before approving audio.'));
+      }
       tx.objectStore(AUDIO_SYNC_APPROVALS_STORE).put({ noteId, approved, updatedAt: Date.now() });
       await done; notifySyncStateChanged(); return { noteId, approved };
     } catch (error) { try { await done; } catch {} throw error; }
   }
   async function listSyncCandidates() {
-    const database = await openDatabase(), tx = database.transaction([RECORDINGS_STORE, AUDIO_SYNC_APPROVALS_STORE, STORE_NAME], 'readonly'), done = transactionResult(tx);
-    const [recordings, approvals, notes] = await Promise.all([requestResult(tx.objectStore(RECORDINGS_STORE).getAll()), requestResult(tx.objectStore(AUDIO_SYNC_APPROVALS_STORE).getAll()), requestResult(tx.objectStore(STORE_NAME).getAll())]); await done;
-    const approved = new Set(approvals.filter(row => row.approved === true).map(row => row.noteId)), noteMap = new Map(notes.map(row => [row.id, row]));
-    return recordings.filter(row => row.status === 'complete' && approved.has(row.noteId) && ['PRIVATE_SERVER', 'CLOUD_ALLOWED'].includes(noteMap.get(row.noteId)?.privacy));
+    const database = await openDatabase(), tx = database.transaction([RECORDINGS_STORE, AUDIO_SYNC_APPROVALS_STORE, STORE_NAME, SYNC_BASELINES_STORE, SYNC_ENROLLMENT_STORE], 'readonly'), done = transactionResult(tx);
+    const [recordings, approvals, notes, baselines, enrollments] = await Promise.all([requestResult(tx.objectStore(RECORDINGS_STORE).getAll()), requestResult(tx.objectStore(AUDIO_SYNC_APPROVALS_STORE).getAll()), requestResult(tx.objectStore(STORE_NAME).getAll()), requestResult(tx.objectStore(SYNC_BASELINES_STORE).getAll()), requestResult(tx.objectStore(SYNC_ENROLLMENT_STORE).getAll())]); await done;
+    const approved = new Set(approvals.filter(row => row.approved === true).map(row => row.noteId)), noteMap = new Map(notes.map(row => [row.id, row])), baselineMap = new Map(baselines.map(row => [row.id,row])), enrolled = new Set(enrollments.filter(row => row.optedIn).map(row => row.id));
+    return recordings.filter(row => row.status === 'complete' && approved.has(row.noteId) && enrolled.has(row.noteId) && ['PRIVATE_SERVER', 'CLOUD_ALLOWED'].includes(noteMap.get(row.noteId)?.privacy) && baselineMap.get(row.noteId)?.privacy === noteMap.get(row.noteId)?.privacy);
   }
   async function getSyncStateForRecording(recordingId) {
     const database = await openDatabase(), tx = database.transaction(AUDIO_SYNC_STATE_STORE, 'readonly');
@@ -878,6 +915,7 @@ export function createAudioRepository(indexedDBFactory = globalThis.indexedDB, d
       const saved = { ...manifest.recording, status: 'complete', ownerId: 'audio-sync', chunkCount: localChunks.length, audioAnchors: manifest.anchors, syncState: 'verified-here', syncSha256: manifest.sha256, syncServerVersion: manifest.serverVersion ?? 1 };
       recordings.put(saved);
       const chunks = tx.objectStore(RECORDING_CHUNKS_STORE);
+      if (existing) for (const key of await requestResult(chunks.index('recordingId').getAllKeys(saved.id))) chunks.delete(key);
       for (let index = 0; index < localChunks.length; index++) chunks.put({ id: `${saved.id}:${index}`, recordingId: saved.id, sequence: index, blob: localChunks[index] });
       const remoteChunks = tx.objectStore(AUDIO_SYNC_CHUNKS_STORE);
       for (const row of await requestResult(remoteChunks.index('transferSequence').getAllKeys(IDBKeyRange.bound([manifest.transferId, 0], [manifest.transferId, Number.MAX_SAFE_INTEGER])))) remoteChunks.delete(row);
@@ -894,7 +932,15 @@ export function createAudioRepository(indexedDBFactory = globalThis.indexedDB, d
     const database = await openDatabase(), tx = database.transaction(RECORDINGS_STORE, 'readwrite'), done = transactionResult(tx), store = tx.objectStore(RECORDINGS_STORE);
     try {
       const local = await requestResult(store.get(recordingId)); if (!local) throw abort(tx, new NoteNotFoundError(recordingId));
-      const anchors = validateAudioAnchorSet(remote.anchors, recordingId, { durationMs: remote.recording.durationMs, durationKnown: remote.recording.durationMs > 0 });
+      const localAnchors = validateAudioAnchorSet(local.audioAnchors, recordingId, { durationMs: local.durationMs, durationKnown: local.durationMs > 0 });
+      const remoteAnchors = validateAudioAnchorSet(remote.anchors, recordingId, { durationMs: remote.recording.durationMs, durationKnown: remote.recording.durationMs > 0 });
+      const merged = new Map(localAnchors.items.map(anchor => [anchor.id, anchor]));
+      for (const anchor of remoteAnchors.items) {
+        const existing = merged.get(anchor.id);
+        if (!existing) merged.set(anchor.id, anchor);
+        else if (existing.offsetMs !== anchor.offsetMs || existing.label !== anchor.label || existing.createdAt !== anchor.createdAt) { const copy = { ...anchor, id: crypto.randomUUID() }; merged.set(copy.id, copy); }
+      }
+      const anchors = validateAudioAnchorSet({ version: 1, items: [...merged.values()] }, recordingId, { durationMs: Math.max(local.durationMs, remote.recording.durationMs), durationKnown: local.durationMs > 0 || remote.recording.durationMs > 0 });
       const updated = { ...local, ...remote.recording, id: local.id, noteId: local.noteId, status: local.status, ownerId: local.ownerId, audioAnchors: anchors, updatedAt: Math.max(local.updatedAt, remote.recording.updatedAt ?? 0) };
       store.put(updated); await done; notifySyncStateChanged(); return updated;
     } catch (error) { try { await done; } catch {} throw error; }
