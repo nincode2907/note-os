@@ -1,0 +1,47 @@
+
+> test:documents
+> npm --prefix packages/document-engine test
+
+
+> test
+> node --test tests/*.test.mjs
+
+✔ accepts empty and minimal v1 documents (3.757917ms)
+✔ empty document round-trips with its required empty content array (0.456291ms)
+✔ accepts supported blocks, marks, task lists, nested lists and attachment references (0.568458ms)
+✔ preserves Vietnamese combining marks without Unicode normalization (0.194416ms)
+✔ preserves Japanese Kanji, Hiragana, Katakana and punctuation (0.082667ms)
+✔ preserves actual mixed Japanese Kanji and Kana code points (0.071041ms)
+✔ preserves emoji including surrogate pairs and joined emoji sequences (0.065542ms)
+✔ plain text conversion preserves multiline input, blank lines and edge whitespace (0.110667ms)
+✔ empty plain text produces an empty document and a trailing newline remains observable (0.094833ms)
+✔ plain-text API rejects non-string input instead of coercing it (0.238666ms)
+✔ converts links to Markdown and keeps href and link text (4.044208ms)
+✔ projects nested lists and checklists with an explicit GFM warning (0.290792ms)
+✔ projects attachments with a warning and leaves the canonical reference intact (0.275125ms)
+✔ reports omitted formatting for plain-text projection (0.208375ms)
+✔ malformed JSON is explicit (0.061875ms)
+✔ rejects unsupported schema versions read-only without modifying input (0.799875ms)
+✔ unknown node types are unsupported rather than discarded (0.78175ms)
+✔ unknown marks are unsupported rather than stripped (0.521834ms)
+✔ unknown nested nodes and deeply nested marks remain unsupported and untouched (0.846167ms)
+✔ unknown node fields and attributes are kept out of the editable path (0.088584ms)
+✔ rejects partial/corrupt trees and schema-invalid nesting (0.401833ms)
+✔ rejects invalid known attributes and invalid link marks (0.092584ms)
+✔ plain text and Markdown warn when export drops code/list metadata (0.113709ms)
+✔ rejects executable and ambiguous link protocols (0.061541ms)
+✔ round-trips canonical JSON through serialization and parsing (0.385083ms)
+✔ editor JSON conversion wraps and validates schemaVersion 1 (0.080458ms)
+✔ repeated serialize/deserialize cycles remain stable (2.145958ms)
+✔ batched projection and serialization calls do not mutate canonical input (0.610459ms)
+✔ saved JSON fixture survives reload and still validates (1.641459ms)
+✔ exports never mutate canonical source objects (0.386416ms)
+✔ generative Unicode and whitespace cases preserve every input string (0.468959ms)
+ℹ tests 31
+ℹ suites 0
+ℹ pass 31
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 100.824417

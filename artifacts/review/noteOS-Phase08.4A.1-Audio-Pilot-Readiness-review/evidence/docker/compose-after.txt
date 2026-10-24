@@ -1,0 +1,10 @@
+NAME                      STATUS                  CONFIG FILES
+agent-corporation         exited(6)               /Users/buivannin/Desktop/workspace/personal/agent-corporation/compose.yml
+cross-neo-devkit          exited(1), running(4)   /Users/buivannin/Desktop/workspace/projects/cross-neo-devkit/docker-compose.yml
+db                        exited(1)               /Users/buivannin/Desktop/workspace/cross/net21/db/docker-compose.yml
+dev-hub-proxy             running(1)              /Users/buivannin/Desktop/workspace/personal/dev-hub/compose.proxy.yml
+memoryos                  running(6)              /Users/buivannin/Desktop/workspace/personal/memoryOS/docker-compose.yml
+memoryos-integration-05   running(3)              /private/tmp/memoryos-integration-05-ald02b/docker-compose.yml
+nest-room-match           exited(5)               /Users/buivannin/Desktop/workspace/personal/nest-room-match/docker-compose.yml,/Users/buivannin/Desktop/workspace/personal/nest-room-match/docker-compose.override.yml
+noteos                    running(2)              /Users/buivannin/Desktop/workspace/personal/note-os/docker-compose.web.yml,/Users/buivannin/Desktop/workspace/personal/note-os/docker-compose.phase081h-identity.yml,/Users/buivannin/Desktop/workspace/personal/note-os/docker-compose.phase082b-pilot.yml
+soulcore-p0               exited(2)               /Users/buivannin/Desktop/workspace/personal/soul-core/compose.yaml

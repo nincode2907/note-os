@@ -1,0 +1,12 @@
+NETWORK ID     NAME                                 DRIVER    SCOPE
+bba21d18f4ce   agent-corporation_default            bridge    local
+3e9994b3b2f5   bridge                               bridge    local
+00b4f042e26b   cross-network                        bridge    local
+339958dad8cc   dev-hub-proxy_default                bridge    local
+2f68a522b2e5   host                                 host      local
+0d33a9252430   memoryos-integration-05_default      bridge    local
+c7e179ae7ba3   memoryos_default                     bridge    local
+b63eedc4e9b7   nest-room-match_room-match-network   bridge    local
+9255101a10b8   none                                 null      local
+89a02cd1499a   noteos_default                       bridge    local
+14e916720082   soulcore-p0_default                  bridge    local

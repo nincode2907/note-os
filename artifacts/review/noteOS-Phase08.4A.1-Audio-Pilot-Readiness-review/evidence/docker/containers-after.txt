@@ -1,0 +1,32 @@
+CONTAINER ID   IMAGE                          COMMAND                  CREATED          STATUS                      PORTS                                              NAMES
+56914d24b452   memoryos-integration-05-web    "docker-entrypoint.s…"   13 minutes ago   Up 3 minutes                127.0.0.1:52720->3000/tcp                          memoryos-integration-05-web-1
+6f0a2f67c44e   memoryos-api:local             "memoryos-entrypoint…"   13 minutes ago   Up 13 minutes (healthy)     127.0.0.1:52721->8000/tcp                          memoryos-integration-05-api-1
+128084d8b1b9   mysql:8.0                      "docker-entrypoint.s…"   13 minutes ago   Up 13 minutes (healthy)     3306/tcp, 33060/tcp                                memoryos-integration-05-mysql-1
+221927250d89   noteos-web-local               "docker-entrypoint.s…"   4 hours ago      Up 4 hours (healthy)        127.0.0.1:15700->3000/tcp                          noteos-web-1
+14a3507d1a50   soulcore-p0-app                "/docker-entrypoint.…"   24 hours ago     Exited (143) 20 hours ago                                                      soulcore-p0-app-1
+c9a3acafb87f   mysql:8.4.7                    "docker-entrypoint.s…"   25 hours ago     Exited (137) 20 hours ago                                                      soulcore-p0-mysql-1
+eb8ac2901455   tailscale/tailscale:v1.104.2   "/usr/local/bin/cont…"   26 hours ago     Up 26 hours                                                                    noteos-tailscale-noteos-1
+4c6ba1ab1767   cross-cms:latest               "docker-php-entrypoi…"   27 hours ago     Up 27 hours                 443/tcp, 9000/tcp, 0.0.0.0:8081->80/tcp            cross-cms
+3cf3ab3555ff   3903f65e4e80                   "memoryos-entrypoint…"   46 hours ago     Up 44 minutes (healthy)                                                        memoryos-queue-1
+7a42898582f7   3903f65e4e80                   "memoryos-entrypoint…"   46 hours ago     Up 14 minutes (healthy)                                                        memoryos-ai-worker-1
+210b476371c2   memoryos-web                   "docker-entrypoint.s…"   46 hours ago     Up 13 minutes               127.0.0.1:15800->3000/tcp                          memoryos-web-1
+2f107e6e871c   3903f65e4e80                   "memoryos-entrypoint…"   46 hours ago     Up 46 hours (healthy)       127.0.0.1:15801->8000/tcp                          memoryos-api-1
+2f134d4834ab   mysql:8.0                      "docker-entrypoint.s…"   46 hours ago     Up 46 hours (healthy)       3306/tcp, 33060/tcp                                memoryos-mysql-1
+cc66ca3a6bf1   redis:7-alpine                 "docker-entrypoint.s…"   46 hours ago     Up 23 hours (healthy)       6379/tcp                                           memoryos-redis-1
+204d22659f46   cross-proxy:latest             "/docker-entrypoint.…"   2 days ago       Up 2 days                   0.0.0.0:8082->80/tcp                               cross-proxy
+eba16155fc15   cross-net21:latest             "docker-php-entrypoi…"   2 days ago       Up 2 days (unhealthy)       443/tcp, 2019/tcp, 443/udp, 0.0.0.0:8080->80/tcp   cross-net21
+f368353817fb   cross-kanri:latest             "docker-php-entrypoi…"   2 days ago       Exited (0) 2 days ago                                                          cross-kanri
+d06779f47da1   e8bb4264a40e                   "/docker-entrypoint.…"   4 days ago       Exited (0) 4 days ago       80/tcp, 127.0.0.1:15500->15500/tcp                 agent-corporation-web
+3027ccab8db9   284d0aa93e37                   "python -m uvicorn a…"   4 days ago       Exited (143) 4 days ago     127.0.0.1:15501->15501/tcp                         agent-corporation-api
+6f029e01985d   284d0aa93e37                   "python -m agent_cor…"   4 days ago       Exited (1) 4 days ago                                                          agent-corporation-runtime-worker
+12b2608576ba   284d0aa93e37                   "alembic -c apps/api…"   4 days ago       Exited (0) 4 days ago                                                          agent-corporation-migrate-1
+8e7a2944d073   postgres:18.6-alpine           "/bin/sh -ec 'set -a…"   4 days ago       Exited (0) 4 days ago       127.0.0.1:15510->5432/tcp                          agent-corporation-postgres
+647f539f19c7   284d0aa93e37                   "python scripts/dock…"   4 days ago       Exited (0) 4 days ago                                                          agent-corporation-bootstrap-1
+3cf6bbab311a   caddy:2-alpine                 "caddy run --config …"   2 weeks ago      Up 3 days                   443/tcp, 127.0.0.1:80->80/tcp, 2019/tcp, 443/udp   dev-hub-caddy
+df0c170712ba   nest-room-match-frontend       "docker-entrypoint.s…"   3 weeks ago      Exited (255) 2 weeks ago                                                       rm_frontend
+d19e4affe9f6   nest-room-match-backend        "docker-entrypoint.s…"   3 weeks ago      Exited (1) 2 weeks ago                                                         rm_backend
+3d990567c2a8   dpage/pgadmin4:8.4             "/entrypoint.sh"         4 weeks ago      Exited (137) 2 weeks ago                                                       rm_pgadmin
+aab950489d07   postgres:16-alpine             "docker-entrypoint.s…"   4 weeks ago      Exited (0) 2 weeks ago                                                         rm_postgres
+088afcbbe817   redis:alpine                   "docker-entrypoint.s…"   4 weeks ago      Exited (0) 2 weeks ago                                                         rm_redis
+ae7405b9af82   redis                          "docker-entrypoint.s…"   2 months ago     Up 2 days                   0.0.0.0:6379->6379/tcp                             cross-redis
+03e92740df18   mysql:8.0                      "docker-entrypoint.s…"   5 months ago     Exited (137) 25 hours ago                                                      mysql-local

@@ -1,0 +1,18 @@
+[
+  {
+    "browser": "chromium",
+    "status": "PASS",
+    "viewport": 1280,
+    "privacyAckGate": true,
+    "deviceOnlyConfirmation": true,
+    "externalRequests": 0
+  },
+  {
+    "browser": "webkit-mobile-width",
+    "status": "PASS",
+    "viewport": 390,
+    "privacyAckGate": true,
+    "deviceOnlyConfirmation": true,
+    "externalRequests": 0
+  }
+]

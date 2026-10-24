@@ -1,0 +1,10 @@
+Read-only runtime check after verification:
+
+noteOS Web status=running health=healthy
+Tailscale sidecar status=running
+Running noteOS Web environment: NOTEOS_SYNC_ENABLED=1
+Running noteOS Web environment: NOTEOS_AUDIO_SYNC_ENABLED is unset
+Base docker-compose.web.yml: NOTEOS_AUDIO_SYNC_ENABLED=0; NOTEOS_SYNC_ENABLED=0
+Active 08.2B Compose override sets NOTEOS_SYNC_ENABLED=1 and does not enable audio. Audio route requires NOTEOS_AUDIO_SYNC_ENABLED to equal 1.
+
+No production service was restarted and no production API/database/media request was issued.
