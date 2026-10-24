@@ -1,4 +1,5 @@
 import { assertHistoryContinuity } from './sync-protocol.mjs';
+import { synchronizeAudio } from './audio-sync-client.mjs';
 
 async function request(action, body, fetcher) {
   const response = await fetcher(`/api/v1/sync/${action}`, {
@@ -96,6 +97,8 @@ export async function synchronize({ repository, fetcher = fetch, locks = globalT
       result.status = await finalStatus('pending');
       result.retryable = result.status === 'pending';
       result.serverCursor = (await repository.getSyncState()).state.history?.serverCursor ?? 0;
+      // Audio is an independent, default-off transfer plane. Failures never change text Sync status.
+      result.audioSync = await synchronizeAudio({ fetcher, locks });
     } catch (error) {
       if (error.status === 401) {
         await repository.setSyncPaired(false, { notify: false });

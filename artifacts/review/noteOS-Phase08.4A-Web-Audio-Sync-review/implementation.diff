@@ -1,0 +1,1574 @@
+diff --git a/docker-compose.web.yml b/docker-compose.web.yml
+index 231e0c6..c4ba238 100644
+--- a/docker-compose.web.yml
++++ b/docker-compose.web.yml
+@@ -11,0 +12 @@ services:
++      NOTEOS_AUDIO_SYNC_ENABLED: "0"
+diff --git a/spikes/phase-00/gate1/web/Dockerfile b/spikes/phase-00/gate1/web/Dockerfile
+index b5d7e09..dfb8066 100644
+--- a/spikes/phase-00/gate1/web/Dockerfile
++++ b/spikes/phase-00/gate1/web/Dockerfile
+@@ -21 +21 @@ COPY --from=build /app/node_modules ./node_modules
+-COPY --from=build /app/sync-server/auth.mjs /app/sync-server/http.mjs /app/sync-server/storage.mjs /app/sync-server/cli.mjs ./sync-server/
++COPY --from=build /app/sync-server/auth.mjs /app/sync-server/http.mjs /app/sync-server/storage.mjs /app/sync-server/media-http.mjs /app/sync-server/media-storage.mjs /app/sync-server/cli.mjs ./sync-server/
+@@ -23 +23 @@ COPY --from=build /app/sync-server/migrations ./sync-server/migrations
+-COPY --from=build /app/app/lib/sync-protocol.mjs ./app/lib/sync-protocol.mjs
++COPY --from=build /app/app/lib/sync-protocol.mjs /app/lib/audio-anchors.mjs /app/lib/audio-sync-protocol.mjs ./app/lib/
+diff --git a/spikes/phase-00/gate1/web/app/api/v1/sync/[[...action]]/route.js b/spikes/phase-00/gate1/web/app/api/v1/sync/[[...action]]/route.js
+index d57184e..893b7fb 100644
+--- a/spikes/phase-00/gate1/web/app/api/v1/sync/[[...action]]/route.js
++++ b/spikes/phase-00/gate1/web/app/api/v1/sync/[[...action]]/route.js
+@@ -1,0 +2 @@ import { handleSync } from '../../../../../sync-server/http.mjs';
++import { handleAudioSync } from '../../../../../sync-server/media-http.mjs';
+@@ -7 +8,2 @@ async function handler(request, context) {
+-  return handleSync(request, (action ?? []).join('/'));
++  const path = (action ?? []).join('/');
++  return path.startsWith('media/') ? handleAudioSync(request, path) : handleSync(request, path);
+@@ -9 +11 @@ async function handler(request, context) {
+-export { handler as GET, handler as POST };
++export { handler as GET, handler as POST, handler as PUT };
+diff --git a/spikes/phase-00/gate1/web/app/lib/audio-storage.test.mjs b/spikes/phase-00/gate1/web/app/lib/audio-storage.test.mjs
+index aff5e35..914445d 100644
+--- a/spikes/phase-00/gate1/web/app/lib/audio-storage.test.mjs
++++ b/spikes/phase-00/gate1/web/app/lib/audio-storage.test.mjs
+@@ -33 +33 @@ test('v1 note database upgrades additively and preserves existing note bytes', a
+-  assert.equal(database.version, 4); assert.ok(database.objectStoreNames.contains('notes')); assert.ok(database.objectStoreNames.contains('recordings')); assert.ok(database.objectStoreNames.contains('recordingChunks'));
++  assert.equal(database.version, 5); assert.ok(database.objectStoreNames.contains('notes')); assert.ok(database.objectStoreNames.contains('recordings')); assert.ok(database.objectStoreNames.contains('recordingChunks'));
+@@ -34,0 +35 @@ test('v1 note database upgrades additively and preserves existing note bytes', a
++  for (const store of ['audioSyncApprovals','audioSyncState','audioSyncChunks']) assert.ok(database.objectStoreNames.contains(store));
+diff --git a/spikes/phase-00/gate1/web/app/lib/audio-sync-client.mjs b/spikes/phase-00/gate1/web/app/lib/audio-sync-client.mjs
+new file mode 100644
+index 0000000..ceb48c1
+--- /dev/null
++++ b/spikes/phase-00/gate1/web/app/lib/audio-sync-client.mjs
+@@ -0,0 +1,150 @@
++import { sha256 } from '@noble/hashes/sha2.js';
++import { createAudioRepository } from './local-notes.js';
++import { AUDIO_SYNC_CHUNK_BYTES, validateAudioManifest, audioMetadataHash } from './audio-sync-protocol.mjs';
++import { emptyAudioAnchorSet, validateAudioAnchorSet } from './audio-anchors.mjs';
++
++const audioRepository = createAudioRepository();
++const hex = bytes => Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('');
++async function api(action, { method = 'GET', body, binaryBody, expectBinary = false, fetcher = fetch } = {}) {
++  const response = await fetcher(`/api/v1/sync/media/${action}`, { method, credentials: 'same-origin', cache: 'no-store', headers: binaryBody ? { 'Content-Type': 'application/octet-stream', 'X-NoteOS-Sync': '1' } : body === undefined ? {} : { 'Content-Type': 'application/json', 'X-NoteOS-Sync': '1' }, ...(body === undefined && binaryBody === undefined ? {} : { body: binaryBody ?? JSON.stringify(body) }) });
++  if (response.status === 204) return null;
++  const data = expectBinary ? response : await response.json();
++  if (!response.ok) throw Object.assign(new Error(expectBinary ? 'Audio transfer request failed.' : data.error ?? 'Audio transfer request failed.'), { status: response.status, body: data });
++  return data;
++}
++async function digestBlob(blob) {
++  const hash = sha256.create();
++  for (let offset = 0; offset < blob.size; offset += AUDIO_SYNC_CHUNK_BYTES) hash.update(new Uint8Array(await blob.slice(offset, offset + AUDIO_SYNC_CHUNK_BYTES).arrayBuffer()));
++  return hex(hash.digest());
++}
++async function makeManifest(recording, rows, transferId, baseServerVersion) {
++  const source = new Blob(rows.map(row => row.blob), { type: recording.mimeType });
++  const whole = sha256.create(), chunks = [];
++  for (let offset = 0, index = 0; offset < source.size; offset += AUDIO_SYNC_CHUNK_BYTES, index++) {
++    const bytes = new Uint8Array(await source.slice(offset, offset + AUDIO_SYNC_CHUNK_BYTES).arrayBuffer());
++    whole.update(bytes); chunks.push({ index, byteLength: bytes.byteLength, sha256: hex(sha256(bytes)) });
++  }
++  const anchors = validateAudioAnchorSet(recording.audioAnchors ?? emptyAudioAnchorSet(recording.id), recording.id, { durationMs: recording.durationMs, durationKnown: recording.durationMs > 0 });
++  return { protocolVersion: 1, transferId, baseServerVersion, recording: { id: recording.id, noteId: recording.noteId, title: recording.title, mimeType: recording.mimeType, status: recording.status, createdAt: recording.createdAt, updatedAt: recording.updatedAt, durationMs: recording.durationMs, ...(recording.extensions ? { extensions: recording.extensions } : {}), ...(recording.nativeProvenance ? { nativeProvenance: recording.nativeProvenance } : {}) }, anchors, sha256: hex(whole.digest()), totalBytes: source.size, chunkSize: AUDIO_SYNC_CHUNK_BYTES, chunks, source };
++}
++async function ensureLocalState(recordingId, repository = audioRepository) {
++  const current = await repository.getSyncStateForRecording(recordingId);
++  if (current) return current;
++  const created = { recordingId, status: 'saved-local', transferId: crypto.randomUUID(), serverVersion: 0, audioCursor: 0 };
++  await repository.putSyncState(created); return created;
++}
++
++async function uploadRecording(recording, state, fetcher, onProgress, repository) {
++  const rows = await repository.chunks(recording.id);
++  if (recording.status !== 'complete' || !rows.length) return { ...state, status: 'saved-local', error: 'incomplete_recording' };
++  let manifest = await makeManifest(recording, rows, state.transferId ?? crypto.randomUUID(), state.serverVersion ?? 0);
++  const requestedMetadataHash = audioMetadataHash(manifest.recording, manifest.anchors, manifest.sha256, manifest.totalBytes);
++  if (state.lastMetadataHash && state.lastMetadataHash !== requestedMetadataHash) manifest = await makeManifest(recording, rows, crypto.randomUUID(), state.serverVersion ?? 0);
++  const { source, ...wireManifest } = manifest;
++  const start = await api('uploads', { method: 'POST', body: { manifest: wireManifest }, fetcher });
++  const received = new Set(start.received ?? []);
++  if (!start.alreadyCommitted) {
++    await repository.putSyncState({ ...state, transferId: manifest.transferId, manifest: wireManifest, status: 'uploading', totalBytes: manifest.totalBytes, verifiedBytes: [...received].reduce((sum,index) => sum + manifest.chunks[index].byteLength, 0) });
++    let verifiedBytes = 0;
++    for (const index of [...received]) verifiedBytes += manifest.chunks[index].byteLength;
++    for (let index = 0; index < manifest.chunks.length; index++) {
++      if (received.has(index)) continue;
++      const part = source.slice(index * AUDIO_SYNC_CHUNK_BYTES, index * AUDIO_SYNC_CHUNK_BYTES + manifest.chunks[index].byteLength);
++      await api(`uploads/${manifest.transferId}/chunks/${index}`, { method: 'PUT', binaryBody: part, fetcher });
++      verifiedBytes += part.size; await repository.putSyncState({ recordingId: recording.id, transferId: manifest.transferId, manifest: wireManifest, status: 'uploading', totalBytes: manifest.totalBytes, verifiedBytes, serverVersion: state.serverVersion ?? 0 });
++      onProgress?.({ recordingId: recording.id, verifiedBytes, totalBytes: manifest.totalBytes });
++    }
++  }
++  const committed = start.alreadyCommitted ? start : await api(`uploads/${manifest.transferId}/complete`, { method: 'POST', body: {}, fetcher });
++  if (committed.conflict) return { ...state, status: 'needs-review', conflict: committed };
++  const next = { recordingId: recording.id, transferId: manifest.transferId, status: 'verified-here', serverVersion: committed.serverVersion ?? state.serverVersion ?? 1, serverCursor: committed.serverCursor ?? 0, totalBytes: manifest.totalBytes, verifiedBytes: manifest.totalBytes, sha256: manifest.sha256, lastMetadataHash: audioMetadataHash(manifest.recording, manifest.anchors, manifest.sha256, manifest.totalBytes), audioCursor: state.audioCursor ?? 0 };
++  await repository.putSyncState(next);
++  return next;
++}
++
++async function downloadChange(change, fetcher, onProgress, repository) {
++  let state = await ensureLocalState(change.recording.id, repository);
++  const transferId = state.status === 'downloading' && state.sha256 === change.sha256 ? state.transferId : crypto.randomUUID();
++  const manifest = { protocolVersion: 1, transferId, baseServerVersion: change.serverVersion, recording: change.recording, anchors: change.anchors, sha256: change.sha256, totalBytes: change.totalBytes, chunkSize: change.chunkSize, chunks: change.chunks };
++  validateAudioManifest(manifest);
++  if (state.status === 'verified-here' && state.sha256 === manifest.sha256) { await api('verify', { method: 'POST', body: { recordingId: change.recording.id, sha256: manifest.sha256 }, fetcher }); return state; }
++  state = { ...state, transferId, status: 'downloading', totalBytes: manifest.totalBytes, sha256: manifest.sha256, serverVersion: change.serverVersion, manifest };
++  await repository.putSyncState(state);
++  const saved = new Map((await repository.listDownloadedChunks(transferId)).map(row => [row.sequence, row]));
++  const blobParts = [];
++  for (let index = 0; index < manifest.chunks.length; index++) {
++    let part = saved.get(index)?.blob;
++    if (part && (part.size !== manifest.chunks[index].byteLength || await digestBlob(part) !== manifest.chunks[index].sha256)) part = null;
++    if (!part) {
++      const response = await api(`downloads/${change.recording.id}/chunks/${index}`, { fetcher, expectBinary: true });
++      part = await response.blob();
++      if (part.size !== manifest.chunks[index].byteLength || await digestBlob(part) !== manifest.chunks[index].sha256 || response.headers.get('x-noteos-chunk-sha256') !== manifest.chunks[index].sha256) throw new Error('audio_chunk_digest_mismatch');
++      await repository.putDownloadedChunk(transferId, index, part, manifest.chunks[index].sha256);
++    }
++    blobParts.push(part); onProgress?.({ recordingId: change.recording.id, verifiedBytes: blobParts.reduce((sum,item) => sum+item.size,0), totalBytes: manifest.totalBytes });
++  }
++  const blob = new Blob(blobParts, { type: manifest.recording.mimeType });
++  if (await digestBlob(blob) !== manifest.sha256 || blob.size !== manifest.totalBytes) throw new Error('audio_object_digest_mismatch');
++  let recording;
++  try { recording = await repository.finalizeDownload(manifest, blob, blobParts); }
++  catch (error) {
++    const collision = await repository.get(change.recording.id);
++    if (!collision) throw error;
++    const conflict = { ...state, status: 'needs-review', conflict: { error: 'audio_local_recording_collision', remote: manifest, serverVersion: change.serverVersion }, localRecordingId: collision.id };
++    await repository.putSyncState(conflict); return conflict;
++  }
++  await api('verify', { method: 'POST', body: { recordingId: recording.id, sha256: manifest.sha256 }, fetcher });
++  const next = { ...state, status: 'verified-here', verifiedBytes: manifest.totalBytes, totalBytes: manifest.totalBytes, sha256: manifest.sha256 };
++  await repository.putSyncState(next); return next;
++}
++
++/** Runs inside the existing text sync cycle; all audio work is independently resumable and best-effort. */
++export async function synchronizeAudio({ fetcher = fetch, locks = globalThis.navigator?.locks, onProgress, repository = audioRepository } = {}) {
++  if (!locks?.request) return { status: 'transfer-unavailable', transferred: 0 };
++  let result = { status: 'idle', transferred: 0 };
++  await locks.request('noteos-web-audio-sync', { mode: 'exclusive', ifAvailable: true }, async lock => {
++    if (!lock) { result.status = 'waiting'; return; }
++    try {
++      await api('status', { fetcher });
++      const approvals = await repository.listSyncApprovals();
++      const discovered = [];
++      for (const approval of approvals) {
++        const approved = await api('approve', { method: 'POST', body: { noteId: approval.noteId, approved: approval.approved === true }, fetcher });
++        if (approval.approved === true) discovered.push(...(approved.recordings ?? []));
++      }
++      for (const recording of await repository.listSyncCandidates()) {
++        const state = await ensureLocalState(recording.id, repository);
++        if (state.status === 'needs-review') continue;
++        let updated;
++        try { updated = await uploadRecording(recording, state, fetcher, onProgress, repository); }
++        catch (error) {
++          if (error.status === 409 && error.body?.error === 'audio_metadata_conflict') {
++            const localManifest = await makeManifest(recording, await repository.chunks(recording.id), state.transferId ?? crypto.randomUUID(), state.serverVersion ?? 0);
++            updated = { ...state, status: 'needs-review', sha256: localManifest.sha256, conflict: error.body, localAnchors: recording.audioAnchors };
++          }
++          else throw error;
++        }
++        await repository.putSyncState(updated); result.transferred++;
++      }
++      const cursorState = await repository.getSyncStateForRecording('__cursor__') ?? { recordingId: '__cursor__', audioCursor: 0 };
++      const page = await api('changes', { method: 'POST', body: { protocolVersion: 1, cursor: cursorState.audioCursor ?? 0, limit: 100 }, fetcher });
++      const changes = [...new Map([...discovered, ...page.changes].map(change => [`${change.recording.id}:${change.serverVersion}`, change])).values()];
++      for (const change of changes) {
++        const approved = await repository.getSyncApproval(change.recording.noteId);
++        if (!approved?.approved) continue;
++        if (change.deviceVerified) { result.transferred++; continue; }
++        await downloadChange(change, fetcher, onProgress, repository); result.transferred++;
++      }
++      await repository.putSyncState({ recordingId: '__cursor__', audioCursor: page.nextCursor });
++      result.status = result.transferred ? 'transferred' : 'idle';
++    } catch (error) {
++      result.status = error.status === 503 ? 'transfer-unavailable' : error.status === 401 ? 'needs-pairing' : error.status === 409 ? 'needs-review' : 'waiting-connection';
++      result.error = error.message;
++      if (result.status === 'transfer-unavailable') for (const recording of await repository.listSyncCandidates().catch(() => [])) {
++        const state = await ensureLocalState(recording.id, repository);
++        await repository.putSyncState({ ...state, status: 'transfer-unavailable', previousStatus: state.status });
++      }
++    }
++  });
++  return result;
++}
+diff --git a/spikes/phase-00/gate1/web/app/lib/audio-sync-client.test.mjs b/spikes/phase-00/gate1/web/app/lib/audio-sync-client.test.mjs
+new file mode 100644
+index 0000000..2382acc
+--- /dev/null
++++ b/spikes/phase-00/gate1/web/app/lib/audio-sync-client.test.mjs
+@@ -0,0 +1,117 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import 'fake-indexeddb/auto';
++import { indexedDB } from 'fake-indexeddb';
++import { createHash, randomUUID } from 'node:crypto';
++import { mkdtempSync, rmSync } from 'node:fs';
++import { tmpdir } from 'node:os';
++import { join } from 'node:path';
++import { fileURLToPath } from 'node:url';
++import { createNotesRepository, createAudioRepository, makeEmptyNote } from './local-notes.js';
++import { synchronizeAudio } from './audio-sync-client.mjs';
++import { openStore, transaction, appendChange } from '../../sync-server/storage.mjs';
++import { issuePairingCode, redeemPairingCode } from '../../sync-server/auth.mjs';
++import { handleAudioSync } from '../../sync-server/media-http.mjs';
++import { canonicalJson } from './sync-protocol.mjs';
++
++const origin = 'http://127.0.0.1:15700'; let sequence = 0;
++process.chdir(fileURLToPath(new URL('../..', import.meta.url)));
++const hash = bytes => createHash('sha256').update(bytes).digest('hex');
++async function localDevice(name, note) {
++  const notes = createNotesRepository(indexedDB, name), audio = createAudioRepository(indexedDB, name);
++  await notes.create(note);
++  const db = await new Promise((resolve, reject) => { const request = indexedDB.open(name); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
++  const tx = db.transaction('syncBaselines', 'readwrite'); tx.objectStore('syncBaselines').put({ id: note.id, serverVersion: 1, localRevision: note.revision, contentHash: 'synthetic' });
++  await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onabort = tx.onerror = () => reject(tx.error); }); db.close();
++  return { notes, audio };
++}
++async function server(t, note) {
++  const root = mkdtempSync(join(tmpdir(), 'noteos-audio-client-')), db = openStore(root, { initialize: true });
++  const env = { NOTEOS_SYNC_ENABLED: '1', NOTEOS_AUDIO_SYNC_ENABLED: '1', NOTEOS_SYNC_STORAGE: root, NOTEOS_SYNC_ALLOWED_ORIGINS: origin };
++  transaction(db, () => { const cursor = appendChange(db, 'note', note.id, 1, 'upsert', canonicalJson(note)); db.prepare("INSERT INTO sync_entities(entity_type,id,server_version,record_json,content_hash,lifecycle,recording_count,committed_cursor) VALUES('note',?,1,?,'synthetic','active',0,?)").run(note.id, canonicalJson(note), cursor); });
++  t.after(() => { try { db.close(); } catch {} rmSync(root, { recursive: true, force: true }); });
++  const device = label => redeemPairingCode(db, issuePairingCode(db), label);
++  const fetcher = token => async (url, init = {}) => {
++    const headers = new Headers(init.headers); headers.set('host', '127.0.0.1:15700'); headers.set('cookie', `noteos_sync_local=${token}`);
++    if (init.method !== 'GET') headers.set('origin', origin);
++    const request = new Request(new URL(url, origin), { ...init, headers });
++    return handleAudioSync(request, new URL(request.url).pathname.split('/api/v1/sync/')[1], env);
++  };
++  const locks = { request: async (_name, _options, callback) => callback({ name: 'synthetic-lock' }) };
++  return { root, db, device, fetcher, locks };
++}
++
++test('synthetic paired clients upload and download ordered multi-chunk audio with independent verified-here status', async t => {
++  const note = { ...makeEmptyNote(100, `note-${++sequence}`), privacy: 'PRIVATE_SERVER' };
++  const sourceName = `audio-client-source-${sequence}`, targetName = `audio-client-target-${sequence}`;
++  const source = await localDevice(sourceName, note), target = await localDevice(targetName, note), host = await server(t, note);
++  const firstDevice = host.device('source browser'), secondDevice = host.device('target browser');
++  const bytes = Buffer.alloc(1024 * 1024 + 73); for (let index = 0; index < bytes.length; index++) bytes[index] = index % 251;
++  const recording = await source.audio.create(note.id, { mimeType: 'audio/webm;codecs=opus', ownerId: 'synthetic-tab', createdAt: 101 });
++  await source.audio.appendChunk(recording.id, 0, new Blob([bytes.subarray(0, 300001)], { type: recording.mimeType }), 600);
++  await source.audio.appendChunk(recording.id, 1, new Blob([bytes.subarray(300001)], { type: recording.mimeType }), 1200);
++  await source.audio.setStatus(recording.id, 'complete', { durationMs: 1200 });
++  await source.audio.setSyncApproval(note.id, true);
++  assert.equal((await source.audio.listSyncCandidates()).length, 1);
++  const upload = await synchronizeAudio({ fetcher: host.fetcher(firstDevice.token), locks: host.locks, repository: source.audio });
++  assert.equal(upload.status, 'transferred', JSON.stringify(upload));
++  assert.equal((await source.audio.getSyncStateForRecording(recording.id)).status, 'verified-here');
++  const cursorAdvance = await synchronizeAudio({ fetcher: host.fetcher(secondDevice.token), locks: host.locks, repository: target.audio });
++  assert.equal(cursorAdvance.status, 'idle');
++  await target.audio.setSyncApproval(note.id, true);
++  const download = await synchronizeAudio({ fetcher: host.fetcher(secondDevice.token), locks: host.locks, repository: target.audio });
++  assert.equal(download.status, 'transferred');
++  const received = await target.audio.get(recording.id), chunks = await target.audio.chunks(recording.id);
++  assert.equal(received.syncState, 'verified-here'); assert.equal(received.status, 'complete');
++  const receivedBlob = new Blob(chunks.map(row => row.blob));
++  assert.equal(receivedBlob.size, bytes.length); assert.equal(hash(Buffer.from(await receivedBlob.arrayBuffer())), hash(bytes));
++  assert.equal((await target.audio.getSyncStateForRecording(recording.id)).status, 'verified-here');
++});
++
++test('local audio approval fails closed for unknown privacy, DEVICE_ONLY and notes not yet text-synced', async () => {
++  for (const [suffix, privacy, baseline] of [['unknown', undefined, true], ['device', 'DEVICE_ONLY', true], ['unsynced', 'PRIVATE_SERVER', false]]) {
++    const name = `audio-approval-${suffix}-${++sequence}`, note = { ...makeEmptyNote(100, `note-${suffix}-${sequence}`), ...(privacy ? { privacy } : {}) };
++    const repo = createNotesRepository(indexedDB, name), audio = createAudioRepository(indexedDB, name); await repo.create(note);
++    if (baseline) {
++      const db = await new Promise((resolve, reject) => { const req = indexedDB.open(name); req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error); });
++      const tx = db.transaction('syncBaselines', 'readwrite'); tx.objectStore('syncBaselines').put({ id: note.id, serverVersion: 1, localRevision: 0 });
++      await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onabort = tx.onerror = () => reject(tx.error); }); db.close();
++    }
++    await assert.rejects(audio.setSyncApproval(note.id, true));
++    assert.equal(await audio.getSyncApproval(note.id), null);
++  }
++});
++
++test('upload retry resumes after chunk N and download retry reuses verified IndexedDB chunks', async t => {
++  const note = { ...makeEmptyNote(100, `note-retry-${++sequence}`), privacy: 'PRIVATE_SERVER' };
++  const sourceName = `audio-retry-source-${sequence}`, targetName = `audio-retry-target-${sequence}`;
++  const source = await localDevice(sourceName, note), target = await localDevice(targetName, note), host = await server(t, note);
++  const first = host.device('retry source'), second = host.device('retry target');
++  const bytes = Buffer.alloc(1024 * 1024 + 13, 91), recording = await source.audio.create(note.id, { mimeType: 'audio/webm', ownerId: 'synthetic-tab', createdAt: 101 });
++  await source.audio.appendChunk(recording.id, 0, new Blob([bytes.subarray(0, 1024 * 1024)], { type: recording.mimeType }), 500);
++  await source.audio.appendChunk(recording.id, 1, new Blob([bytes.subarray(1024 * 1024)], { type: recording.mimeType }), 1000);
++  await source.audio.setStatus(recording.id, 'complete', { durationMs: 1000 }); await source.audio.setSyncApproval(note.id, true);
++  const baseUpload = host.fetcher(first.token); let failedUpload = false;
++  const interruptedUpload = async (url, init) => {
++    if (!failedUpload && init.method === 'PUT' && String(url).endsWith('/chunks/1')) { failedUpload = true; throw new TypeError('synthetic network loss after chunk 0'); }
++    return baseUpload(url, init);
++  };
++  const partial = await synchronizeAudio({ fetcher: interruptedUpload, locks: host.locks, repository: source.audio });
++  assert.equal(partial.status, 'waiting-connection');
++  const pending = await source.audio.getSyncStateForRecording(recording.id); assert.equal(pending.status, 'uploading'); assert.equal(pending.verifiedBytes, 1024 * 1024);
++  const resumed = await synchronizeAudio({ fetcher: baseUpload, locks: host.locks, repository: createAudioRepository(indexedDB, sourceName) }); assert.equal(resumed.status, 'transferred');
++
++  await target.audio.setSyncApproval(note.id, true);
++  const baseDownload = host.fetcher(second.token); let failedDownload = false;
++  const interruptedDownload = async (url, init) => {
++    if (!failedDownload && String(url).endsWith('/chunks/1')) { failedDownload = true; throw new TypeError('synthetic network loss after downloaded chunk 0'); }
++    return baseDownload(url, init);
++  };
++  const partialDownload = await synchronizeAudio({ fetcher: interruptedDownload, locks: host.locks, repository: target.audio });
++  assert.equal(partialDownload.status, 'waiting-connection');
++  const transferState = await target.audio.getSyncStateForRecording(recording.id); assert.equal(transferState.status, 'downloading');
++  assert.equal((await target.audio.listDownloadedChunks(transferState.transferId)).length, 1);
++  const reloadedTarget = createAudioRepository(indexedDB, targetName);
++  const resumedDownload = await synchronizeAudio({ fetcher: baseDownload, locks: host.locks, repository: reloadedTarget }); assert.equal(resumedDownload.status, 'transferred');
++  const received = await reloadedTarget.chunks(recording.id); assert.equal(hash(Buffer.from(await new Blob(received.map(row => row.blob)).arrayBuffer())), hash(bytes));
++});
+diff --git a/spikes/phase-00/gate1/web/app/lib/audio-sync-protocol.mjs b/spikes/phase-00/gate1/web/app/lib/audio-sync-protocol.mjs
+new file mode 100644
+index 0000000..a6a1bd5
+--- /dev/null
++++ b/spikes/phase-00/gate1/web/app/lib/audio-sync-protocol.mjs
+@@ -0,0 +1,69 @@
++import { sha256 } from '@noble/hashes/sha2.js';
++import { canonicalJson } from './sync-protocol.mjs';
++import { validateAudioAnchorSet } from './audio-anchors.mjs';
++
++export const AUDIO_SYNC_PROTOCOL_VERSION = 1;
++export const AUDIO_SYNC_CHUNK_BYTES = 1024 * 1024;
++export const AUDIO_SYNC_MAX_RECORDING_BYTES = 512 * 1024 * 1024;
++export const AUDIO_SYNC_MAX_CHUNKS = AUDIO_SYNC_MAX_RECORDING_BYTES / AUDIO_SYNC_CHUNK_BYTES;
++export const AUDIO_SYNC_DEFAULT_QUOTA_BYTES = 2 * 1024 * 1024 * 1024;
++export const AUDIO_SYNC_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
++export const AUDIO_SYNC_MAX_JSON_BYTES = 256 * 1024;
++
++const id = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
++const digest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
++const integer = value => Number.isSafeInteger(value) && value >= 0;
++const supportedMimeTypes = new Set([
++  'audio/webm', 'audio/ogg', 'audio/mp4', 'audio/x-m4a', 'audio/wav',
++  'audio/wave', 'audio/x-wav', 'audio/mpeg', 'audio/aac', 'audio/flac',
++]);
++
++function assertJson(value, depth = 0) {
++  if (depth > 32) throw new TypeError('Audio metadata nesting is excessive.');
++  if (value === null || typeof value === 'string' || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) return;
++  if (Array.isArray(value)) { for (const row of value) assertJson(row, depth + 1); return; }
++  if (!value || typeof value !== 'object' || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) throw new TypeError('Audio metadata must be JSON data.');
++  for (const [key, child] of Object.entries(value)) {
++    if (['__proto__', 'constructor', 'prototype'].includes(key)) throw new TypeError('Unsafe audio metadata key.');
++    assertJson(child, depth + 1);
++  }
++}
++
++export function validateAudioManifest(value, { transferId = value?.transferId, maxBytes = AUDIO_SYNC_MAX_RECORDING_BYTES } = {}) {
++  const expected = 'anchors,baseServerVersion,chunkSize,chunks,protocolVersion,recording,sha256,totalBytes,transferId';
++  if (!value || Array.isArray(value) || Object.keys(value).sort().join(',') !== expected || value.protocolVersion !== AUDIO_SYNC_PROTOCOL_VERSION) throw new TypeError('Invalid audio transfer manifest.');
++  if (!id(transferId) || value.transferId !== transferId || !id(value.recording?.id) || !id(value.recording?.noteId)) throw new TypeError('Invalid audio or transfer identity.');
++  if (!value.recording || typeof value.recording !== 'object' || Array.isArray(value.recording)) throw new TypeError('Invalid recording metadata.');
++  const recording = value.recording;
++  const allowedRecordingKeys = ['createdAt', 'durationMs', 'extensions', 'id', 'mimeType', 'nativeProvenance', 'noteId', 'status', 'title', 'updatedAt'];
++  if (Object.keys(recording).some(key => !allowedRecordingKeys.includes(key)) || !['id','noteId','title','mimeType','status','createdAt','updatedAt','durationMs'].every(key => Object.hasOwn(recording, key))) throw new TypeError('Unsupported recording metadata fields.');
++  assertJson(recording);
++  if (recording.status !== 'complete' || typeof recording.title !== 'string' || !recording.title.trim() || [...recording.title].length > 120 ||
++      !integer(recording.createdAt) || !integer(recording.updatedAt) || !integer(recording.durationMs) || typeof recording.mimeType !== 'string' ||
++      !/^audio\/[a-z0-9.-]+(?:;\s*codecs=(?:[a-zA-Z0-9.,_-]+|"[a-zA-Z0-9.,_ -]+"))?$/i.test(recording.mimeType) ||
++      !supportedMimeTypes.has(recording.mimeType.split(';')[0].toLowerCase()) || recording.mimeType.length > 160) throw new TypeError('Recording is not complete or its metadata is invalid.');
++  if (!Number.isSafeInteger(value.totalBytes) || value.totalBytes < 1 || value.totalBytes > maxBytes || value.chunkSize !== AUDIO_SYNC_CHUNK_BYTES ||
++      !Number.isSafeInteger(value.baseServerVersion) || value.baseServerVersion < 0 || !digest(value.sha256) || !Array.isArray(value.chunks) ||
++      value.chunks.length < 1 || value.chunks.length > AUDIO_SYNC_MAX_CHUNKS) throw new TypeError('Audio size, digest or chunk manifest is invalid.');
++  let bytes = 0;
++  for (const [index, chunk] of value.chunks.entries()) {
++    if (!chunk || Array.isArray(chunk) || Object.keys(chunk).sort().join(',') !== 'byteLength,index,sha256' || chunk.index !== index ||
++        !Number.isSafeInteger(chunk.byteLength) || chunk.byteLength < 1 || chunk.byteLength > value.chunkSize || !digest(chunk.sha256) ||
++        index < value.chunks.length - 1 && chunk.byteLength !== value.chunkSize) throw new TypeError('Audio chunk manifest is malformed.');
++    bytes += chunk.byteLength;
++  }
++  if (bytes !== value.totalBytes) throw new TypeError('Audio chunk lengths do not match the total byte length.');
++  if (value.chunks.length === 1 && value.chunks[0].sha256 !== value.sha256) throw new TypeError('Single audio chunk hash must match the full recording hash.');
++  const anchors = validateAudioAnchorSet(value.anchors, recording.id, { durationMs: recording.durationMs, durationKnown: recording.durationMs > 0 });
++  return { ...value, recording: { ...recording }, anchors };
++}
++
++export function audioManifestHash(manifest) {
++  const bytes = sha256(new TextEncoder().encode(canonicalJson(manifest)));
++  return Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('');
++}
++
++export function audioMetadataHash(recording, anchors, sha256Hex, totalBytes) {
++  const data = canonicalJson({ anchors, recording, sha256: sha256Hex, totalBytes });
++  return Array.from(sha256(new TextEncoder().encode(data)), value => value.toString(16).padStart(2, '0')).join('');
++}
+diff --git a/spikes/phase-00/gate1/web/app/lib/audio-sync-protocol.test.mjs b/spikes/phase-00/gate1/web/app/lib/audio-sync-protocol.test.mjs
+new file mode 100644
+index 0000000..05b93f3
+--- /dev/null
++++ b/spikes/phase-00/gate1/web/app/lib/audio-sync-protocol.test.mjs
+@@ -0,0 +1,34 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import { createHash } from 'node:crypto';
++import { readFileSync } from 'node:fs';
++import { fileURLToPath } from 'node:url';
++import { validateAudioManifest, AUDIO_SYNC_CHUNK_BYTES } from './audio-sync-protocol.mjs';
++
++const bytes = Buffer.from('synthetic protocol audio'), sha = createHash('sha256').update(bytes).digest('hex');
++function manifest() {
++  return { protocolVersion: 1, transferId: '123e4567-e89b-42d3-a456-426614174000', baseServerVersion: 0,
++    recording: { id: 'recording-proto', noteId: 'note-proto', title: 'Ghi âm — 東京 🎧', mimeType: 'audio/webm;codecs=opus', status: 'complete', createdAt: 1, updatedAt: 2, durationMs: 1000, extensions: { originalCapture: 'web' } },
++    anchors: { version: 1, items: [{ id: 'anchor-proto', recordingId: 'recording-proto', offsetMs: 500, label: 'Điểm chính 📝', createdAt: 3 }] },
++    sha256: sha, totalBytes: bytes.length, chunkSize: AUDIO_SYNC_CHUNK_BYTES, chunks: [{ index: 0, byteLength: bytes.length, sha256: sha }] };
++}
++
++test('audio transfer manifest preserves Unicode labels and supported extension metadata', () => {
++  const parsed = validateAudioManifest(manifest());
++  assert.equal(parsed.recording.title, 'Ghi âm — 東京 🎧'); assert.equal(parsed.anchors.items[0].label, 'Điểm chính 📝'); assert.deepEqual(parsed.recording.extensions, { originalCapture: 'web' });
++});
++test('manifest rejects incomplete recordings, bad byte lengths, changed hashes and unsupported schema keys', () => {
++  for (const mutate of [value => { value.recording.status = 'interrupted'; }, value => { value.totalBytes++; }, value => { value.chunks[0].sha256 = '0'.repeat(64); value.sha256 = '1'.repeat(64); }, value => { value.recording.surprise = true; }]) {
++    const invalid = manifest(); mutate(invalid); assert.throws(() => validateAudioManifest(invalid));
++  }
++});
++test('anchor set is checked against stable recording identity and known duration', () => {
++  const invalid = manifest(); invalid.anchors.items[0].offsetMs = 1001;
++  assert.throws(() => validateAudioManifest(invalid), /duration/);
++});
++test('service worker keeps every API route network-only and rejects private no-store responses from caches', () => {
++  const workerPath = fileURLToPath(new URL('../../public/sw.js', import.meta.url)), source = readFileSync(workerPath, 'utf8');
++  assert.match(source, /if \(url\.pathname\.startsWith\('\/api\/'\)\) return false/);
++  assert.match(source, /if \(isSyncApi\(url\)\)\s*\{\s*event\.respondWith\(fetch\(request, \{ cache: 'no-store' \}\)\)/);
++  assert.match(source, /no-store[\s\S]*private/);
++});
+diff --git a/spikes/phase-00/gate1/web/app/lib/local-notes.js b/spikes/phase-00/gate1/web/app/lib/local-notes.js
+index 56f7a5b..f14fd72 100644
+--- a/spikes/phase-00/gate1/web/app/lib/local-notes.js
++++ b/spikes/phase-00/gate1/web/app/lib/local-notes.js
+@@ -5,0 +6,2 @@ import { canonicalJson } from './sync-protocol.mjs';
++import { validateAudioManifest } from './audio-sync-protocol.mjs';
++import { sha256 } from '@noble/hashes/sha2.js';
+@@ -9 +11 @@ const DATABASE_NAME = 'noteos-mvp-01';
+-const DATABASE_VERSION = 4;
++const DATABASE_VERSION = 5;
+@@ -18,0 +21,3 @@ const SYNC_QUARANTINE_STORE = 'syncQuarantine';
++const AUDIO_SYNC_APPROVALS_STORE = 'audioSyncApprovals';
++const AUDIO_SYNC_STATE_STORE = 'audioSyncState';
++const AUDIO_SYNC_CHUNKS_STORE = 'audioSyncChunks';
+@@ -129,0 +135,6 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
++          if (!database.objectStoreNames.contains(AUDIO_SYNC_APPROVALS_STORE)) database.createObjectStore(AUDIO_SYNC_APPROVALS_STORE, { keyPath: 'noteId' });
++          if (!database.objectStoreNames.contains(AUDIO_SYNC_STATE_STORE)) database.createObjectStore(AUDIO_SYNC_STATE_STORE, { keyPath: 'recordingId' });
++          if (!database.objectStoreNames.contains(AUDIO_SYNC_CHUNKS_STORE)) {
++            const chunks = database.createObjectStore(AUDIO_SYNC_CHUNKS_STORE, { keyPath: 'id' });
++            chunks.createIndex('transferSequence', ['transferId', 'sequence'], { unique: true });
++          }
+@@ -631,0 +643,5 @@ function assertRecordingState(state) {
++async function audioBlobSha256(blob) {
++  const hash = sha256.create();
++  for (let offset = 0; offset < blob.size; offset += 1024 * 1024) hash.update(new Uint8Array(await blob.slice(offset, offset + 1024 * 1024).arrayBuffer()));
++  return Array.from(hash.digest(), value => value.toString(16).padStart(2, '0')).join('');
++}
+@@ -639,0 +656,15 @@ export function createAudioRepository(indexedDBFactory = globalThis.indexedDB, d
++        request.onupgradeneeded = () => {
++          const database = request.result;
++          if (!database.objectStoreNames.contains(STORE_NAME)) { const store = database.createObjectStore(STORE_NAME, { keyPath: 'id' }); store.createIndex('lifecycle', 'lifecycle'); store.createIndex('updatedAt', 'updatedAt'); }
++          if (!database.objectStoreNames.contains(RECORDINGS_STORE)) { const store = database.createObjectStore(RECORDINGS_STORE, { keyPath: 'id' }); store.createIndex('noteId', 'noteId'); store.createIndex('status', 'status'); store.createIndex('updatedAt', 'updatedAt'); }
++          if (!database.objectStoreNames.contains(RECORDING_CHUNKS_STORE)) { const store = database.createObjectStore(RECORDING_CHUNKS_STORE, { keyPath: 'id' }); store.createIndex('recordingId', 'recordingId'); store.createIndex('recordingSequence', ['recordingId', 'sequence'], { unique: true }); }
++          if (!database.objectStoreNames.contains(SYNC_OUTBOX_STORE)) database.createObjectStore(SYNC_OUTBOX_STORE, { keyPath: 'operationId' });
++          if (!database.objectStoreNames.contains(SYNC_BASELINES_STORE)) database.createObjectStore(SYNC_BASELINES_STORE, { keyPath: 'id' });
++          if (!database.objectStoreNames.contains(SYNC_STATE_STORE)) database.createObjectStore(SYNC_STATE_STORE, { keyPath: 'key' });
++          if (!database.objectStoreNames.contains(SYNC_CONFLICTS_STORE)) database.createObjectStore(SYNC_CONFLICTS_STORE, { keyPath: 'id' });
++          if (!database.objectStoreNames.contains(SYNC_ENROLLMENT_STORE)) database.createObjectStore(SYNC_ENROLLMENT_STORE, { keyPath: 'id' });
++          if (!database.objectStoreNames.contains(SYNC_QUARANTINE_STORE)) database.createObjectStore(SYNC_QUARANTINE_STORE, { keyPath: 'operationId' });
++          if (!database.objectStoreNames.contains(AUDIO_SYNC_APPROVALS_STORE)) database.createObjectStore(AUDIO_SYNC_APPROVALS_STORE, { keyPath: 'noteId' });
++          if (!database.objectStoreNames.contains(AUDIO_SYNC_STATE_STORE)) database.createObjectStore(AUDIO_SYNC_STATE_STORE, { keyPath: 'recordingId' });
++          if (!database.objectStoreNames.contains(AUDIO_SYNC_CHUNKS_STORE)) { const store = database.createObjectStore(AUDIO_SYNC_CHUNKS_STORE, { keyPath: 'id' }); store.createIndex('transferSequence', ['transferId', 'sequence'], { unique: true }); }
++        };
+@@ -735 +766 @@ export function createAudioRepository(indexedDBFactory = globalThis.indexedDB, d
+-      const updated = { ...recording, title: title.trim(), updatedAt: Date.now() }; store.put(updated); await done; return updated;
++      const updated = { ...recording, title: title.trim(), updatedAt: Date.now() }; store.put(updated); await done; notifySyncStateChanged(); return updated;
+@@ -751 +782 @@ export function createAudioRepository(indexedDBFactory = globalThis.indexedDB, d
+-      store.put(updated); await done; return updated;
++      store.put(updated); await done; notifySyncStateChanged(); return updated;
+@@ -793 +824,79 @@ export function createAudioRepository(indexedDBFactory = globalThis.indexedDB, d
+-  return { list, listUnfinished, get, create, appendChunk, setStatus, rename, chunks, listAnchors, addAnchor, renameAnchor, removeAnchor, remove, recover };
++  async function getSyncApproval(noteId) {
++    const database = await openDatabase(), tx = database.transaction(AUDIO_SYNC_APPROVALS_STORE, 'readonly');
++    return (await run(tx, tx.objectStore(AUDIO_SYNC_APPROVALS_STORE).get(noteId))) ?? null;
++  }
++  async function listSyncApprovals() {
++    const database = await openDatabase(), tx = database.transaction(AUDIO_SYNC_APPROVALS_STORE, 'readonly');
++    return await run(tx, tx.objectStore(AUDIO_SYNC_APPROVALS_STORE).getAll());
++  }
++  async function setSyncApproval(noteId, approved) {
++    if (typeof approved !== 'boolean') throw new TypeError('Audio approval must be explicit.');
++    const database = await openDatabase(), tx = database.transaction([STORE_NAME, SYNC_BASELINES_STORE, AUDIO_SYNC_APPROVALS_STORE], 'readwrite'), done = transactionResult(tx);
++    try {
++      const note = await requestResult(tx.objectStore(STORE_NAME).get(noteId));
++      if (!note || !['PRIVATE_SERVER', 'CLOUD_ALLOWED'].includes(note.privacy)) throw abort(tx, new NoteStateError('Audio sync requires an existing note explicitly classified PRIVATE_SERVER or CLOUD_ALLOWED.'));
++      if (approved && !(await requestResult(tx.objectStore(SYNC_BASELINES_STORE).get(noteId)))) throw abort(tx, new NoteStateError('Sync this note text first, then approve audio for this note.'));
++      tx.objectStore(AUDIO_SYNC_APPROVALS_STORE).put({ noteId, approved, updatedAt: Date.now() });
++      await done; notifySyncStateChanged(); return { noteId, approved };
++    } catch (error) { try { await done; } catch {} throw error; }
++  }
++  async function listSyncCandidates() {
++    const database = await openDatabase(), tx = database.transaction([RECORDINGS_STORE, AUDIO_SYNC_APPROVALS_STORE, STORE_NAME], 'readonly'), done = transactionResult(tx);
++    const [recordings, approvals, notes] = await Promise.all([requestResult(tx.objectStore(RECORDINGS_STORE).getAll()), requestResult(tx.objectStore(AUDIO_SYNC_APPROVALS_STORE).getAll()), requestResult(tx.objectStore(STORE_NAME).getAll())]); await done;
++    const approved = new Set(approvals.filter(row => row.approved === true).map(row => row.noteId)), noteMap = new Map(notes.map(row => [row.id, row]));
++    return recordings.filter(row => row.status === 'complete' && approved.has(row.noteId) && ['PRIVATE_SERVER', 'CLOUD_ALLOWED'].includes(noteMap.get(row.noteId)?.privacy));
++  }
++  async function getSyncStateForRecording(recordingId) {
++    const database = await openDatabase(), tx = database.transaction(AUDIO_SYNC_STATE_STORE, 'readonly');
++    return (await run(tx, tx.objectStore(AUDIO_SYNC_STATE_STORE).get(recordingId))) ?? null;
++  }
++  async function putSyncState(state) {
++    if (!state || typeof state.recordingId !== 'string') throw new TypeError('Invalid audio sync state.');
++    const database = await openDatabase(), tx = database.transaction(AUDIO_SYNC_STATE_STORE, 'readwrite'), done = transactionResult(tx);
++    tx.objectStore(AUDIO_SYNC_STATE_STORE).put({ ...state, updatedAt: Date.now() }); await done; notifySyncStateChanged();
++  }
++  async function listDownloadedChunks(transferId) {
++    const database = await openDatabase(), tx = database.transaction(AUDIO_SYNC_CHUNKS_STORE, 'readonly');
++    return (await run(tx, tx.objectStore(AUDIO_SYNC_CHUNKS_STORE).index('transferSequence').getAll(IDBKeyRange.bound([transferId, 0], [transferId, Number.MAX_SAFE_INTEGER])))).sort((a,b) => a.sequence-b.sequence);
++  }
++  async function putDownloadedChunk(transferId, sequence, blob, sha256) {
++    const database = await openDatabase(), tx = database.transaction(AUDIO_SYNC_CHUNKS_STORE, 'readwrite'), done = transactionResult(tx);
++    tx.objectStore(AUDIO_SYNC_CHUNKS_STORE).put({ id: `${transferId}:${sequence}`, transferId, sequence, blob, sha256 }); await done;
++  }
++  async function finalizeDownload(manifestValue, blob, localChunks) {
++    const manifest = validateAudioManifest(manifestValue);
++    if (!(blob instanceof Blob) || blob.size !== manifest.totalBytes || !Array.isArray(localChunks) || localChunks.length !== manifest.chunks.length) throw new NoteStateError('Downloaded audio is incomplete.');
++    const wholeHash = await audioBlobSha256(blob);
++    for (let index = 0; index < localChunks.length; index++) if (localChunks[index].size !== manifest.chunks[index].byteLength || await audioBlobSha256(localChunks[index]) !== manifest.chunks[index].sha256) throw new NoteStateError('Downloaded audio chunk verification failed.');
++    if (wholeHash !== manifest.sha256) throw new NoteStateError('Downloaded audio object verification failed.');
++    const database = await openDatabase(), tx = database.transaction([STORE_NAME, RECORDINGS_STORE, RECORDING_CHUNKS_STORE, AUDIO_SYNC_CHUNKS_STORE], 'readwrite'), done = transactionResult(tx);
++    try {
++      const note = await requestResult(tx.objectStore(STORE_NAME).get(manifest.recording.noteId));
++      if (!note || !['PRIVATE_SERVER', 'CLOUD_ALLOWED'].includes(note.privacy)) throw abort(tx, new NoteStateError('The parent note is not available for approved audio sync.'));
++      const recordings = tx.objectStore(RECORDINGS_STORE), existing = await requestResult(recordings.get(manifest.recording.id));
++      if (existing && existing.ownerId !== 'audio-sync') throw abort(tx, new NoteStateError('A local recording with this ID already exists; both versions are preserved for review.'));
++      const saved = { ...manifest.recording, status: 'complete', ownerId: 'audio-sync', chunkCount: localChunks.length, audioAnchors: manifest.anchors, syncState: 'verified-here', syncSha256: manifest.sha256, syncServerVersion: manifest.serverVersion ?? 1 };
++      recordings.put(saved);
++      const chunks = tx.objectStore(RECORDING_CHUNKS_STORE);
++      for (let index = 0; index < localChunks.length; index++) chunks.put({ id: `${saved.id}:${index}`, recordingId: saved.id, sequence: index, blob: localChunks[index] });
++      const remoteChunks = tx.objectStore(AUDIO_SYNC_CHUNKS_STORE);
++      for (const row of await requestResult(remoteChunks.index('transferSequence').getAllKeys(IDBKeyRange.bound([manifest.transferId, 0], [manifest.transferId, Number.MAX_SAFE_INTEGER])))) remoteChunks.delete(row);
++      await done; notifyLocalCommit(); return saved;
++    } catch (error) { try { await done; } catch {} throw error; }
++  }
++  async function replaceAnchors(recordingId, anchors) {
++    const database = await openDatabase(), tx = database.transaction(RECORDINGS_STORE, 'readwrite'), done = transactionResult(tx), store = tx.objectStore(RECORDINGS_STORE);
++    try { const row = await requestResult(store.get(recordingId)); if (!row) throw abort(tx, new NoteNotFoundError(recordingId)); const valid = validateAudioAnchorSet(anchors, recordingId, { durationMs: row.durationMs, durationKnown: row.durationMs > 0 }); const updated = { ...row, audioAnchors: valid, updatedAt: Date.now() }; store.put(updated); await done; notifySyncStateChanged(); return updated; }
++    catch (error) { try { await done; } catch {} throw error; }
++  }
++  async function applyRemoteAudioMetadata(recordingId, remote) {
++    if (!remote?.recording || !remote.anchors) throw new TypeError('Remote audio metadata is incomplete.');
++    const database = await openDatabase(), tx = database.transaction(RECORDINGS_STORE, 'readwrite'), done = transactionResult(tx), store = tx.objectStore(RECORDINGS_STORE);
++    try {
++      const local = await requestResult(store.get(recordingId)); if (!local) throw abort(tx, new NoteNotFoundError(recordingId));
++      const anchors = validateAudioAnchorSet(remote.anchors, recordingId, { durationMs: remote.recording.durationMs, durationKnown: remote.recording.durationMs > 0 });
++      const updated = { ...local, ...remote.recording, id: local.id, noteId: local.noteId, status: local.status, ownerId: local.ownerId, audioAnchors: anchors, updatedAt: Math.max(local.updatedAt, remote.recording.updatedAt ?? 0) };
++      store.put(updated); await done; notifySyncStateChanged(); return updated;
++    } catch (error) { try { await done; } catch {} throw error; }
++  }
++  return { list, listUnfinished, get, create, appendChunk, setStatus, rename, chunks, listAnchors, addAnchor, renameAnchor, removeAnchor, remove, recover, getSyncApproval, listSyncApprovals, setSyncApproval, listSyncCandidates, getSyncStateForRecording, putSyncState, listDownloadedChunks, putDownloadedChunk, finalizeDownload, replaceAnchors, applyRemoteAudioMetadata };
+diff --git a/spikes/phase-00/gate1/web/app/lib/local-notes.test.mjs b/spikes/phase-00/gate1/web/app/lib/local-notes.test.mjs
+index 0303284..5d5923a 100644
+--- a/spikes/phase-00/gate1/web/app/lib/local-notes.test.mjs
++++ b/spikes/phase-00/gate1/web/app/lib/local-notes.test.mjs
+@@ -161 +161 @@ test('v3 IndexedDB migration adds quarantine while preserving notes, history and
+-  assert.equal(migrated.version, 4); assert.ok(migrated.objectStoreNames.contains('syncQuarantine')); migrated.close();
++  assert.equal(migrated.version, 5); assert.ok(migrated.objectStoreNames.contains('syncQuarantine')); assert.ok(migrated.objectStoreNames.contains('audioSyncApprovals')); assert.ok(migrated.objectStoreNames.contains('audioSyncState')); assert.ok(migrated.objectStoreNames.contains('audioSyncChunks')); migrated.close();
+@@ -169 +169 @@ test('existing notes require explicit owner enrollment and DEVICE_ONLY or record
+-  const db = await new Promise((resolve,reject) => { const request = indexedDB.open(name,4); request.onsuccess=()=>resolve(request.result); request.onerror=()=>reject(request.error); });
++  const db = await new Promise((resolve,reject) => { const request = indexedDB.open(name); request.onsuccess=()=>resolve(request.result); request.onerror=()=>reject(request.error); });
+diff --git a/spikes/phase-00/gate1/web/app/lib/sync-client.mjs b/spikes/phase-00/gate1/web/app/lib/sync-client.mjs
+index 5145369..315b839 100644
+--- a/spikes/phase-00/gate1/web/app/lib/sync-client.mjs
++++ b/spikes/phase-00/gate1/web/app/lib/sync-client.mjs
+@@ -1,0 +2 @@ import { assertHistoryContinuity } from './sync-protocol.mjs';
++import { synchronizeAudio } from './audio-sync-client.mjs';
+@@ -98,0 +100,2 @@ export async function synchronize({ repository, fetcher = fetch, locks = globalT
++      // Audio is an independent, default-off transfer plane. Failures never change text Sync status.
++      result.audioSync = await synchronizeAudio({ fetcher, locks });
+diff --git a/spikes/phase-00/gate1/web/app/ui/audio-recorder.tsx b/spikes/phase-00/gate1/web/app/ui/audio-recorder.tsx
+index 09ea529..ff3f03d 100644
+--- a/spikes/phase-00/gate1/web/app/ui/audio-recorder.tsx
++++ b/spikes/phase-00/gate1/web/app/ui/audio-recorder.tsx
+@@ -35,0 +36 @@ export function AudioRecorder({ noteId, disabled = false, openSignal = 0, onActi
++  const [audioApproved, setAudioApproved] = useState(false), [audioStates, setAudioStates] = useState<Record<string, any>>({});
+@@ -40 +41 @@ export function AudioRecorder({ noteId, disabled = false, openSignal = 0, onActi
+-  const refresh = useCallback(async () => { try { const next = await repo.list(noteId); if (mountedRef.current) setRecordings(next); } catch (cause) { if (mountedRef.current) setError(cause instanceof Error ? cause.message : 'Could not read local recordings.'); } }, [noteId]);
++  const refresh = useCallback(async () => { try { const next = await repo.list(noteId) as Recording[]; const approval = await repo.getSyncApproval(noteId); const states = Object.fromEntries(await Promise.all(next.map(async (item: Recording) => [item.id, await repo.getSyncStateForRecording(item.id)]))); if (mountedRef.current) { setRecordings(next); setAudioApproved(Boolean(approval?.approved)); setAudioStates(states); } } catch (cause) { if (mountedRef.current) setError(cause instanceof Error ? cause.message : 'Could not read local recordings.'); } }, [noteId]);
+@@ -43,0 +45 @@ export function AudioRecorder({ noteId, disabled = false, openSignal = 0, onActi
++  useEffect(() => { window.addEventListener('noteos:sync-state-changed', refresh); return () => window.removeEventListener('noteos:sync-state-changed', refresh); }, [refresh]);
+@@ -274,0 +277,15 @@ export function AudioRecorder({ noteId, disabled = false, openSignal = 0, onActi
++  async function setAudioSyncApproval(approved: boolean) {
++    try { await repo.setSyncApproval(noteId, approved); setAudioApproved(approved); setStatusText(approved ? 'Audio sync approved for this note. Transfer will resume while noteOS is open.' : 'Audio sync approval removed for this device.'); }
++    catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not update audio sync approval.'); }
++  }
++  function retryAudioSync() { window.dispatchEvent(new Event('noteos:sync-state-changed')); setStatusText('Audio sync retry requested.'); }
++  async function resolveAudioConflict(recordingId: string, keepRemote: boolean) {
++    try {
++      const state = await repo.getSyncStateForRecording(recordingId), remote = state?.conflict?.remote;
++      if (!state || !remote?.recording || !Number.isSafeInteger(state.conflict.serverVersion)) throw new Error('The saved conflict details are incomplete. Keep the local recording for review.');
++      if (keepRemote) await repo.applyRemoteAudioMetadata(recordingId, remote);
++      await repo.putSyncState({ ...state, status: keepRemote ? 'stored-elsewhere' : 'saved-local', conflict: null, serverVersion: state.conflict.serverVersion, transferId: crypto.randomUUID(), ...(keepRemote ? { lastMetadataHash: undefined } : {}) });
++      setStatusText(keepRemote ? 'Remote recording title and bookmarks kept. Local audio bytes remain on this device.' : 'Local recording metadata kept; retrying against the latest server version.');
++      await refresh(); retryAudioSync();
++    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not resolve audio metadata conflict.'); }
++  }
+@@ -279 +296,2 @@ export function AudioRecorder({ noteId, disabled = false, openSignal = 0, onActi
+-    <p className="audio-copy">Private local audio. Text sync does not include these recordings or their anchors; they stay on this device. Full Archive V2 includes recordings; Legacy JSON V1 does not. Audio is never uploaded.</p>
++    <p className="audio-copy">Audio stays on this device until you approve sync for this note. Text sync and audio transfer have separate status. Full Archive V2 includes recordings; Legacy JSON V1 does not.</p>
++    <div className="audio-controls"><button type="button" className="btn" onClick={() => void setAudioSyncApproval(!audioApproved)}>{audioApproved ? 'Disable audio sync for this note' : 'Allow audio sync for this note'}</button><span className="save-state">{audioApproved ? 'Approved on this device' : 'Local only'}</span></div>
+@@ -288,0 +307,2 @@ export function AudioRecorder({ noteId, disabled = false, openSignal = 0, onActi
++        <div className="recording-meta" aria-live="polite"><span>{audioStates[recording.id]?.status === 'verified-here' ? 'Audio verified on this device' : audioStates[recording.id]?.status === 'stored-elsewhere' ? 'Audio stored on another device' : audioStates[recording.id]?.status === 'downloading' ? `Downloading audio · ${audioStates[recording.id].verifiedBytes ?? 0}/${audioStates[recording.id].totalBytes ?? 0} bytes` : audioStates[recording.id]?.status === 'uploading' ? `Uploading audio · ${audioStates[recording.id].verifiedBytes ?? 0}/${audioStates[recording.id].totalBytes ?? 0} bytes` : audioStates[recording.id]?.status === 'needs-review' ? 'Audio needs review' : audioStates[recording.id]?.status === 'transfer-unavailable' ? 'Audio transfer unavailable' : audioApproved ? 'Waiting to upload' : 'Audio saved on this device'}</span>{audioApproved && <button type="button" className="tool-button" onClick={retryAudioSync}>Retry audio sync</button>}</div>
++        {audioStates[recording.id]?.status === 'needs-review' && <div className="notice" role="status"><p>Audio or its title and bookmarks changed on more than one device. Both versions are preserved.</p>{audioStates[recording.id]?.sha256 && audioStates[recording.id]?.sha256 === audioStates[recording.id]?.conflict?.remote?.sha256 ? <><button type="button" className="tool-button" onClick={() => void resolveAudioConflict(recording.id, true)}>Keep remote title and bookmarks</button><button type="button" className="tool-button" onClick={() => void resolveAudioConflict(recording.id, false)}>Keep mine and retry</button></> : <p>The audio bytes differ. The local file and remote object are retained for separate review.</p>}</div>}
+diff --git a/spikes/phase-00/gate1/web/sync-server/foundation.test.mjs b/spikes/phase-00/gate1/web/sync-server/foundation.test.mjs
+index ad13201..7aff050 100644
+--- a/spikes/phase-00/gate1/web/sync-server/foundation.test.mjs
++++ b/spikes/phase-00/gate1/web/sync-server/foundation.test.mjs
+@@ -59 +59 @@ test('schema v1 server volume migrates additively and preserves its epoch, curso
+-test('future schema fails closed', t=> {const {root,db}=setup(t); db.exec('PRAGMA user_version=3'); assert.throws(()=>openStore(root),/Migration/);});
++test('future schema fails closed', t=> {const {root,db}=setup(t); db.exec('PRAGMA user_version=4'); assert.throws(()=>openStore(root),/Migration/);});
+diff --git a/spikes/phase-00/gate1/web/sync-server/http.mjs b/spikes/phase-00/gate1/web/sync-server/http.mjs
+index 358a131..aa93b1b 100644
+--- a/spikes/phase-00/gate1/web/sync-server/http.mjs
++++ b/spikes/phase-00/gate1/web/sync-server/http.mjs
+@@ -77,2 +77,2 @@ export async function handleSync(req, action, env = process.env) {
+-      const events = db.prepare('SELECT server_cursor cursor,entity_id id,server_version serverVersion,event,record_json recordJson FROM sync_changelog WHERE entity_type=\'note\' AND server_cursor>? ORDER BY server_cursor LIMIT ?').all(body.cursor, body.limit);
+-      const changes = events.map(event => {
++      const events = db.prepare('SELECT server_cursor cursor,entity_type entityType,entity_id id,server_version serverVersion,event,record_json recordJson FROM sync_changelog WHERE server_cursor>? ORDER BY server_cursor LIMIT ?').all(body.cursor, body.limit);
++      const changes = events.filter(event => event.entityType === 'note').map(event => {
+@@ -85 +85 @@ export async function handleSync(req, action, env = process.env) {
+-      return response({ ...meta, changes, nextCursor: changes.at(-1)?.cursor ?? body.cursor, hasMore: changes.length === body.limit });
++      return response({ ...meta, changes, nextCursor: events.at(-1)?.cursor ?? body.cursor, hasMore: events.length === body.limit });
+diff --git a/spikes/phase-00/gate1/web/sync-server/media-http.mjs b/spikes/phase-00/gate1/web/sync-server/media-http.mjs
+new file mode 100644
+index 0000000..e64d9ea
+--- /dev/null
++++ b/spikes/phase-00/gate1/web/sync-server/media-http.mjs
+@@ -0,0 +1,428 @@
++import { createHash, randomUUID } from 'node:crypto';
++import { createReadStream, statSync as requireStatSync } from 'node:fs';
++import { Readable } from 'node:stream';
++import { join } from 'node:path';
++import { authenticate } from './auth.mjs';
++import { openStore, serverMeta, transaction, appendChange } from './storage.mjs';
++import { allowedOrigin } from './http.mjs';
++import { canonicalJson } from '../app/lib/sync-protocol.mjs';
++import { validateAudioManifest, audioManifestHash, audioMetadataHash, AUDIO_SYNC_CHUNK_BYTES, AUDIO_SYNC_DEFAULT_QUOTA_BYTES, AUDIO_SYNC_SESSION_TTL_MS, AUDIO_SYNC_MAX_JSON_BYTES } from '../app/lib/audio-sync-protocol.mjs';
++import { assembleObject, ensureMediaDirectories, hashFile, mediaDiskUsage, mediaPaths, MediaError, receiveChunkToFile, recoverStagedChunks, verifyObject } from './media-storage.mjs';
++import { validateAudioAnchorSet } from '../app/lib/audio-anchors.mjs';
++
++const responseHeaders = { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' };
++const json = (data, status = 200, headers = {}) => Response.json(data, { status, headers: { ...responseHeaders, ...headers } });
++const fail = (error, status = 400) => json({ error }, status);
++const validId = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
++const validTransferId = value => typeof value === 'string' && /^[0-9a-f-]{36}$/i.test(value);
++const validDigest = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
++const sha = value => createHash('sha256').update(value).digest('hex');
++
++let publishQueue = Promise.resolve();
++function withPublishLock(operation) {
++  const result = publishQueue.then(operation, operation);
++  publishQueue = result.catch(() => {});
++  return result;
++}
++
++function responseCookieName(origin) { return origin.protocol === 'https:' ? '__Secure-noteos_sync' : 'noteos_sync_local'; }
++function authenticatedDevice(db, request, cookieName) {
++  const values = (request.headers.get('cookie') ?? '').split(';').map(value => value.trim()).filter(value => value.startsWith(`${cookieName}=`));
++  return values.length === 1 ? authenticate(db, values[0].slice(cookieName.length + 1)) : null;
++}
++
++async function readJson(request) {
++  if (request.headers.get('content-type')?.split(';')[0] !== 'application/json' || request.headers.get('x-noteos-sync') !== '1') throw new MediaError('csrf_denied', 403);
++  const length = request.headers.get('content-length');
++  if (length && (!/^\d+$/.test(length) || Number(length) > AUDIO_SYNC_MAX_JSON_BYTES)) throw new MediaError('invalid_audio_manifest', 413);
++  if (!request.body) throw new MediaError('invalid_json', 400);
++  const reader = request.body.getReader(), chunks = []; let size = 0;
++  try {
++    while (true) {
++      const { value, done } = await reader.read(); if (done) break;
++      size += value.byteLength;
++      if (size > AUDIO_SYNC_MAX_JSON_BYTES) { await reader.cancel(); throw new MediaError('invalid_audio_manifest', 413); }
++      chunks.push(Buffer.from(value));
++    }
++    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
++  } catch (error) { if (error instanceof MediaError) throw error; throw new MediaError('invalid_json', 400); }
++}
++
++function featureEnabled(env) {
++  return env.NOTEOS_SYNC_ENABLED === '1' && env.NOTEOS_AUDIO_SYNC_ENABLED === '1';
++}
++
++function mediaQuota(env) {
++  const configured = Number(env.NOTEOS_AUDIO_SYNC_MAX_BYTES ?? AUDIO_SYNC_DEFAULT_QUOTA_BYTES);
++  if (!Number.isSafeInteger(configured) || configured < 64 * 1024 * 1024 || configured > 8 * 1024 * 1024 * 1024) throw new MediaError('media_configuration_invalid', 503);
++  return configured;
++}
++
++function requireApprovedNote(db, deviceId, noteId) {
++  const row = db.prepare("SELECT id,record_json recordJson,lifecycle FROM sync_entities WHERE entity_type='note' AND id=?").get(noteId);
++  const deleted = db.prepare("SELECT 1 FROM sync_tombstones WHERE entity_type='note' AND id=?").get(noteId);
++  if (!row || deleted) throw new MediaError('note_not_available', 404);
++  let note;
++  try { note = JSON.parse(row.recordJson); } catch { throw new MediaError('note_not_available', 409); }
++  if (!['PRIVATE_SERVER', 'CLOUD_ALLOWED'].includes(note.privacy)) throw new MediaError('audio_permission_required', 403);
++  const approved = db.prepare('SELECT approved FROM sync_media_approvals WHERE device_id=? AND note_id=?').get(deviceId, noteId)?.approved === 1;
++  if (!approved) throw new MediaError('audio_permission_required', 403);
++  return { ...note, lifecycle: row.lifecycle };
++}
++
++function findCurrent(db, recordingId) {
++  return db.prepare(`SELECT m.recording_id recordingId,m.note_id noteId,m.object_sha256 sha256,m.mime_type mimeType,m.total_bytes totalBytes,
++      m.chunk_size chunkSize,m.chunk_count chunkCount,m.server_version serverVersion,m.manifest_json manifestJson,m.metadata_hash metadataHash,
++      e.committed_cursor cursor FROM sync_recording_media m JOIN sync_entities e ON e.entity_type='recording' AND e.id=m.recording_id WHERE m.recording_id=?`).get(recordingId) ?? null;
++}
++
++function manifestForDevice(db, row, deviceId) {
++  const verifiedHere = db.prepare('SELECT object_sha256 sha256,verified_bytes bytes,verified_at verifiedAt FROM sync_media_device_state WHERE device_id=? AND recording_id=?').get(deviceId, row.recordingId);
++  const verifiedElsewhere = db.prepare('SELECT 1 FROM sync_media_device_state WHERE recording_id=? AND device_id<>? AND object_sha256=? LIMIT 1').get(row.recordingId, deviceId, row.sha256);
++  return { ...JSON.parse(row.manifestJson), serverVersion: row.serverVersion, serverCursor: row.cursor, deviceVerified: Boolean(verifiedHere && verifiedHere.sha256 === row.sha256 && verifiedHere.bytes === row.totalBytes), verifiedElsewhere: Boolean(verifiedElsewhere) };
++}
++
++function checkMetadataConflict(db, deviceId, manifest) {
++  const current = findCurrent(db, manifest.recording.id);
++  const metadataHash = audioMetadataHash(manifest.recording, manifest.anchors, manifest.sha256, manifest.totalBytes);
++  if (current && current.sha256 === manifest.sha256 && current.metadataHash === metadataHash) {
++    db.prepare(`INSERT INTO sync_media_device_state(device_id,recording_id,object_sha256,verified_bytes,verified_at) VALUES(?,?,?,?,?)
++      ON CONFLICT(device_id,recording_id) DO UPDATE SET object_sha256=excluded.object_sha256,verified_bytes=excluded.verified_bytes,verified_at=excluded.verified_at`)
++      .run(deviceId, manifest.recording.id, manifest.sha256, manifest.totalBytes, Date.now());
++    return { current, metadataHash, idempotent: true };
++  }
++  if ((current?.serverVersion ?? 0) !== manifest.baseServerVersion) return { current, metadataHash, conflict: true };
++  return { current, metadataHash, idempotent: false };
++}
++
++function saveConflict(db, deviceId, recordingId, baseVersion, localMetadata, remoteMetadata) {
++  const conflictId = randomUUID();
++  db.prepare(`INSERT INTO sync_audio_conflicts(conflict_id,recording_id,device_id,base_server_version,local_metadata_json,remote_metadata_json,created_at)
++    VALUES(?,?,?,?,?,?,?)`).run(conflictId, recordingId, deviceId, baseVersion, canonicalJson(localMetadata), canonicalJson(remoteMetadata), Date.now());
++  return conflictId;
++}
++
++function storedManifest(manifest) {
++  return {
++    protocolVersion: 1,
++    recording: manifest.recording,
++    anchors: manifest.anchors,
++    sha256: manifest.sha256,
++    totalBytes: manifest.totalBytes,
++    chunkSize: manifest.chunkSize,
++    chunks: manifest.chunks,
++  };
++}
++
++function commitManifest(db, deviceId, manifest, objectPath) {
++  const note = requireApprovedNote(db, deviceId, manifest.recording.noteId);
++  const check = checkMetadataConflict(db, deviceId, manifest);
++  if (check.current && check.current.noteId !== manifest.recording.noteId) throw new MediaError('audio_parent_note_immutable', 409);
++  if (check.conflict) {
++    const conflictId = saveConflict(db, deviceId, manifest.recording.id, manifest.baseServerVersion,
++      { ...storedManifest(manifest), sourceObject: manifest.sha256 }, { ...JSON.parse(check.current.manifestJson), serverVersion: check.current.serverVersion });
++    return { conflict: true, conflictId, current: check.current };
++  }
++  if (check.idempotent) return { recordingId: manifest.recording.id, serverVersion: check.current.serverVersion, serverCursor: serverMeta(db).serverCursor, verifiedBytes: manifest.totalBytes, idempotent: true };
++
++  const version = (check.current?.serverVersion ?? 0) + 1, now = Date.now(), record = storedManifest(manifest);
++  const recordJson = canonicalJson(record), cursor = appendChange(db, 'recording', manifest.recording.id, version, 'upsert', recordJson);
++  const obj = statSyncSafe(objectPath);
++  if (!obj || obj.size !== manifest.totalBytes) throw new MediaError('media_storage_unavailable', 503);
++  db.prepare('INSERT OR IGNORE INTO sync_media_objects(sha256,byte_length,mime_type,created_at) VALUES(?,?,?,?)').run(manifest.sha256, manifest.totalBytes, manifest.recording.mimeType, now);
++  const savedObject = db.prepare('SELECT byte_length byteLength FROM sync_media_objects WHERE sha256=?').get(manifest.sha256);
++  if (savedObject?.byteLength !== manifest.totalBytes) throw new MediaError('audio_object_digest_mismatch', 422);
++  if (check.current) {
++    db.prepare(`UPDATE sync_recording_media SET note_id=?,object_sha256=?,mime_type=?,total_bytes=?,chunk_size=?,chunk_count=?,server_version=?,manifest_json=?,metadata_hash=?,updated_at=? WHERE recording_id=?`)
++      .run(manifest.recording.noteId, manifest.sha256, manifest.recording.mimeType, manifest.totalBytes, manifest.chunkSize, manifest.chunks.length, version, recordJson, check.metadataHash, now, manifest.recording.id);
++    db.prepare(`UPDATE sync_entities SET server_version=?,record_json=?,content_hash=?,lifecycle='active',recording_count=0,committed_cursor=? WHERE entity_type='recording' AND id=?`)
++      .run(version, recordJson, check.metadataHash, cursor, manifest.recording.id);
++  } else {
++    db.prepare(`INSERT INTO sync_recording_media(recording_id,note_id,object_sha256,mime_type,total_bytes,chunk_size,chunk_count,server_version,manifest_json,metadata_hash,updated_at)
++      VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run(manifest.recording.id, manifest.recording.noteId, manifest.sha256, manifest.recording.mimeType, manifest.totalBytes, manifest.chunkSize, manifest.chunks.length, version, recordJson, check.metadataHash, now);
++    db.prepare(`INSERT INTO sync_entities(entity_type,id,server_version,record_json,content_hash,lifecycle,recording_count,committed_cursor)
++      VALUES('recording',?,?,?,?,'active',0,?)`).run(manifest.recording.id, version, recordJson, check.metadataHash, cursor);
++    db.prepare("UPDATE sync_entities SET recording_count=recording_count+1 WHERE entity_type='note' AND id=?").run(note.id);
++  }
++  db.prepare('INSERT INTO sync_recording_versions(recording_id,server_version,device_id,metadata_json,metadata_hash,created_at) VALUES(?,?,?,?,?,?)')
++    .run(manifest.recording.id, version, deviceId, recordJson, check.metadataHash, now);
++  db.prepare(`INSERT INTO sync_media_device_state(device_id,recording_id,object_sha256,verified_bytes,verified_at) VALUES(?,?,?,?,?)
++    ON CONFLICT(device_id,recording_id) DO UPDATE SET object_sha256=excluded.object_sha256,verified_bytes=excluded.verified_bytes,verified_at=excluded.verified_at`)
++    .run(deviceId, manifest.recording.id, manifest.sha256, manifest.totalBytes, now);
++  return { recordingId: manifest.recording.id, serverVersion: version, serverCursor: cursor, verifiedBytes: manifest.totalBytes, idempotent: false };
++}
++
++function statSyncSafe(path) {
++  try { return requireStatSync(path); } catch { return null; }
++}
++
++async function beginUpload(db, root, deviceId, manifest, manifestDigest, env) {
++  return withPublishLock(async () => {
++    const paths = mediaPaths(root), existingObject = await verifyObject(paths, manifest), currentUsage = await mediaDiskUsage(root), quota = mediaQuota(env);
++    let conflict = null;
++    db.exec('BEGIN IMMEDIATE');
++    try {
++      requireApprovedNote(db, deviceId, manifest.recording.noteId);
++      const prior = db.prepare('SELECT device_id deviceId,manifest_hash manifestHash,state,expires_at expiresAt FROM sync_media_uploads WHERE transfer_id=?').get(manifest.transferId);
++      if (prior) {
++        if (prior.manifestHash !== manifestDigest || prior.deviceId !== deviceId) throw new MediaError('audio_transfer_id_conflict', 409);
++        if (prior.state === 'published') { db.exec('COMMIT'); return { alreadyCommitted: true, existing: true }; }
++        if (prior.state === 'conflict') throw new MediaError('audio_metadata_conflict', 409);
++        if (prior.state === 'expired' || prior.expiresAt <= Date.now()) {
++          db.prepare("UPDATE sync_media_uploads SET state='expired',updated_at=? WHERE transfer_id=?").run(Date.now(), manifest.transferId);
++          db.exec('COMMIT'); throw new MediaError('audio_upload_expired', 410);
++        }
++        const received = db.prepare('SELECT chunk_index chunkIndex FROM sync_media_upload_chunks WHERE transfer_id=? ORDER BY chunk_index').all(manifest.transferId).map(row => row.chunkIndex);
++        db.exec('COMMIT'); return { received, resumed: true };
++      }
++      const check = checkMetadataConflict(db, deviceId, manifest);
++      if (check.conflict) {
++        const conflictId = saveConflict(db, deviceId, manifest.recording.id, manifest.baseServerVersion,
++          { ...storedManifest(manifest), sourceObject: manifest.sha256 }, { ...JSON.parse(check.current.manifestJson), serverVersion: check.current.serverVersion });
++        conflict = { conflictId, remote: JSON.parse(check.current.manifestJson), serverVersion: check.current.serverVersion };
++        db.exec('COMMIT');
++      } else if (check.idempotent) {
++        db.exec('COMMIT'); return { alreadyCommitted: true, serverVersion: check.current.serverVersion, verifiedBytes: manifest.totalBytes };
++      } else {
++        const reserved = db.prepare(`SELECT COALESCE(SUM(MAX(0,u.reserved_bytes-COALESCE(c.chunk_bytes,0))),0) bytes FROM sync_media_uploads u
++          LEFT JOIN (SELECT transfer_id,SUM(byte_length) chunk_bytes FROM sync_media_upload_chunks GROUP BY transfer_id) c ON c.transfer_id=u.transfer_id
++          WHERE u.state IN ('receiving','publishing')`).get().bytes;
++        const reserveBytes = existingObject ? 1 : manifest.totalBytes;
++        if (currentUsage + reserved + reserveBytes > quota) throw new MediaError('audio_storage_quota_exceeded', 507);
++        const deviceSessions = db.prepare("SELECT count(*) count FROM sync_media_uploads WHERE device_id=? AND state='receiving'").get(deviceId).count;
++        const allSessions = db.prepare("SELECT count(*) count FROM sync_media_uploads WHERE state='receiving'").get().count;
++        if (deviceSessions >= 2 || allSessions >= 8) throw new MediaError('audio_upload_capacity_reached', 429);
++        const now = Date.now();
++        db.prepare(`INSERT INTO sync_media_uploads(transfer_id,device_id,recording_id,note_id,manifest_json,manifest_hash,base_server_version,reserved_bytes,state,expires_at,created_at,updated_at)
++          VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).run(manifest.transferId, deviceId, manifest.recording.id, manifest.recording.noteId, canonicalJson(manifest), manifestDigest, manifest.baseServerVersion, reserveBytes, 'receiving', now + AUDIO_SYNC_SESSION_TTL_MS, now, now);
++        const received = existingObject ? manifest.chunks.map(row => row.index) : [];
++        if (existingObject) for (const chunk of manifest.chunks) db.prepare('INSERT INTO sync_media_upload_chunks(transfer_id,chunk_index,sha256,byte_length) VALUES(?,?,?,?)').run(manifest.transferId, chunk.index, chunk.sha256, chunk.byteLength);
++        db.exec('COMMIT');
++        return { received, resumed: false, objectAlreadyPresent: existingObject };
++      }
++    } catch (error) {
++      if (db.isTransaction) db.exec('ROLLBACK');
++      throw error;
++    }
++    if (conflict) throw Object.assign(new MediaError('audio_metadata_conflict', 409), conflict);
++    throw new MediaError('audio_metadata_conflict', 409);
++  });
++}
++
++async function completeUpload(db, root, deviceId, transferId, env) {
++  return withPublishLock(async () => {
++    const row = db.prepare(`SELECT transfer_id transferId,device_id deviceId,recording_id recordingId,manifest_json manifestJson,state,expires_at expiresAt FROM sync_media_uploads WHERE transfer_id=? AND device_id=?`).get(transferId, deviceId);
++    if (!row) throw new MediaError('audio_upload_not_found', 404);
++    if (row.state === 'published') return { alreadyCommitted: true, recordingId: row.recordingId };
++    if (row.state === 'expired' || row.expiresAt <= Date.now()) { db.prepare("UPDATE sync_media_uploads SET state='expired',updated_at=? WHERE transfer_id=?").run(Date.now(), transferId); throw new MediaError('audio_upload_expired', 410); }
++    if (!['receiving','publishing'].includes(row.state)) throw new MediaError('audio_metadata_conflict', 409);
++    const manifest = validateAudioManifest(JSON.parse(row.manifestJson), { transferId });
++    requireApprovedNote(db, deviceId, manifest.recording.noteId);
++    const paths = await ensureMediaDirectories(root);
++    const quota = mediaQuota(env), usage = await mediaDiskUsage(root);
++    const alreadyObject = await verifyObject(paths, manifest);
++    transaction(db, () => {
++      const current = db.prepare('SELECT state,expires_at expiresAt,reserved_bytes reservedBytes FROM sync_media_uploads WHERE transfer_id=? AND device_id=?').get(transferId, deviceId);
++      if (!current || current.expiresAt <= Date.now() || !['receiving','publishing'].includes(current.state)) throw new MediaError('audio_upload_expired', 410);
++      if (current.state === 'receiving') {
++        const reservedOther = db.prepare(`SELECT COALESCE(SUM(MAX(0,u.reserved_bytes-COALESCE(c.chunk_bytes,0))),0) bytes FROM sync_media_uploads u
++          LEFT JOIN (SELECT transfer_id,SUM(byte_length) chunk_bytes FROM sync_media_upload_chunks GROUP BY transfer_id) c ON c.transfer_id=u.transfer_id
++          WHERE u.state IN ('receiving','publishing') AND u.transfer_id<>?`).get(transferId).bytes;
++        const assemblyReservation = alreadyObject ? 0 : manifest.totalBytes;
++        if (usage + reservedOther + assemblyReservation > quota) throw new MediaError('audio_storage_quota_exceeded', 507);
++        db.prepare("UPDATE sync_media_uploads SET state='publishing',reserved_bytes=reserved_bytes+?,updated_at=? WHERE transfer_id=?").run(assemblyReservation, Date.now(), transferId);
++      }
++    });
++    if (!alreadyObject) {
++      const chunks = db.prepare('SELECT chunk_index chunkIndex,sha256,byte_length byteLength FROM sync_media_upload_chunks WHERE transfer_id=? ORDER BY chunk_index').all(transferId);
++      if (chunks.length !== manifest.chunks.length || chunks.some((chunk, i) => chunk.chunkIndex !== i || chunk.sha256 !== manifest.chunks[i].sha256 || chunk.byteLength !== manifest.chunks[i].byteLength)) throw new MediaError('audio_upload_incomplete', 409);
++      await assembleObject(paths, transferId, manifest);
++    }
++    const objectPath = paths.objectFile(manifest.sha256);
++    if (!(await verifyObject(paths, manifest))) throw new MediaError('audio_object_digest_mismatch', 422);
++    const result = transaction(db, () => {
++      const commit = commitManifest(db, deviceId, manifest, objectPath);
++      if (commit.conflict) {
++        db.prepare("UPDATE sync_media_uploads SET state='conflict',updated_at=? WHERE transfer_id=?").run(Date.now(), transferId);
++        return commit;
++      }
++      db.prepare("UPDATE sync_media_uploads SET state='published',updated_at=? WHERE transfer_id=?").run(Date.now(), transferId);
++      return commit;
++    });
++    if (result.conflict) throw Object.assign(new MediaError('audio_metadata_conflict', 409), { conflictId: result.conflictId, remote: JSON.parse(result.current.manifestJson), serverVersion: result.current.serverVersion });
++    return result;
++  });
++}
++
++async function handleChanges(db, deviceId, body) {
++  if (!body || Object.keys(body).sort().join(',') !== 'cursor,limit,protocolVersion' || body.protocolVersion !== 1 || !Number.isSafeInteger(body.cursor) || body.cursor < 0 || !Number.isSafeInteger(body.limit) || body.limit < 1 || body.limit > 100) throw new MediaError('invalid_audio_cursor', 400);
++  const meta = serverMeta(db);
++  if (body.cursor > meta.serverCursor) return json({ error: 'cursor_ahead', ...meta }, 409);
++  const events = db.prepare('SELECT server_cursor cursor,entity_type entityType,entity_id id,server_version serverVersion,event,record_json recordJson FROM sync_changelog WHERE server_cursor>? ORDER BY server_cursor LIMIT ?').all(body.cursor, body.limit);
++  const changes = [];
++  for (const event of events) {
++    if (event.entityType !== 'recording' || event.event !== 'upsert') continue;
++    let manifest;
++    try { manifest = JSON.parse(event.recordJson); } catch { throw new MediaError('audio_metadata_unavailable', 503); }
++    const approved = db.prepare('SELECT approved FROM sync_media_approvals WHERE device_id=? AND note_id=?').get(deviceId, manifest.recording?.noteId)?.approved === 1;
++    if (!approved) continue;
++    const row = findCurrent(db, event.id);
++    if (row?.serverVersion === event.serverVersion) changes.push({ ...manifestForDevice(db, row, deviceId), cursor: event.cursor });
++  }
++  return json({ ...meta, changes, nextCursor: events.at(-1)?.cursor ?? body.cursor, hasMore: events.length === body.limit });
++}
++
++function handleDownload(db, root, deviceId, recordingId, index) {
++  if (!validId(recordingId) || !Number.isSafeInteger(index) || index < 0) throw new MediaError('invalid_audio_download', 400);
++  const row = findCurrent(db, recordingId);
++  if (!row) throw new MediaError('audio_recording_not_found', 404);
++  requireApprovedNote(db, deviceId, row.noteId);
++  const manifest = JSON.parse(row.manifestJson), chunk = manifest.chunks[index];
++  if (!chunk) throw new MediaError('audio_chunk_not_found', 404);
++  const file = mediaPaths(root).objectFile(row.sha256), start = manifest.chunks.slice(0, index).reduce((sum, part) => sum + part.byteLength, 0), end = start + chunk.byteLength - 1;
++  const body = Readable.toWeb(createReadStream(file, { start, end }));
++  return new Response(body, { status: 200, headers: { ...responseHeaders, 'Content-Type': 'application/octet-stream', 'Content-Length': String(chunk.byteLength), 'X-NoteOS-Chunk-SHA256': chunk.sha256, 'Content-Disposition': 'attachment' } });
++}
++
++function handleVerify(db, deviceId, body) {
++  if (!body || Object.keys(body).sort().join(',') !== 'recordingId,sha256' || !validId(body.recordingId) || !validDigest(body.sha256)) throw new MediaError('invalid_audio_verification', 400);
++  const row = findCurrent(db, body.recordingId);
++  if (!row || row.sha256 !== body.sha256) throw new MediaError('audio_verification_mismatch', 409);
++  requireApprovedNote(db, deviceId, row.noteId);
++  db.prepare(`INSERT INTO sync_media_device_state(device_id,recording_id,object_sha256,verified_bytes,verified_at) VALUES(?,?,?,?,?)
++    ON CONFLICT(device_id,recording_id) DO UPDATE SET object_sha256=excluded.object_sha256,verified_bytes=excluded.verified_bytes,verified_at=excluded.verified_at`)
++    .run(deviceId, row.recordingId, row.sha256, row.totalBytes, Date.now());
++  return json({ recordingId: row.recordingId, sha256: row.sha256, verifiedBytes: row.totalBytes, verifiedAt: Date.now() });
++}
++
++function handleMetadata(db, deviceId, body) {
++  if (!body || Object.keys(body).sort().join(',') !== 'anchors,baseServerVersion,recordingId,recordingMetadata' || !validId(body.recordingId) || !Number.isSafeInteger(body.baseServerVersion) || body.baseServerVersion < 1 || !body.recordingMetadata || Array.isArray(body.recordingMetadata) || Object.keys(body.recordingMetadata).some(key => !['title','updatedAt'].includes(key)) || typeof body.recordingMetadata.title !== 'string' || !body.recordingMetadata.title.trim() || [...body.recordingMetadata.title].length > 120 || !Number.isSafeInteger(body.recordingMetadata.updatedAt) || body.recordingMetadata.updatedAt < 0) throw new MediaError('invalid_audio_metadata', 400);
++  const current = findCurrent(db, body.recordingId);
++  if (!current) throw new MediaError('audio_recording_not_found', 404);
++  requireApprovedNote(db, deviceId, current.noteId);
++  const previous = JSON.parse(current.manifestJson);
++  const anchors = validateAudioAnchorSet(body.anchors, body.recordingId, { durationMs: previous.recording.durationMs, durationKnown: previous.recording.durationMs > 0 });
++  const localManifest = { ...previous, recording: { ...previous.recording, ...body.recordingMetadata }, anchors };
++  const metadataHash = audioMetadataHash(localManifest.recording, anchors, current.sha256, current.totalBytes);
++  if (body.baseServerVersion !== current.serverVersion) {
++    const conflictId = saveConflict(db, deviceId, body.recordingId, body.baseServerVersion, localManifest, { ...previous, serverVersion: current.serverVersion });
++    return json({ error: 'audio_metadata_conflict', conflictId, remote: previous, serverVersion: current.serverVersion }, 409);
++  }
++  if (metadataHash === current.metadataHash) return json({ recordingId: current.recordingId, serverVersion: current.serverVersion, serverCursor: serverMeta(db).serverCursor, unchanged: true });
++  const version = current.serverVersion + 1, now = Date.now(), stored = canonicalJson(localManifest);
++  const cursor = transaction(db, () => {
++    const nextCursor = appendChange(db, 'recording', body.recordingId, version, 'upsert', stored);
++    db.prepare(`UPDATE sync_recording_media SET manifest_json=?,metadata_hash=?,server_version=?,updated_at=? WHERE recording_id=?`).run(stored, metadataHash, version, now, body.recordingId);
++    db.prepare(`UPDATE sync_entities SET server_version=?,record_json=?,content_hash=?,committed_cursor=? WHERE entity_type='recording' AND id=?`).run(version, stored, metadataHash, nextCursor, body.recordingId);
++    db.prepare('INSERT INTO sync_recording_versions(recording_id,server_version,device_id,metadata_json,metadata_hash,created_at) VALUES(?,?,?,?,?,?)').run(body.recordingId, version, deviceId, stored, metadataHash, now);
++    return nextCursor;
++  });
++  return json({ recordingId: body.recordingId, serverVersion: version, serverCursor: cursor });
++}
++
++export async function handleAudioSync(request, action, env = process.env) {
++  if (!featureEnabled(env)) return fail('audio_sync_disabled', 503);
++  let db;
++  try {
++    const url = new URL(request.url);
++    if (url.search) throw new MediaError('query_parameters_not_supported', 400);
++    const origin = allowedOrigin(request, env);
++    if (!origin) throw new MediaError('origin_denied', 403);
++    const cookieName = responseCookieName(origin);
++    db = openStore(env.NOTEOS_SYNC_STORAGE);
++    const device = authenticatedDevice(db, request, cookieName);
++    if (!device) throw new MediaError('authentication_required', 401);
++    if (db.prepare('PRAGMA user_version').get().user_version === 2) {
++      db.close();
++      db = openStore(env.NOTEOS_SYNC_STORAGE, { audioSync: true });
++      if (!authenticatedDevice(db, request, cookieName)) throw new MediaError('authentication_required', 401);
++    }
++    const root = env.NOTEOS_SYNC_STORAGE;
++    const paths = await ensureMediaDirectories(root);
++    await recoverStagedChunks(db, root);
++    const quota = mediaQuota(env);
++
++    if (action === 'media/status' && request.method === 'GET') {
++      const bytesUsed = await mediaDiskUsage(root);
++      return json({ enabled: true, protocolVersion: 1, chunkBytes: AUDIO_SYNC_CHUNK_BYTES, maxRecordingBytes: 512 * 1024 * 1024, quotaBytes: quota, bytesUsed, ...serverMeta(db) });
++    }
++    if (action === 'media/approve' && request.method === 'POST') {
++      const body = await readJson(request);
++      if (!body || Object.keys(body).sort().join(',') !== 'approved,noteId' || typeof body.approved !== 'boolean' || !validId(body.noteId)) throw new MediaError('invalid_audio_approval', 400);
++      if (body.approved) requireApprovedNoteWithoutApproval(db, body.noteId);
++      db.prepare(`INSERT INTO sync_media_approvals(device_id,note_id,approved,updated_at) VALUES(?,?,?,?)
++        ON CONFLICT(device_id,note_id) DO UPDATE SET approved=excluded.approved,updated_at=excluded.updated_at`).run(device.id, body.noteId, body.approved ? 1 : 0, Date.now());
++      const recordings = body.approved ? db.prepare(`SELECT m.recording_id recordingId,m.server_version serverVersion,m.manifest_json manifestJson,m.total_bytes totalBytes,m.object_sha256 sha256,e.committed_cursor cursor
++        FROM sync_recording_media m JOIN sync_entities e ON e.entity_type='recording' AND e.id=m.recording_id WHERE m.note_id=? ORDER BY m.recording_id`).all(body.noteId).map(row => manifestForDevice(db, row, device.id)) : [];
++      return json({ noteId: body.noteId, approved: body.approved, recordings });
++    }
++    if (action === 'media/uploads' && request.method === 'POST') {
++      const body = await readJson(request);
++      if (!body || Object.keys(body).join(',') !== 'manifest') throw new MediaError('invalid_audio_manifest', 400);
++      const manifest = validateAudioManifest(body.manifest);
++      const result = await beginUpload(db, root, device.id, manifest, audioManifestHash(manifest), env);
++      if (result.alreadyCommitted) return json({ alreadyCommitted: true, ...result });
++      return json({ transferId: manifest.transferId, received: result.received, resumed: result.resumed, objectAlreadyPresent: result.objectAlreadyPresent ?? false });
++    }
++    const transferStatus = action.match(/^media\/uploads\/([0-9a-f-]{36})$/i);
++    if (transferStatus && request.method === 'GET') {
++      const transferId = transferStatus[1], row = db.prepare('SELECT manifest_json manifestJson,state,expires_at expiresAt FROM sync_media_uploads WHERE transfer_id=? AND device_id=?').get(transferId, device.id);
++      if (!row) throw new MediaError('audio_upload_not_found', 404);
++      if (row.expiresAt <= Date.now() || row.state === 'expired') throw new MediaError('audio_upload_expired', 410);
++      const manifest = JSON.parse(row.manifestJson), received = db.prepare('SELECT chunk_index chunkIndex FROM sync_media_upload_chunks WHERE transfer_id=? ORDER BY chunk_index').all(transferId).map(chunk => chunk.chunkIndex);
++      return json({ transferId, state: row.state, received, chunkCount: manifest.chunks.length });
++    }
++    const chunkUpload = action.match(/^media\/uploads\/([0-9a-f-]{36})\/chunks\/(\d+)$/i);
++    if (chunkUpload && request.method === 'PUT') {
++      if (request.headers.get('content-type') !== 'application/octet-stream' || request.headers.get('x-noteos-sync') !== '1') throw new MediaError('csrf_denied', 403);
++      const transferId = chunkUpload[1], index = Number(chunkUpload[2]);
++      const row = db.prepare('SELECT manifest_json manifestJson,state,expires_at expiresAt FROM sync_media_uploads WHERE transfer_id=? AND device_id=?').get(transferId, device.id);
++      if (!row) throw new MediaError('audio_upload_not_found', 404);
++      if (row.state !== 'receiving' || row.expiresAt <= Date.now()) throw new MediaError('audio_upload_expired', 410);
++      const manifest = validateAudioManifest(JSON.parse(row.manifestJson), { transferId }), expected = manifest.chunks[index];
++      if (!expected) throw new MediaError('audio_chunk_not_found', 404);
++      requireApprovedNote(db, device.id, manifest.recording.noteId);
++      const saved = db.prepare('SELECT sha256,byte_length byteLength FROM sync_media_upload_chunks WHERE transfer_id=? AND chunk_index=?').get(transferId, index);
++      if (saved) {
++        if (saved.sha256 !== expected.sha256 || saved.byteLength !== expected.byteLength) throw new MediaError('audio_chunk_conflict', 409);
++        return new Response(null, { status: 204, headers: responseHeaders });
++      }
++      const destination = paths.chunkFile(transferId, index);
++      await receiveChunkToFile(request, destination, { byteLength: expected.byteLength, sha256: expected.sha256, maxChunkBytes: AUDIO_SYNC_CHUNK_BYTES });
++      transaction(db, () => {
++        const current = db.prepare('SELECT state,expires_at expiresAt FROM sync_media_uploads WHERE transfer_id=? AND device_id=?').get(transferId, device.id);
++        if (!current || current.state !== 'receiving' || current.expiresAt <= Date.now()) throw new MediaError('audio_upload_expired', 410);
++        db.prepare('INSERT OR IGNORE INTO sync_media_upload_chunks(transfer_id,chunk_index,sha256,byte_length) VALUES(?,?,?,?)').run(transferId, index, expected.sha256, expected.byteLength);
++        db.prepare('UPDATE sync_media_uploads SET updated_at=?,expires_at=? WHERE transfer_id=?').run(Date.now(), Date.now() + AUDIO_SYNC_SESSION_TTL_MS, transferId);
++      });
++      return new Response(null, { status: 204, headers: responseHeaders });
++    }
++    const complete = action.match(/^media\/uploads\/([0-9a-f-]{36})\/complete$/i);
++    if (complete && request.method === 'POST') {
++      const body = await readJson(request); if (!body || Array.isArray(body) || Object.keys(body).length) throw new MediaError('invalid_request', 400);
++      const result = await completeUpload(db, root, device.id, complete[1], env);
++      return json(result);
++    }
++    if (action === 'media/changes' && request.method === 'POST') return await handleChanges(db, device.id, await readJson(request));
++    if (action === 'media/metadata' && request.method === 'POST') return handleMetadata(db, device.id, await readJson(request));
++    if (action === 'media/verify' && request.method === 'POST') return handleVerify(db, device.id, await readJson(request));
++    const download = action.match(/^media\/downloads\/([A-Za-z0-9_-]{1,128})\/chunks\/(\d+)$/);
++    if (download && request.method === 'GET') return handleDownload(db, root, device.id, download[1], Number(download[2]));
++    return fail('route_not_found', 404);
++  } catch (error) {
++    if (error instanceof MediaError) return error.status === 409 && (error.remote || error.conflictId) ? json({ error: error.code, conflictId: error.conflictId, remote: error.remote, serverVersion: error.serverVersion }, error.status) : fail(error.code, error.status);
++    if (error?.status) return fail(error.code ?? 'audio_sync_conflict', error.status);
++    if (error instanceof TypeError) return fail('invalid_audio_request', 400);
++    return fail('audio_sync_unavailable', 503);
++  } finally { db?.close(); }
++}
++
++function requireApprovedNoteWithoutApproval(db, noteId) {
++  const row = db.prepare("SELECT record_json recordJson FROM sync_entities WHERE entity_type='note' AND id=?").get(noteId);
++  const deleted = db.prepare("SELECT 1 FROM sync_tombstones WHERE entity_type='note' AND id=?").get(noteId);
++  if (!row || deleted) throw new MediaError('note_not_available', 404);
++  let note;
++  try { note = JSON.parse(row.recordJson); } catch { throw new MediaError('note_not_available', 409); }
++  if (!['PRIVATE_SERVER', 'CLOUD_ALLOWED'].includes(note.privacy)) throw new MediaError('audio_permission_required', 403);
++  return note;
++}
+diff --git a/spikes/phase-00/gate1/web/sync-server/media-storage.mjs b/spikes/phase-00/gate1/web/sync-server/media-storage.mjs
+new file mode 100644
+index 0000000..be4ae07
+--- /dev/null
++++ b/spikes/phase-00/gate1/web/sync-server/media-storage.mjs
+@@ -0,0 +1,176 @@
++import { createHash, randomUUID } from 'node:crypto';
++import { createReadStream } from 'node:fs';
++import { mkdir, open, readdir, lstat, stat, link, unlink, chmod } from 'node:fs/promises';
++import { dirname, join } from 'node:path';
++
++export class MediaError extends Error {
++  constructor(code, status = 400) { super(code); this.name = 'MediaError'; this.code = code; this.status = status; }
++}
++
++export function mediaPaths(root) {
++  const base = join(root, 'media');
++  return {
++    base,
++    staging: join(base, 'staging'),
++    objects: join(base, 'objects', 'sha256'),
++    stageDirectory: transferId => join(base, 'staging', transferId),
++    chunkFile: (transferId, index) => join(base, 'staging', transferId, `${index}.chunk`),
++    objectFile: sha => join(base, 'objects', 'sha256', sha.slice(0, 2), sha),
++  };
++}
++
++async function ensurePrivateDirectory(path) {
++  await mkdir(path, { recursive: true, mode: 0o700 });
++  const info = await lstat(path);
++  if (!info.isDirectory() || info.isSymbolicLink()) throw new MediaError('media_storage_unavailable', 503);
++  await chmod(path, 0o700);
++}
++
++export async function ensureMediaDirectories(root) {
++  const paths = mediaPaths(root);
++  for (const path of [paths.base, paths.staging, paths.objects]) await ensurePrivateDirectory(path);
++  return paths;
++}
++
++async function writeAll(handle, buffer) {
++  let offset = 0;
++  while (offset < buffer.length) {
++    const result = await handle.write(buffer, offset, buffer.length - offset, null);
++    if (!result.bytesWritten) throw new MediaError('media_storage_unavailable', 503);
++    offset += result.bytesWritten;
++  }
++}
++async function syncDirectory(path) {
++  const directory = await open(path, 'r');
++  try { await directory.sync(); } finally { await directory.close(); }
++}
++
++/** Streams one bounded request body to a private staging file and durably flushes it. */
++export async function receiveChunkToFile(request, destination, { byteLength, sha256, maxChunkBytes }) {
++  if (!request.body) throw new MediaError('invalid_audio_chunk', 400);
++  const announced = request.headers.get('content-length');
++  if (announced && (!/^\d+$/.test(announced) || Number(announced) !== byteLength || Number(announced) > maxChunkBytes)) throw new MediaError('invalid_audio_chunk', 400);
++  await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
++  const temporary = `${destination}.${process.pid}.${randomUUID()}.tmp`;
++  const handle = await open(temporary, 'wx', 0o600);
++  const hash = createHash('sha256');
++  const reader = request.body.getReader();
++  let size = 0;
++  try {
++    while (true) {
++      const { value, done } = await reader.read();
++      if (done) break;
++      size += value.byteLength;
++      if (size > byteLength || size > maxChunkBytes) { await reader.cancel(); throw new MediaError('invalid_audio_chunk', 413); }
++      const bytes = Buffer.from(value.buffer, value.byteOffset, value.byteLength);
++      hash.update(bytes);
++      await writeAll(handle, bytes);
++    }
++    if (size !== byteLength || hash.digest('hex') !== sha256) throw new MediaError('audio_chunk_digest_mismatch', 422);
++    await handle.sync();
++    await handle.close();
++    try { await link(temporary, destination); }
++    catch (error) {
++      if (error.code !== 'EEXIST') throw error;
++      const current = await hashFile(destination).catch(() => null);
++      if (!current || current.byteLength !== byteLength || current.sha256 !== sha256) throw new MediaError('audio_chunk_conflict', 409);
++    }
++    await syncDirectory(dirname(destination));
++    await unlink(temporary);
++    return { byteLength: size, sha256 };
++  } catch (error) {
++    await handle.close().catch(() => {});
++    // Keep a corrupt/partial staging file for explicit recovery review and quota accounting.
++    throw error;
++  }
++}
++
++export async function hashFile(path) {
++  const hash = createHash('sha256'); let byteLength = 0;
++  for await (const chunk of createReadStream(path)) { hash.update(chunk); byteLength += chunk.byteLength; }
++  return { sha256: hash.digest('hex'), byteLength };
++}
++
++/** Assemble with bounded buffers; the source chunks remain intact until metadata commits. */
++export async function assembleObject(paths, transferId, manifest) {
++  const temporary = join(paths.staging, `${transferId}.publish.${randomUUID()}.tmp`);
++  const handle = await open(temporary, 'wx', 0o600), wholeHash = createHash('sha256');
++  let totalBytes = 0;
++  try {
++    for (const chunk of manifest.chunks) {
++      const chunkPath = paths.chunkFile(transferId, chunk.index);
++      const actual = await hashFile(chunkPath).catch(() => null);
++      if (!actual || actual.byteLength !== chunk.byteLength || actual.sha256 !== chunk.sha256) throw new MediaError('audio_chunk_digest_mismatch', 422);
++      for await (const data of createReadStream(chunkPath)) {
++        totalBytes += data.byteLength;
++        if (totalBytes > manifest.totalBytes) throw new MediaError('audio_manifest_mismatch', 422);
++        wholeHash.update(data);
++        await writeAll(handle, data);
++      }
++    }
++    if (totalBytes !== manifest.totalBytes || wholeHash.digest('hex') !== manifest.sha256) throw new MediaError('audio_object_digest_mismatch', 422);
++    await handle.sync(); await handle.close();
++    const destination = paths.objectFile(manifest.sha256);
++    await ensurePrivateDirectory(dirname(destination));
++    try { await link(temporary, destination); }
++    catch (error) {
++      if (error.code !== 'EEXIST') throw error;
++      const current = await hashFile(destination).catch(() => null);
++      if (!current || current.byteLength !== manifest.totalBytes || current.sha256 !== manifest.sha256) throw new MediaError('audio_object_digest_mismatch', 422);
++    }
++    await syncDirectory(dirname(destination));
++    await unlink(temporary).catch(() => {});
++    return destination;
++  } catch (error) {
++    await handle.close().catch(() => {});
++    // Incomplete assembled files are intentionally retained and counted against quota.
++    throw error;
++  }
++}
++
++export async function verifyObject(paths, manifest) {
++  const path = paths.objectFile(manifest.sha256);
++  const info = await stat(path).catch(() => null);
++  if (!info?.isFile() || info.size !== manifest.totalBytes) return false;
++  const digest = await hashFile(path);
++  return digest.byteLength === manifest.totalBytes && digest.sha256 === manifest.sha256;
++}
++
++/** Counts actual media files, including partial uploads and crash orphans. */
++export async function mediaDiskUsage(root) {
++  const paths = mediaPaths(root);
++  const visit = async path => {
++    const info = await lstat(path).catch(error => error.code === 'ENOENT' ? null : Promise.reject(error));
++    if (!info) return 0;
++    if (info.isSymbolicLink()) throw new MediaError('media_storage_unavailable', 503);
++    if (info.isFile()) return info.size;
++    if (!info.isDirectory()) throw new MediaError('media_storage_unavailable', 503);
++    let total = 0;
++    for (const name of await readdir(path)) total += await visit(join(path, name));
++    return total;
++  };
++  return visit(paths.base);
++}
++
++/** Reconcile the crash window: durable chunk rename completed, SQLite row did not. */
++export async function recoverStagedChunks(db, root) {
++  const paths = await ensureMediaDirectories(root);
++  const sessions = db.prepare("SELECT transfer_id transferId,manifest_json manifestJson FROM sync_media_uploads WHERE state='receiving'").all();
++  let recovered = 0;
++  for (const session of sessions) {
++    const manifest = JSON.parse(session.manifestJson);
++    const existing = new Set(db.prepare('SELECT chunk_index chunkIndex FROM sync_media_upload_chunks WHERE transfer_id=?').all(session.transferId).map(row => row.chunkIndex));
++    for (const expected of manifest.chunks) {
++      if (existing.has(expected.index)) continue;
++      const path = paths.chunkFile(session.transferId, expected.index);
++      const actual = await hashFile(path).catch(() => null);
++      if (!actual || actual.byteLength !== expected.byteLength || actual.sha256 !== expected.sha256) continue;
++      db.exec('BEGIN IMMEDIATE');
++      try {
++        db.prepare('INSERT OR IGNORE INTO sync_media_upload_chunks(transfer_id,chunk_index,sha256,byte_length) VALUES(?,?,?,?)').run(session.transferId, expected.index, expected.sha256, expected.byteLength);
++        db.exec('COMMIT'); recovered++;
++      } catch (error) { db.exec('ROLLBACK'); throw error; }
++    }
++  }
++  return { recoveredChunks: recovered, paths };
++}
+diff --git a/spikes/phase-00/gate1/web/sync-server/media.test.mjs b/spikes/phase-00/gate1/web/sync-server/media.test.mjs
+new file mode 100644
+index 0000000..53b5463
+--- /dev/null
++++ b/spikes/phase-00/gate1/web/sync-server/media.test.mjs
+@@ -0,0 +1,199 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import { createHash, randomUUID } from 'node:crypto';
++import { mkdtempSync, rmSync, existsSync } from 'node:fs';
++import { tmpdir } from 'node:os';
++import { join } from 'node:path';
++import { openStore, appendChange, transaction, serverMeta } from './storage.mjs';
++import { issuePairingCode, redeemPairingCode } from './auth.mjs';
++import { handleAudioSync } from './media-http.mjs';
++import { handleSync } from './http.mjs';
++import { canonicalJson } from '../app/lib/sync-protocol.mjs';
++
++const origin = 'http://127.0.0.1:15700';
++function setup(t) {
++  const root = mkdtempSync(join(tmpdir(), 'noteos-media-test-'));
++  const db = openStore(root, { initialize: true });
++  const paired = redeemPairingCode(db, issuePairingCode(db), 'Synthetic media fixture');
++  transaction(db, () => {
++    const record = { id: 'note-synthetic', privacy: 'PRIVATE_SERVER', lifecycle: 'active', title: 'Synthetic fixture' };
++    const cursor = appendChange(db, 'note', record.id, 1, 'upsert', canonicalJson(record));
++    db.prepare("INSERT INTO sync_entities(entity_type,id,server_version,record_json,content_hash,lifecycle,recording_count,committed_cursor) VALUES('note',?,1,?,'synthetic','active',0,?)").run(record.id, canonicalJson(record), cursor);
++  });
++  const env = { NOTEOS_SYNC_ENABLED: '1', NOTEOS_AUDIO_SYNC_ENABLED: '1', NOTEOS_SYNC_STORAGE: root, NOTEOS_SYNC_ALLOWED_ORIGINS: origin };
++  const cookie = `noteos_sync_local=${paired.token}`;
++  t.after(() => { try { db.close(); } catch {} rmSync(root, { recursive: true, force: true }); });
++  const call = (action, { method = 'GET', body, raw, headers = {}, feature = true } = {}) => {
++    const post = method !== 'GET';
++    const req = new Request(`${origin}/api/v1/sync/${action}`, { method, headers: { host: '127.0.0.1:15700', ...(post ? { origin, 'x-noteos-sync': '1' } : {}), ...(raw ? { 'content-type': 'application/octet-stream' } : body !== undefined ? { 'content-type': 'application/json' } : {}), cookie, ...headers }, ...(raw ? { body: raw } : body !== undefined ? { body: JSON.stringify(body) } : {}) });
++    return handleAudioSync(req, action, { ...env, ...(feature ? {} : { NOTEOS_AUDIO_SYNC_ENABLED: '0' }) });
++  };
++  return { root, db, env, paired, cookie, call };
++}
++const digest = bytes => createHash('sha256').update(bytes).digest('hex');
++function audioManifest(bytes, overrides = {}) {
++  const recordingId = overrides.recordingId ?? 'recording-synthetic';
++  return { protocolVersion: 1, transferId: randomUUID(), baseServerVersion: 0,
++    recording: { id: recordingId, noteId: 'note-synthetic', title: 'Voice memo — 测试', mimeType: 'audio/webm;codecs=opus', status: 'complete', createdAt: 100, updatedAt: 101, durationMs: 1000 },
++    anchors: { version: 1, items: [{ id: 'anchor-a', recordingId, offsetMs: 500, label: 'Điểm chính 🎧', createdAt: 102 }] },
++    sha256: digest(bytes), totalBytes: bytes.length, chunkSize: 1024 * 1024,
++    chunks: [{ index: 0, byteLength: bytes.length, sha256: digest(bytes) }] };
++}
++async function uploadFixture(call, manifest, bytes) {
++  const approved = await call('media/approve', { method: 'POST', body: { noteId: 'note-synthetic', approved: true } });
++  assert.equal(approved.status, 200);
++  const started = await call('media/uploads', { method: 'POST', body: { manifest } });
++  assert.equal(started.status, 200);
++  if (!started.headers.get('content-type')?.includes('json')) return started.json();
++  const startData = await started.json();
++  if (!startData.alreadyCommitted && !(startData.received ?? []).includes(0)) {
++    const chunk = await call(`media/uploads/${manifest.transferId}/chunks/0`, { method: 'PUT', raw: bytes });
++    assert.equal(chunk.status, 204);
++  }
++  return { startData, completed: await call(`media/uploads/${manifest.transferId}/complete`, { method: 'POST', body: {} }) };
++}
++
++test('feature flag is off by default and does not migrate v2 or touch the media filesystem', async t => {
++  const { db, call, root } = setup(t);
++  const before = serverMeta(db);
++  const response = await call('media/status', { feature: false });
++  assert.equal(response.status, 503); assert.deepEqual(await response.json(), { error: 'audio_sync_disabled' });
++  assert.deepEqual(serverMeta(db), before); assert.equal(db.prepare('PRAGMA user_version').get().user_version, 2);
++  assert.equal(existsSync(join(root, 'media')), false);
++});
++
++test('authenticated content-addressed upload, unicode anchors, download and per-device verification survive reopen', async t => {
++  const { call, root, db } = setup(t), bytes = Buffer.from('synthetic-audio-bytes-🎵');
++  const manifest = audioManifest(bytes);
++  const upload = await uploadFixture(call, manifest, bytes);
++  assert.equal(upload.completed.status, 200);
++  const complete = await upload.completed.json(); assert.equal(complete.verifiedBytes, bytes.length);
++  db.close();
++  const reopened = openStore(root); assert.equal(serverMeta(reopened).serverCursor, 2); reopened.close();
++  const changesResponse = await call('media/changes', { method: 'POST', body: { protocolVersion: 1, cursor: 0, limit: 100 } });
++  const page = await changesResponse.json(); assert.equal(page.changes.length, 1);
++  assert.equal(page.changes[0].anchors.items[0].label, 'Điểm chính 🎧');
++  const download = await call('media/downloads/recording-synthetic/chunks/0');
++  assert.equal(download.status, 200); assert.deepEqual(Buffer.from(await download.arrayBuffer()), bytes);
++  assert.equal(download.headers.get('x-noteos-chunk-sha256'), digest(bytes));
++  const verified = await call('media/verify', { method: 'POST', body: { recordingId: 'recording-synthetic', sha256: digest(bytes) } });
++  assert.equal((await verified.json()).verifiedBytes, bytes.length);
++  const duplicate = await uploadFixture(call, manifest, bytes); assert.equal(duplicate.completed.status, 200);
++  const afterDuplicate = openStore(root); assert.equal(afterDuplicate.prepare('SELECT count(*) n FROM sync_recording_media').get().n, 1); afterDuplicate.close();
++});
++
++test('v2 migration preserves epoch, cursor, devices and notes; unauthenticated audio request cannot migrate', async t => {
++  const { db, call, paired, env, root } = setup(t), before = serverMeta(db);
++  const unauthorized = new Request(`${origin}/api/v1/sync/media/status`, { headers: { host: '127.0.0.1:15700' } });
++  assert.equal((await handleAudioSync(unauthorized, 'media/status', { ...env, NOTEOS_SYNC_STORAGE: root })).status, 401);
++  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 2);
++  const response = await call('media/status'); assert.equal(response.status, 200);
++  const after = serverMeta(db); assert.equal(after.serverEpoch, before.serverEpoch); assert.equal(after.serverCursor, before.serverCursor); assert.equal(after.schemaVersion, 3);
++  assert.equal(db.prepare('SELECT count(*) n FROM sync_devices WHERE id=?').get(paired.id).n, 1);
++  assert.equal(db.prepare("SELECT count(*) n FROM sync_entities WHERE entity_type='note' AND id='note-synthetic'").get().n, 1);
++});
++
++test('DEVICE_ONLY note, cross-origin requests and unpaired clients cannot approve or upload', async t => {
++  const { db, env, call, paired } = setup(t);
++  db.prepare("UPDATE sync_entities SET record_json=? WHERE entity_type='note' AND id='note-synthetic'").run('{"id":"note-synthetic","privacy":"DEVICE_ONLY","lifecycle":"active"}');
++  const denied = await call('media/approve', { method: 'POST', body: { noteId: 'note-synthetic', approved: true } }); assert.equal(denied.status, 403);
++  const wrong = new Request(`${origin}/api/v1/sync/media/status`, { headers: { host: '127.0.0.1:15700', origin: 'http://evil.example' } });
++  assert.equal((await handleAudioSync(wrong, 'media/status', env)).status, 403);
++  const anonymous = new Request(`${origin}/api/v1/sync/media/status`, { headers: { host: '127.0.0.1:15700' } });
++  assert.equal((await handleAudioSync(anonymous, 'media/status', env)).status, 401);
++  db.prepare('UPDATE sync_devices SET revoked_at=? WHERE id=?').run(Date.now(), paired.id);
++  const revoked = await call('media/status'); assert.equal(revoked.status, 401);
++});
++
++test('stale anchor metadata is preserved as a conflict instead of overwriting remote state', async t => {
++  const { call } = setup(t), bytes = Buffer.from('anchors-conflict-fixture'), manifest = audioManifest(bytes);
++  const uploaded = await uploadFixture(call, manifest, bytes); assert.equal(uploaded.completed.status, 200);
++  const first = await call('media/metadata', { method: 'POST', body: { recordingId: 'recording-synthetic', baseServerVersion: 1, recordingMetadata: { title: 'Remote version', updatedAt: 200 }, anchors: manifest.anchors } });
++  assert.equal(first.status, 200);
++  const stale = await call('media/metadata', { method: 'POST', body: { recordingId: 'recording-synthetic', baseServerVersion: 1, recordingMetadata: { title: 'Local version', updatedAt: 201 }, anchors: { version: 1, items: [] } } });
++  assert.equal(stale.status, 409);
++  assert.equal((await stale.json()).error, 'audio_metadata_conflict');
++});
++
++test('durable staged chunk is recovered when the process stopped before its SQLite receipt', async t => {
++  const { call, db } = setup(t), bytes = Buffer.from('recovery-fixture'), manifest = audioManifest(bytes);
++  await call('media/approve', { method: 'POST', body: { noteId: 'note-synthetic', approved: true } });
++  const start = await call('media/uploads', { method: 'POST', body: { manifest } }); assert.equal(start.status, 200);
++  assert.equal((await call(`media/uploads/${manifest.transferId}/chunks/0`, { method: 'PUT', raw: bytes })).status, 204);
++  db.prepare('DELETE FROM sync_media_upload_chunks WHERE transfer_id=?').run(manifest.transferId);
++  const status = await call('media/status'); assert.equal(status.status, 200);
++  assert.equal(db.prepare('SELECT count(*) n FROM sync_media_upload_chunks WHERE transfer_id=?').get(manifest.transferId).n, 1);
++  const completed = await call(`media/uploads/${manifest.transferId}/complete`, { method: 'POST', body: {} }); assert.equal(completed.status, 200);
++});
++
++test('corrupted upload chunk is rejected and never enters the committed chunk manifest', async t => {
++  const { call, db } = setup(t), bytes = Buffer.from('expected-bytes'), manifest = audioManifest(bytes);
++  await call('media/approve', { method: 'POST', body: { noteId: 'note-synthetic', approved: true } });
++  assert.equal((await call('media/uploads', { method: 'POST', body: { manifest } })).status, 200);
++  const rejected = await call(`media/uploads/${manifest.transferId}/chunks/0`, { method: 'PUT', raw: Buffer.alloc(bytes.length, 0x7f) });
++  assert.equal(rejected.status, 422); assert.equal((await rejected.json()).error, 'audio_chunk_digest_mismatch');
++  assert.equal(db.prepare('SELECT count(*) n FROM sync_media_upload_chunks').get().n, 0);
++  assert.equal((await call(`media/uploads/${manifest.transferId}/chunks/0`, { method: 'PUT', raw: bytes })).status, 204);
++});
++
++test('assembled bytes with a wrong full recording digest are never published or device-verified', async t => {
++  const { call, db } = setup(t), first = Buffer.alloc(1024 * 1024, 0x31), tail = Buffer.from('synthetic-tail'), bytes = Buffer.concat([first, tail]), manifest = audioManifest(bytes);
++  manifest.transferId = randomUUID(); manifest.sha256 = 'f'.repeat(64); manifest.chunks = [{ index: 0, byteLength: first.length, sha256: digest(first) }, { index: 1, byteLength: tail.length, sha256: digest(tail) }];
++  await call('media/approve', { method: 'POST', body: { noteId: 'note-synthetic', approved: true } });
++  assert.equal((await call('media/uploads', { method: 'POST', body: { manifest } })).status, 200);
++  assert.equal((await call(`media/uploads/${manifest.transferId}/chunks/0`, { method: 'PUT', raw: first })).status, 204);
++  assert.equal((await call(`media/uploads/${manifest.transferId}/chunks/1`, { method: 'PUT', raw: tail })).status, 204);
++  const response = await call(`media/uploads/${manifest.transferId}/complete`, { method: 'POST', body: {} });
++  assert.equal(response.status, 422); assert.equal((await response.json()).error, 'audio_object_digest_mismatch');
++  assert.equal(db.prepare('SELECT count(*) n FROM sync_recording_media').get().n, 0);
++  assert.equal(db.prepare('SELECT count(*) n FROM sync_media_device_state').get().n, 0);
++});
++
++test('concurrent retries of the same transfer publish one recording object and one metadata event', async t => {
++  const { call, db } = setup(t), bytes = Buffer.from('concurrent-idempotent-fixture'), manifest = audioManifest(bytes);
++  await call('media/approve', { method: 'POST', body: { noteId: 'note-synthetic', approved: true } });
++  const first = await call('media/uploads', { method: 'POST', body: { manifest } }), second = await call('media/uploads', { method: 'POST', body: { manifest } });
++  assert.equal(first.status, 200); assert.equal(second.status, 200);
++  await Promise.all([0, 1].map(() => call(`media/uploads/${manifest.transferId}/chunks/0`, { method: 'PUT', raw: bytes })));
++  const completions = await Promise.all([0, 1].map(() => call(`media/uploads/${manifest.transferId}/complete`, { method: 'POST', body: {} })));
++  assert.ok(completions.every(response => response.status === 200));
++  assert.equal(db.prepare('SELECT count(*) n FROM sync_recording_media').get().n, 1);
++  assert.equal(db.prepare("SELECT count(*) n FROM sync_changelog WHERE entity_type='recording'").get().n, 1);
++});
++
++test('upload reservation enforces a configured disk quota before accepting payload bytes', async t => {
++  const { call, db, env, cookie } = setup(t), one = Buffer.from('x'), base = audioManifest(one);
++  await call('media/approve', { method: 'POST', body: { noteId: 'note-synthetic', approved: true } });
++  const count = 65, chunks = Array.from({ length: count }, (_, index) => ({ index, byteLength: index === count - 1 ? 1 : 1024 * 1024, sha256: 'a'.repeat(64) }));
++  const manifest = { ...base, transferId: randomUUID(), totalBytes: 64 * 1024 * 1024 + 1, chunks, sha256: 'b'.repeat(64) };
++  const response = await handleAudioSync(new Request(`${origin}/api/v1/sync/media/uploads`, { method: 'POST', headers: { host: '127.0.0.1:15700', origin, cookie, 'content-type': 'application/json', 'x-noteos-sync': '1' }, body: JSON.stringify({ manifest }) }), 'media/uploads', { ...env, NOTEOS_AUDIO_SYNC_MAX_BYTES: String(64 * 1024 * 1024) });
++  assert.equal(response.status, 507); assert.equal((await response.json()).error, 'audio_storage_quota_exceeded');
++  assert.equal(db.prepare('SELECT count(*) n FROM sync_media_uploads').get().n, 0);
++});
++
++test('unfinished recording metadata is rejected and parent trash preserves committed audio', async t => {
++  const { call, db } = setup(t), bytes = Buffer.from('preserve-trashed-audio'), base = audioManifest(bytes);
++  const partial = { ...base, recording: { ...base.recording, status: 'interrupted' } };
++  const denied = await call('media/uploads', { method: 'POST', body: { manifest: partial } }); assert.equal(denied.status, 400);
++  const manifest = audioManifest(bytes);
++  await uploadFixture(call, manifest, bytes);
++  db.prepare("UPDATE sync_entities SET lifecycle='trashed' WHERE entity_type='note' AND id='note-synthetic'").run();
++  const downloaded = await call('media/downloads/recording-synthetic/chunks/0'); assert.equal(downloaded.status, 200);
++  assert.deepEqual(Buffer.from(await downloaded.arrayBuffer()), bytes);
++  assert.equal(db.prepare("SELECT count(*) n FROM sync_recording_media WHERE recording_id='recording-synthetic'").get().n, 1);
++});
++
++test('text pull advances across recording events without exposing media metadata as a note change', async t => {
++  const { call, env, cookie } = setup(t), bytes = Buffer.from('text-cursor-regression'), manifest = audioManifest(bytes);
++  await uploadFixture(call, manifest, bytes);
++  const response = await handleSync(new Request(`${origin}/api/v1/sync/pull`, { method: 'POST', headers: { host: '127.0.0.1:15700', origin, cookie, 'content-type': 'application/json', 'x-noteos-sync': '1' }, body: JSON.stringify({ protocolVersion: 1, cursor: 1, limit: 100 }) }), 'pull', env);
++  const page = await response.json(); assert.equal(response.status, 200); assert.equal(page.nextCursor, 2); assert.equal(page.changes.length, 0);
++});
++
++test('invalid Host and missing CSRF marker are rejected for media routes', async t => {
++  const { env, cookie } = setup(t);
++  const badHost = new Request(`${origin}/api/v1/sync/media/status`, { headers: { host: 'evil.example', cookie } });
++  assert.equal((await handleAudioSync(badHost, 'media/status', env)).status, 403);
++  const missingMarker = new Request(`${origin}/api/v1/sync/media/approve`, { method: 'POST', headers: { host: '127.0.0.1:15700', origin, cookie, 'content-type': 'application/json' }, body: JSON.stringify({ noteId: 'note-synthetic', approved: true }) });
++  assert.equal((await handleAudioSync(missingMarker, 'media/approve', env)).status, 403);
++});
+diff --git a/spikes/phase-00/gate1/web/sync-server/migrations/003-audio.sql b/spikes/phase-00/gate1/web/sync-server/migrations/003-audio.sql
+new file mode 100644
+index 0000000..ddf599c
+--- /dev/null
++++ b/spikes/phase-00/gate1/web/sync-server/migrations/003-audio.sql
+@@ -0,0 +1,99 @@
++-- Additive Phase 08.4A media schema. Existing v2 epoch, cursor, devices, notes,
++-- operations, and text changelog are retained. The migration runs only when the
++-- separately gated audio API is called.
++ALTER TABLE sync_server_meta RENAME TO sync_server_meta_v2;
++CREATE TABLE sync_server_meta (
++  singleton INTEGER PRIMARY KEY CHECK(singleton=1),
++  server_epoch TEXT NOT NULL,
++  schema_version INTEGER NOT NULL CHECK(schema_version=3),
++  server_cursor INTEGER NOT NULL DEFAULT 0 CHECK(server_cursor>=0)
++);
++INSERT INTO sync_server_meta SELECT singleton,server_epoch,3,server_cursor FROM sync_server_meta_v2;
++DROP TABLE sync_server_meta_v2;
++
++CREATE TABLE sync_media_approvals (
++  device_id TEXT NOT NULL REFERENCES sync_devices(id),
++  note_id TEXT NOT NULL,
++  approved INTEGER NOT NULL CHECK(approved IN (0,1)),
++  updated_at INTEGER NOT NULL,
++  PRIMARY KEY(device_id,note_id)
++);
++
++CREATE TABLE sync_media_objects (
++  sha256 TEXT PRIMARY KEY CHECK(length(sha256)=64),
++  byte_length INTEGER NOT NULL CHECK(byte_length>0),
++  mime_type TEXT NOT NULL,
++  created_at INTEGER NOT NULL
++);
++
++CREATE TABLE sync_media_uploads (
++  transfer_id TEXT PRIMARY KEY,
++  device_id TEXT NOT NULL REFERENCES sync_devices(id),
++  recording_id TEXT NOT NULL,
++  note_id TEXT NOT NULL,
++  manifest_json TEXT NOT NULL,
++  manifest_hash TEXT NOT NULL,
++  base_server_version INTEGER NOT NULL CHECK(base_server_version>=0),
++  reserved_bytes INTEGER NOT NULL CHECK(reserved_bytes>0),
++  state TEXT NOT NULL CHECK(state IN ('receiving','publishing','published','expired','conflict')),
++  expires_at INTEGER NOT NULL,
++  created_at INTEGER NOT NULL,
++  updated_at INTEGER NOT NULL
++);
++CREATE INDEX sync_media_uploads_device_state ON sync_media_uploads(device_id,state,expires_at);
++
++CREATE TABLE sync_media_upload_chunks (
++  transfer_id TEXT NOT NULL REFERENCES sync_media_uploads(transfer_id),
++  chunk_index INTEGER NOT NULL CHECK(chunk_index>=0),
++  sha256 TEXT NOT NULL CHECK(length(sha256)=64),
++  byte_length INTEGER NOT NULL CHECK(byte_length>0),
++  PRIMARY KEY(transfer_id,chunk_index)
++);
++
++CREATE TABLE sync_recording_media (
++  recording_id TEXT PRIMARY KEY,
++  note_id TEXT NOT NULL,
++  object_sha256 TEXT NOT NULL REFERENCES sync_media_objects(sha256),
++  mime_type TEXT NOT NULL,
++  total_bytes INTEGER NOT NULL CHECK(total_bytes>0),
++  chunk_size INTEGER NOT NULL CHECK(chunk_size>0),
++  chunk_count INTEGER NOT NULL CHECK(chunk_count>0),
++  server_version INTEGER NOT NULL CHECK(server_version>0),
++  manifest_json TEXT NOT NULL,
++  metadata_hash TEXT NOT NULL CHECK(length(metadata_hash)=64),
++  updated_at INTEGER NOT NULL
++);
++CREATE INDEX sync_recording_media_note ON sync_recording_media(note_id,recording_id);
++
++CREATE TABLE sync_recording_versions (
++  recording_id TEXT NOT NULL,
++  server_version INTEGER NOT NULL CHECK(server_version>0),
++  device_id TEXT NOT NULL REFERENCES sync_devices(id),
++  metadata_json TEXT NOT NULL,
++  metadata_hash TEXT NOT NULL CHECK(length(metadata_hash)=64),
++  created_at INTEGER NOT NULL,
++  PRIMARY KEY(recording_id,server_version)
++);
++
++CREATE TABLE sync_media_device_state (
++  device_id TEXT NOT NULL REFERENCES sync_devices(id),
++  recording_id TEXT NOT NULL,
++  object_sha256 TEXT NOT NULL CHECK(length(object_sha256)=64),
++  verified_bytes INTEGER NOT NULL CHECK(verified_bytes>0),
++  verified_at INTEGER NOT NULL,
++  PRIMARY KEY(device_id,recording_id)
++);
++
++CREATE TABLE sync_audio_conflicts (
++  conflict_id TEXT PRIMARY KEY,
++  recording_id TEXT NOT NULL,
++  device_id TEXT NOT NULL REFERENCES sync_devices(id),
++  base_server_version INTEGER NOT NULL CHECK(base_server_version>=0),
++  local_metadata_json TEXT NOT NULL,
++  remote_metadata_json TEXT NOT NULL,
++  created_at INTEGER NOT NULL,
++  resolved_at INTEGER
++);
++CREATE INDEX sync_audio_conflicts_recording ON sync_audio_conflicts(recording_id,created_at);
++
++PRAGMA user_version=3;
+diff --git a/spikes/phase-00/gate1/web/sync-server/storage.mjs b/spikes/phase-00/gate1/web/sync-server/storage.mjs
+index 16c0dac..6b6e844 100644
+--- a/spikes/phase-00/gate1/web/sync-server/storage.mjs
++++ b/spikes/phase-00/gate1/web/sync-server/storage.mjs
+@@ -12 +12 @@ export function transaction(db, fn, mode = 'IMMEDIATE') {
+-export function openStore(root, { initialize = false } = {}) {
++export function openStore(root, { initialize = false, audioSync = false } = {}) {
+@@ -20 +20 @@ export function openStore(root, { initialize = false } = {}) {
+-    if (version > 2 || (version === 0 && !initialize)) throw new Error('Migration review required');
++    if (version > 3 || (version === 0 && !initialize)) throw new Error('Migration review required');
+@@ -29,0 +30,3 @@ export function openStore(root, { initialize = false } = {}) {
++    if (audioSync && db.prepare('PRAGMA user_version').get().user_version === 2) transaction(db, () => {
++      db.exec(readFileSync(join(process.cwd(), 'sync-server/migrations/003-audio.sql'), 'utf8'));
++    });

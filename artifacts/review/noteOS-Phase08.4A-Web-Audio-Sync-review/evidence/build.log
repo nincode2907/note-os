@@ -1,0 +1,65 @@
+
+> build
+> next build
+
+▲ Next.js 16.4.2 (Turbopack)
+⚠ Warning: Next.js inferred your workspace root, but it may not be correct.
+ We detected multiple lockfiles and selected the directory of /Users/buivannin/Desktop/workspace/personal/note-os/spikes/phase-00/gate1/package-lock.json as the root directory.
+ To silence this warning, set `turbopack.root` in your Next.js config, or consider removing one of the lockfiles if it's not needed.
+   See https://nextjs.org/docs/app/api-reference/config/next-config-js/turbopack#root-directory for more information.
+ Detected additional lockfiles:
+   * /Users/buivannin/Desktop/workspace/personal/note-os/spikes/phase-00/gate1/web/package-lock.json
+
+✓ Running next.config.ts took 80ms
+
+  Creating an optimized production build ...
+✓ Compiled successfully in 1821ms
+  Running TypeScript ...
+  Finished TypeScript in 1843ms ...
+  Collecting page data using 7 workers ...
+  Generating static pages using 7 workers (0/14) ...
+  Generating static pages using 7 workers (3/14)
+  Generating static pages using 7 workers (6/14)
+  Generating static pages using 7 workers (10/14)
+✓ Generating static pages using 7 workers (14/14) in 289ms
+  Finalizing page optimization ...
+
+Route (app)
+┌ ○ /
+├ ○ /_not-found
+├ ƒ /api/v1/sync/[[...action]]
+├ ○ /archive
+├ ○ /backup
+├ ○ /editor
+├ ○ /icon.svg
+├ ○ /manifest.webmanifest
+├ ƒ /notes/[id]
+├ ○ /offline
+├ ○ /powersync
+├ ○ /pwa-guide
+├ ○ /sync
+├ ○ /trash
+└ ○ /watermelon
+
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand
+
+        6.35 real         6.65 user         1.93 sys
+           428998656  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+              135703  page reclaims
+                6744  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                  98  messages sent
+                 126  messages received
+                   7  signals received
+                5929  voluntary context switches
+              117830  involuntary context switches
+           800780298  instructions retired
+           510335515  cycles elapsed
+            24289600  peak memory footprint

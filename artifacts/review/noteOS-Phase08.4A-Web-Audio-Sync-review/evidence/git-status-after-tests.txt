@@ -1,0 +1,108 @@
+ D artifacts/review/noteOS-Phase08.2A-Web-Sync-Engine-review.zip
+ D artifacts/review/noteOS-Phase08.2A-Web-Sync-Engine-review/README.md
+ D artifacts/review/noteOS-Phase08.2A-Web-Sync-Engine-review/evidence/browser-results.json
+ D artifacts/review/noteOS-Phase08.2A-Web-Sync-Engine-review/evidence/browser-trace.json
+ D artifacts/review/noteOS-Phase08.2A-Web-Sync-Engine-review/evidence/failure-injection.log
+ D artifacts/review/noteOS-Phase08.2A-Web-Sync-Engine-review/evidence/iphone-sized-webkit-conflict-review.png
+ D artifacts/review/noteOS-Phase08.2A-Web-Sync-Engine-review/evidence/iphone-sized-webkit-synced.png
+ D artifacts/review/noteOS-Phase08.2A-Web-Sync-Engine-review/evidence/mac-chromium-received-and-edited.png
+ D artifacts/review/noteOS-Phase08.2A-Web-Sync-Engine-review/evidence/origin-isolation-rerun.log
+ D artifacts/review/noteOS-Phase08.2A-Web-Sync-Engine-review/evidence/origin-isolation.json
+ D artifacts/review/noteOS-Phase08.2A-Web-Sync-Engine-review/evidence/regressions/audio-final/browser-results.json
+ D artifacts/review/noteOS-Phase08.2A-Web-Sync-Engine-review/evidence/regressions/audio-final/phase06-audio-anchors-desktop.png
+ D artifacts/review/noteOS-Phase08.2A-Web-Sync-Engine-review/evidence/regressions/audio-final/phase06-audio-anchors-mobile-width.png
+ D artifacts/review/noteOS-Phase08.2A-Web-Sync-Engine-review/evidence/regressions/audio-final/unsupported-locks-recovery-state.png
+ D artifacts/review/noteOS-Phase08.2A-Web-Sync-Engine-review/evidence/regressions/backup-v2-final/backup-desktop.png
+ D artifacts/review/noteOS-Phase08.2A-Web-Sync-Engine-review/evidence/regressions/backup-v2-final/backup-mobile-active-blocked.png
+ D artifacts/review/noteOS-Phase08.2A-Web-Sync-Engine-review/evidence/regressions/backup-v2-final/browser-results.json
+ D artifacts/review/noteOS-Phase08.2A-Web-Sync-Engine-review/evidence/regressions/backup-v2-final/restore-desktop.png
+ D artifacts/review/noteOS-Phase08.2A-Web-Sync-Engine-review/evidence/regressions/backup-v2-final/synthetic-roundtrip.tar
+ D artifacts/review/noteOS-Phase08.2A-Web-Sync-Engine-review/evidence/regressions/quick-capture-final/quick-capture-browser-diagnostics.json
+ D artifacts/review/noteOS-Phase08.2A-Web-Sync-Engine-review/evidence/regressions/quick-capture-final/quick-capture-desktop.png
+ D artifacts/review/noteOS-Phase08.2A-Web-Sync-Engine-review/evidence/regressions/quick-capture-final/quick-capture-phone.png
+ D artifacts/review/noteOS-Phase08.2A-Web-Sync-Engine-review/evidence/security-regression.log
+ D artifacts/review/noteOS-Phase08.2A-Web-Sync-Engine-review/evidence/server-restart-persistence.json
+ D artifacts/review/noteOS-Phase08.2A-Web-Sync-Engine-review/evidence/test-documents.log
+ D artifacts/review/noteOS-Phase08.2A-Web-Sync-Engine-review/evidence/test-mvp.log
+ D artifacts/review/noteOS-Phase08.2A-Web-Sync-Engine-review/evidence/test-sync.log
+ D artifacts/review/noteOS-Phase08.2A-Web-Sync-Engine-review/evidence/typecheck.log
+ D artifacts/review/noteOS-Phase08.2A-Web-Sync-Engine-review/evidence/utf8-audit.txt
+ D artifacts/review/noteOS-Phase08.2A-Web-Sync-Engine-review/implementation.diff
+ D artifacts/review/noteOS-Phase08.2A-Web-Sync-Engine-review/report.md
+ D artifacts/review/noteOS-Phase08.2A.1-Sync-Reliability-review.zip
+ D artifacts/review/noteOS-Phase08.2A.1-Sync-Reliability-review/data-safety-audit.md
+ D artifacts/review/noteOS-Phase08.2A.1-Sync-Reliability-review/evidence/audio/browser-results.json
+ D artifacts/review/noteOS-Phase08.2A.1-Sync-Reliability-review/evidence/audio/phase06-audio-anchors-desktop.png
+ D artifacts/review/noteOS-Phase08.2A.1-Sync-Reliability-review/evidence/audio/phase06-audio-anchors-mobile-width.png
+ D artifacts/review/noteOS-Phase08.2A.1-Sync-Reliability-review/evidence/audio/unsupported-locks-recovery-state.png
+ D artifacts/review/noteOS-Phase08.2A.1-Sync-Reliability-review/evidence/backup-v2/backup-desktop.png
+ D artifacts/review/noteOS-Phase08.2A.1-Sync-Reliability-review/evidence/backup-v2/backup-mobile-active-blocked.png
+ D artifacts/review/noteOS-Phase08.2A.1-Sync-Reliability-review/evidence/backup-v2/browser-results.json
+ D artifacts/review/noteOS-Phase08.2A.1-Sync-Reliability-review/evidence/backup-v2/restore-desktop.png
+ D artifacts/review/noteOS-Phase08.2A.1-Sync-Reliability-review/evidence/backup-v2/synthetic-roundtrip.tar
+ D artifacts/review/noteOS-Phase08.2A.1-Sync-Reliability-review/evidence/browser-results.json
+ D artifacts/review/noteOS-Phase08.2A.1-Sync-Reliability-review/evidence/browser-trace.json
+ D artifacts/review/noteOS-Phase08.2A.1-Sync-Reliability-review/evidence/failure-injection.log
+ D artifacts/review/noteOS-Phase08.2A.1-Sync-Reliability-review/evidence/iphone-sized-webkit-conflict-review.png
+ D artifacts/review/noteOS-Phase08.2A.1-Sync-Reliability-review/evidence/iphone-sized-webkit-synced.png
+ D artifacts/review/noteOS-Phase08.2A.1-Sync-Reliability-review/evidence/mac-chromium-received-and-edited.png
+ D artifacts/review/noteOS-Phase08.2A.1-Sync-Reliability-review/evidence/origin-isolation/origin-isolation.json
+ D artifacts/review/noteOS-Phase08.2A.1-Sync-Reliability-review/evidence/pending-after-100-acks.png
+ D artifacts/review/noteOS-Phase08.2A.1-Sync-Reliability-review/evidence/quick-capture/quick-capture-browser-diagnostics.json
+ D artifacts/review/noteOS-Phase08.2A.1-Sync-Reliability-review/evidence/quick-capture/quick-capture-desktop.png
+ D artifacts/review/noteOS-Phase08.2A.1-Sync-Reliability-review/evidence/quick-capture/quick-capture-phone.png
+ D artifacts/review/noteOS-Phase08.2A.1-Sync-Reliability-review/evidence/reliability-browser.json
+ D artifacts/review/noteOS-Phase08.2A.1-Sync-Reliability-review/implementation.diff
+ D artifacts/review/noteOS-Phase08.2A.1-Sync-Reliability-review/known-limitations.md
+ D artifacts/review/noteOS-Phase08.2A.1-Sync-Reliability-review/report.md
+ D artifacts/review/noteOS-Phase08.2A.1-Sync-Reliability-review/rollback.md
+ D artifacts/review/noteOS-Phase08.2A.1-Sync-Reliability-review/utf8-audit.txt
+ D artifacts/review/noteOS-Phase08.2A.1-Sync-Reliability-review/verification/test-results.md
+A  artifacts/review/noteOS-Phase08.4A-Web-Audio-Sync-review/acceptance-matrix.md
+A  artifacts/review/noteOS-Phase08.4A-Web-Audio-Sync-review/architecture.md
+A  artifacts/review/noteOS-Phase08.4A-Web-Audio-Sync-review/evidence/browser-audio/browser-results.json
+A  artifacts/review/noteOS-Phase08.4A-Web-Audio-Sync-review/evidence/browser-audio/phase06-audio-anchors-desktop.png
+A  artifacts/review/noteOS-Phase08.4A-Web-Audio-Sync-review/evidence/browser-audio/phase06-audio-anchors-mobile-width.png
+A  artifacts/review/noteOS-Phase08.4A-Web-Audio-Sync-review/evidence/browser-audio/unsupported-locks-recovery-state.png
+AM artifacts/review/noteOS-Phase08.4A-Web-Audio-Sync-review/evidence/build.log
+AM artifacts/review/noteOS-Phase08.4A-Web-Audio-Sync-review/evidence/docker-compose-after.txt
+A  artifacts/review/noteOS-Phase08.4A-Web-Audio-Sync-review/evidence/docker-compose-before.txt
+AM artifacts/review/noteOS-Phase08.4A-Web-Audio-Sync-review/evidence/docker-containers-after.txt
+A  artifacts/review/noteOS-Phase08.4A-Web-Audio-Sync-review/evidence/docker-containers-before.txt
+AM artifacts/review/noteOS-Phase08.4A-Web-Audio-Sync-review/evidence/docker-networks-after.txt
+A  artifacts/review/noteOS-Phase08.4A-Web-Audio-Sync-review/evidence/docker-networks-before.txt
+AM artifacts/review/noteOS-Phase08.4A-Web-Audio-Sync-review/evidence/docker-volumes-after.txt
+A  artifacts/review/noteOS-Phase08.4A-Web-Audio-Sync-review/evidence/docker-volumes-before.txt
+A  artifacts/review/noteOS-Phase08.4A-Web-Audio-Sync-review/evidence/git-fetch.log
+A  artifacts/review/noteOS-Phase08.4A-Web-Audio-Sync-review/evidence/git-head-before.txt
+AM artifacts/review/noteOS-Phase08.4A-Web-Audio-Sync-review/evidence/git-status-after-tests.txt
+A  artifacts/review/noteOS-Phase08.4A-Web-Audio-Sync-review/evidence/git-status-before.txt
+A  artifacts/review/noteOS-Phase08.4A-Web-Audio-Sync-review/evidence/runtime-versions.txt
+A  artifacts/review/noteOS-Phase08.4A-Web-Audio-Sync-review/evidence/test-documents.log
+AM artifacts/review/noteOS-Phase08.4A-Web-Audio-Sync-review/evidence/test-mvp.log
+AM artifacts/review/noteOS-Phase08.4A-Web-Audio-Sync-review/evidence/test-sync.log
+AM artifacts/review/noteOS-Phase08.4A-Web-Audio-Sync-review/evidence/typecheck.log
+A  artifacts/review/noteOS-Phase08.4A-Web-Audio-Sync-review/implementation.diff
+A  artifacts/review/noteOS-Phase08.4A-Web-Audio-Sync-review/phase-08.4b-device-plan.md
+A  artifacts/review/noteOS-Phase08.4A-Web-Audio-Sync-review/report.md
+A  artifacts/review/noteOS-Phase08.4A-Web-Audio-Sync-review/security-audit.md
+M  docker-compose.web.yml
+M  spikes/phase-00/gate1/web/Dockerfile
+M  spikes/phase-00/gate1/web/app/api/v1/sync/[[...action]]/route.js
+M  spikes/phase-00/gate1/web/app/lib/audio-storage.test.mjs
+AM spikes/phase-00/gate1/web/app/lib/audio-sync-client.mjs
+AM spikes/phase-00/gate1/web/app/lib/audio-sync-client.test.mjs
+A  spikes/phase-00/gate1/web/app/lib/audio-sync-protocol.mjs
+A  spikes/phase-00/gate1/web/app/lib/audio-sync-protocol.test.mjs
+M  spikes/phase-00/gate1/web/app/lib/local-notes.js
+M  spikes/phase-00/gate1/web/app/lib/local-notes.test.mjs
+M  spikes/phase-00/gate1/web/app/lib/sync-client.mjs
+MM spikes/phase-00/gate1/web/app/ui/audio-recorder.tsx
+M  spikes/phase-00/gate1/web/sync-server/foundation.test.mjs
+M  spikes/phase-00/gate1/web/sync-server/http.mjs
+A  spikes/phase-00/gate1/web/sync-server/media-http.mjs
+A  spikes/phase-00/gate1/web/sync-server/media-storage.mjs
+A  spikes/phase-00/gate1/web/sync-server/media.test.mjs
+A  spikes/phase-00/gate1/web/sync-server/migrations/003-audio.sql
+M  spikes/phase-00/gate1/web/sync-server/storage.mjs
+?? spikes/phase-00/gate1/web/tsconfig.tsbuildinfo

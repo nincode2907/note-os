@@ -9,7 +9,7 @@ export function transaction(db, fn, mode = 'IMMEDIATE') {
   catch (error) { db.exec('ROLLBACK'); throw error; }
 }
 
-export function openStore(root, { initialize = false } = {}) {
+export function openStore(root, { initialize = false, audioSync = false } = {}) {
   if (!root || !statSync(root).isDirectory()) throw new Error('Storage volume unavailable');
   const file = join(root, 'sync.sqlite'), marker = join(root, '.sync-epoch');
   if (!existsSync(file) && (!initialize || existsSync(marker))) throw new Error('Database missing; recovery review required');
@@ -17,7 +17,7 @@ export function openStore(root, { initialize = false } = {}) {
   try {
     db.exec('PRAGMA foreign_keys=ON; PRAGMA busy_timeout=2000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;');
     const version = db.prepare('PRAGMA user_version').get().user_version;
-    if (version > 2 || (version === 0 && !initialize)) throw new Error('Migration review required');
+    if (version > 3 || (version === 0 && !initialize)) throw new Error('Migration review required');
     if (version === 0) transaction(db, () => {
       // Recheck under the writer lock: concurrent first-time initialization is safe.
       if (db.prepare('PRAGMA user_version').get().user_version !== 0) return;
@@ -26,6 +26,9 @@ export function openStore(root, { initialize = false } = {}) {
     });
     if (db.prepare('PRAGMA user_version').get().user_version === 1) transaction(db, () => {
       db.exec(readFileSync(join(process.cwd(), 'sync-server/migrations/002-incremental.sql'), 'utf8'));
+    });
+    if (audioSync && db.prepare('PRAGMA user_version').get().user_version === 2) transaction(db, () => {
+      db.exec(readFileSync(join(process.cwd(), 'sync-server/migrations/003-audio.sql'), 'utf8'));
     });
     const meta = serverMeta(db);
     if (existsSync(marker) && readFileSync(marker, 'utf8').trim() !== meta.serverEpoch) throw new Error('Epoch mismatch; recovery review required');

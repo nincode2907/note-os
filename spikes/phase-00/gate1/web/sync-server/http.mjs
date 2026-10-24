@@ -74,15 +74,15 @@ export async function handleSync(req, action, env = process.env) {
       if (!body || Object.keys(body).sort().join(',') !== 'cursor,limit,protocolVersion' || body.protocolVersion !== 1 || !Number.isSafeInteger(body.cursor) || body.cursor < 0 || !Number.isSafeInteger(body.limit) || body.limit < 1 || body.limit > 100) return fail('invalid_pull_request', 400);
       const meta = serverMeta(db);
       if (body.cursor > meta.serverCursor) return response({ error: 'cursor_ahead', ...meta }, 409);
-      const events = db.prepare('SELECT server_cursor cursor,entity_id id,server_version serverVersion,event,record_json recordJson FROM sync_changelog WHERE entity_type=\'note\' AND server_cursor>? ORDER BY server_cursor LIMIT ?').all(body.cursor, body.limit);
-      const changes = events.map(event => {
+      const events = db.prepare('SELECT server_cursor cursor,entity_type entityType,entity_id id,server_version serverVersion,event,record_json recordJson FROM sync_changelog WHERE server_cursor>? ORDER BY server_cursor LIMIT ?').all(body.cursor, body.limit);
+      const changes = events.filter(event => event.entityType === 'note').map(event => {
         if (event.event === 'tombstone') return { ...event, serverEpoch: meta.serverEpoch, contentHash: null, lifecycle: 'trashed' };
         const record = JSON.parse(event.recordJson ?? 'null');
         if (!record || record.id !== event.id) throw new Error('Invalid event snapshot');
         const content = { ...record }; delete content.revision; delete content.createdAt; delete content.updatedAt;
         return { ...event, serverEpoch: meta.serverEpoch, contentHash: createHash('sha256').update(canonicalJson(content)).digest('hex'), lifecycle: record.lifecycle };
       });
-      return response({ ...meta, changes, nextCursor: changes.at(-1)?.cursor ?? body.cursor, hasMore: changes.length === body.limit });
+      return response({ ...meta, changes, nextCursor: events.at(-1)?.cursor ?? body.cursor, hasMore: events.length === body.limit });
     }
     if (action === 'push') {
       let operations;

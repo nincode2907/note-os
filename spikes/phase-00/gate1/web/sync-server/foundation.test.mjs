@@ -56,7 +56,7 @@ test('schema v1 server volume migrates additively and preserves its epoch, curso
  assert.equal(upgraded.prepare("SELECT record_json FROM sync_entities WHERE id='legacy'").get().record_json,'{}');
  assert.equal(upgraded.prepare('SELECT count(*) n FROM sync_devices').get().n,1);upgraded.close();
 });
-test('future schema fails closed', t=> {const {root,db}=setup(t); db.exec('PRAGMA user_version=3'); assert.throws(()=>openStore(root),/Migration/);});
+test('future schema fails closed', t=> {const {root,db}=setup(t); db.exec('PRAGMA user_version=4'); assert.throws(()=>openStore(root),/Migration/);});
 test('missing volume fails closed', t=> {setup(t); assert.throws(()=>openStore('/not-a-mounted-volume'));});
 test('missing database cannot silently replace epoch', t=> {const {root,db}=setup(t);db.close();unlinkSync(join(root,'sync.sqlite'));assert.throws(()=>openStore(root,{initialize:true}),/Database missing/);});
 test('changed epoch marker requires recovery', t=> {const {root}=setup(t);writeFileSync(join(root,'.sync-epoch'),'unexpected');assert.throws(()=>openStore(root),/Epoch mismatch/);});

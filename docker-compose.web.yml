@@ -9,6 +9,7 @@ services:
     environment:
       NEXT_TELEMETRY_DISABLED: "1"
       NOTEOS_SYNC_ENABLED: "0"
+      NOTEOS_AUDIO_SYNC_ENABLED: "0"
       NOTEOS_SYNC_STORAGE: /var/lib/noteos-sync
       NOTEOS_SYNC_ALLOWED_ORIGINS: ""
     volumes:

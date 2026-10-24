@@ -1,0 +1,83 @@
+
+> test:sync
+> node --test sync-server/*.test.mjs
+
+✔ migration v1, WAL, foreign keys and bounded busy timeout (14.488875ms)
+✔ epoch and schema survive close/reopen and idempotent init (65.978583ms)
+✔ schema v1 server volume migrates additively and preserves its epoch, cursor, entities and devices (164.172167ms)
+✔ future schema fails closed (89.46975ms)
+✔ missing volume fails closed (52.453625ms)
+✔ missing database cannot silently replace epoch (32.84625ms)
+✔ changed epoch marker requires recovery (24.862209ms)
+✔ cursor allocation requires a transaction (13.710167ms)
+✔ rollback includes cursor and all committed-change tables (22.457916ms)
+✔ entity versions reference their exact committed change and cannot coexist with tombstones (33.484875ms)
+✔ independent concurrent WAL writers allocate contiguous committed cursors (603.871291ms)
+✔ pairing expires at 120 seconds (35.091333ms)
+✔ pairing one-time use, only token hash stored (11.972709ms)
+✔ pairing blocks after five attempts (8.419792ms)
+✔ global pairing budget persists across new codes and store restart (15.548625ms)
+✔ missing invalid expired and revoked tokens denied immediately (7.320875ms)
+✔ default disabled endpoint does not initialize a database (77.643083ms)
+✔ status, bootstrap, push and pull all require an authenticated device (161.713334ms)
+✔ cross-device permanent deletion endpoint is absent (13.420333ms)
+✔ pair uses Secure HttpOnly SameSite cookie on HTTPS, never exposes token JSON (50.512375ms)
+✔ localhost has distinct HttpOnly cookie and local-only insecure exception (151.11175ms)
+✔ CSRF denies missing Origin (7.518375ms)
+✔ CSRF denies wrong Origin (21.991041ms)
+✔ CSRF denies cross-site (19.526458ms)
+✔ CSRF denies missing custom header (33.361834ms)
+✔ CSRF denies wrong content type (433.778666ms)
+✔ unconfigured Host and insecure non-loopback Origin denied (48.826583ms)
+✔ oversized JSON, malformed JSON, unknown and duplicate summary fields rejected (51.768875ms)
+✔ genuine seeded comparison: equal/new/changed/lifecycle/audio/tombstone; zero server mutations (50.262667ms)
+✔ empty-server preview is explicit (27.444834ms)
+✔ push atomically commits canonical note, event, server version, cursor and idempotency result (76.074375ms)
+✔ pull pagination advances only by committed event cursors (41.15825ms)
+✔ two offline edits at one server version conflict and never overwrite each other (38.743667ms)
+✔ DEVICE_ONLY notes and malformed outbox records are rejected (44.474209ms)
+✔ bootstrap commit is additive, bounded, and collision leaves server unchanged (34.354834ms)
+✔ revocation endpoint makes existing cookie unusable (48.245209ms)
+✔ unavailable database gives generic 503 without paths or query data (15.772583ms)
+✔ history epoch or cursor rollback halts review (0.227ms)
+✔ canonical hashes do not depend on object order; localRevision not serverVersion (0.414667ms)
+✔ summary hash cannot coerce arrays and canonical records cannot drop non-JSON objects (0.136916ms)
+✔ feature flag is off by default and does not migrate v2 or touch the media filesystem (124.837292ms)
+✔ authenticated content-addressed upload, unicode anchors, download and per-device verification survive reopen (918.340167ms)
+✔ v2 migration preserves epoch, cursor, devices and notes; unauthenticated audio request cannot migrate (70.3015ms)
+✔ DEVICE_ONLY note, cross-origin requests and unpaired clients cannot approve or upload (118.331375ms)
+✔ stale anchor metadata is preserved as a conflict instead of overwriting remote state (287.919417ms)
+✔ durable staged chunk is recovered when the process stopped before its SQLite receipt (703.857458ms)
+✔ corrupted upload chunk is rejected and never enters the committed chunk manifest (226.926333ms)
+✔ assembled bytes with a wrong full recording digest are never published or device-verified (239.144958ms)
+✔ concurrent retries of the same transfer publish one recording object and one metadata event (223.200625ms)
+✔ upload reservation enforces a configured disk quota before accepting payload bytes (46.915458ms)
+✔ unfinished recording metadata is rejected and parent trash preserves committed audio (247.929541ms)
+✔ text pull advances across recording events without exposing media metadata as a note change (197.720625ms)
+✔ invalid Host and missing CSRF marker are rejected for media routes (54.842292ms)
+ℹ tests 53
+ℹ suites 0
+ℹ pass 53
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4777.745416
+        5.14 real         1.08 user         0.58 sys
+            87916544  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+               32827  page reclaims
+                 503  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                 285  messages sent
+                  71  messages received
+                   0  signals received
+                 906  voluntary context switches
+               25196  involuntary context switches
+           773021703  instructions retired
+           398347190  cycles elapsed
+            25518336  peak memory footprint

@@ -158,7 +158,7 @@ test('v3 IndexedDB migration adds quarantine while preserving notes, history and
   assert.equal((await reopenedRepository.listSyncOutbox())[0].operationId, operation.operationId);
   assert.equal((await reopenedRepository.getSyncState()).state.history.serverCursor, 9);
   const migrated = await new Promise((resolve, reject) => { const request = indexedDB.open(name); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
-  assert.equal(migrated.version, 4); assert.ok(migrated.objectStoreNames.contains('syncQuarantine')); migrated.close();
+  assert.equal(migrated.version, 5); assert.ok(migrated.objectStoreNames.contains('syncQuarantine')); assert.ok(migrated.objectStoreNames.contains('audioSyncApprovals')); assert.ok(migrated.objectStoreNames.contains('audioSyncState')); assert.ok(migrated.objectStoreNames.contains('audioSyncChunks')); migrated.close();
 });
 
 test('existing notes require explicit owner enrollment and DEVICE_ONLY or recording-bearing notes are excluded', async () => {
@@ -166,7 +166,7 @@ test('existing notes require explicit owner enrollment and DEVICE_ONLY or record
   const privateNote = await repo.create(makeNote('owner-choice'));
   const deviceOnly = await repo.create({ ...makeNote('never-upload'), privacy: 'DEVICE_ONLY' });
   const audioNote = await repo.create(makeNote('audio-local'));
-  const db = await new Promise((resolve,reject) => { const request = indexedDB.open(name,4); request.onsuccess=()=>resolve(request.result); request.onerror=()=>reject(request.error); });
+  const db = await new Promise((resolve,reject) => { const request = indexedDB.open(name); request.onsuccess=()=>resolve(request.result); request.onerror=()=>reject(request.error); });
   const tx=db.transaction('recordings','readwrite');tx.objectStore('recordings').put({id:'recording-a',noteId:audioNote.id,status:'interrupted'});await new Promise((resolve,reject)=>{tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);});db.close();
   await repo.setSyncEnrollment([privateNote.id,deviceOnly.id,audioNote.id],true);
   assert.equal((await repo.listSyncOutbox()).length,1);

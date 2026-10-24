@@ -1,0 +1,136 @@
+
+> test:mvp
+> node --test app/lib/*.test.mjs
+
+✔ notes plus two recordings round trip preserves Unicode, lifecycle, revisions, metadata and exact chunk SHA-256 (562.882708ms)
+✔ Web V2 reader accepts an iPhone source platform with the unchanged V2 manifest and recording contract (172.263666ms)
+✔ Web V2 round trip preserves versioned audio anchors and accepts older recordings without the extension (21.822041ms)
+✔ malformed V2 anchor metadata is rejected during verification before import mutation (39.974792ms)
+✔ fixed timestamp exports are deterministic and do not modify revisions, metadata or partial status (322.534459ms)
+✔ one corrupt audio byte rejects verification before opening an import write transaction (41.721625ms)
+✔ missing audio entry is rejected (167.043291ms)
+✔ truncated/corrupted manifest and truncated TAR are rejected (60.88725ms)
+✔ Skip collision aborts all notes and audio; Merge retains existing revisions/audio and imports new groups only (83.250834ms)
+✔ repeated merge import creates no duplicate audio; repeated Skip imports nothing (39.6825ms)
+✔ active recording blocks export without recovery or chunk mutations (6.041042ms)
+✔ active paused blocks export without recovery or chunk mutations (3.440458ms)
+✔ quota failure after queued note/audio writes aborts atomically and preserves existing data (11.743333ms)
+✔ asynchronous transaction abort also rolls back previously queued stores (537.353ms)
+✔ Legacy V1 restore remains notes-only with previous collision semantics (47.271833ms)
+✔ future canonical schema and additional validated recording metadata survive V2 unchanged (79.81425ms)
+✔ duplicate note/recording IDs, relationships, chunk gaps and MIME/path inconsistencies are rejected after checksums (159.271959ms)
+✔ failed empty recordings retain metadata and explicit warning; complete empty recordings are rejected (15.917917ms)
+✔ malicious path, unsupported TAR links, excessive advertised size and duplicate entries reject (2.093916ms)
+✔ recording ID conflict skips the entire incoming note group in Merge and rejects Skip (59.091834ms)
+✔ storage snapshot serializes against concurrent mutations and never invokes recovery (58.791125ms)
+✔ unverified import objects cannot open the write transaction (0.51075ms)
+✔ incremental hash agrees with Node SHA-256 across the 1 MiB read boundary, including empty files (22.757709ms)
+✔ active media clock uses monotonic elapsed segments and excludes pause time (2.72025ms)
+✔ anchors accept duplicate offsets and sort chronologically without changing note revisions (337.08775ms)
+✔ anchor rename/delete persist and deleting the recording cascades its anchor metadata with its chunks (22.933084ms)
+✔ bookmark changes leave an unsaved editor recovery draft byte-for-byte intact (3.899292ms)
+✔ strict validation rejects unsafe identities, invalid offsets, duplicate IDs, oversized labels and out-of-range known duration (1.86975ms)
+✔ anchor count is bounded and unknown legacy duration does not reject valid anchors (0.462417ms)
+✔ v1 note database upgrades additively and preserves existing note bytes (172.706292ms)
+✔ chunks remain ordered, linked to the right note, and reload as playable blobs (232.832708ms)
+✔ one active session per note, pause/resume transitions, and reload recovery are explicit (16.497709ms)
+✔ timestamps alone never recover recording or paused sessions (4.399375ms)
+✔ active recording blocks cross-tab recording and destructive deletion races (6.837042ms)
+✔ archive and trash keep media; confirmed permanent note delete cascades atomically to recordings and chunks (18.791084ms)
+✔ chunk transaction failure keeps existing chunks and metadata visible as partial (25.946167ms)
+✔ synthetic paired clients upload and download ordered multi-chunk audio with independent verified-here status (2280.012292ms)
+✔ local audio approval fails closed for unknown privacy, DEVICE_ONLY and notes not yet text-synced (34.825958ms)
+✔ upload retry resumes after chunk N and download retry reuses verified IndexedDB chunks (707.637792ms)
+✔ audio transfer manifest preserves Unicode labels and supported extension metadata (2.944958ms)
+✔ manifest rejects incomplete recordings, bad byte lengths, changed hashes and unsupported schema keys (0.4835ms)
+✔ anchor set is checked against stable recording identity and known duration (0.219ms)
+✔ service worker keeps every API route network-only and rejects private no-store responses from caches (1.98075ms)
+✔ revision race rejects stale saves and preserves the newer committed record (80.377917ms)
+✔ canonical documents are validated at create and save boundaries (10.125417ms)
+✔ backup import validates all documents before writing and preserves future schema read-only (36.131916ms)
+✔ skip import is all-or-nothing on collision; merge never overwrites matching IDs (37.866125ms)
+✔ permanent deletion requires a trashed note and matching revision; missing notes are explicit (158.150583ms)
+✔ permanent deletion rejects stale revisions after a restore transition (20.264209ms)
+✔ organization updates are revision guarded, keep content timestamps, and reject duplicate or invalid tags (19.607834ms)
+✔ archive, trash, and restore retain pinned and tag metadata (55.836792ms)
+✔ sync enrollment writes each eligible local mutation and outbox entry durably (15.98925ms)
+✔ v3 IndexedDB migration adds quarantine while preserving notes, history and queued operation IDs (170.816833ms)
+✔ existing notes require explicit owner enrollment and DEVICE_ONLY or recording-bearing notes are excluded (229.181959ms)
+✔ pull applies note and durable cursor in one transaction; failed apply leaves cursor unchanged (5.468125ms)
+✔ remote ID collision preserves local content and retries one deterministic conflict copy (5.612667ms)
+✔ remote tombstone colliding with a local edit is held for review and never deletes the note (4.589291ms)
+✔ 150 queued revisions of one note remain ordered, stable and visible as pending (1230.587958ms)
+✔ pull reconciles a committed operation with a lost ACK and leaves later same-note revisions sendable (16.788542ms)
+✔ push conflict preserves full local and remote versions and blocks every queued same-note revision (36.744333ms)
+✔ pull conflicts are idempotent and preserve a concurrent remote version across restart (14.014167ms)
+✔ audio attached after text ACK is visible as media-local-only and remote pulls preserve bytes and anchors (31.063083ms)
+✔ future note record schemas remain preserved but cannot be edited or organized as schema v1 (3.03425ms)
+✔ search folds Vietnamese accents including đ/Đ and punctuation while retaining Japanese text (3.250375ms)
+✔ lifecycle filtering does not include archived or trashed notes in active search (0.148375ms)
+✔ tag filtering uses case-insensitive canonical Unicode identity and requires every selected tag (0.678583ms)
+✔ pinned notes stay first; pinned ties use updatedAt and remaining notes honor selected sort (14.183625ms)
+✔ backup parser accepts version 1 data and preserves document values (138.025833ms)
+✔ backup v1 preserves organization metadata and remains compatible with older v1 notes (5.662541ms)
+✔ backup v1 rejects invalid organization metadata without rewriting source notes (0.720959ms)
+✔ backup parser rejects duplicate IDs before repository mutation (0.183959ms)
+✔ backup parser rejects unsupported bundle versions and invalid note metadata (0.162209ms)
+✔ safe note copies retain supported source tags but never pin or carry unsupported metadata (7.72ms)
+✔ Quick Capture creates valid canonical v1 notes and preserves Vietnamese, Japanese, English and interior newlines (198.375ms)
+✔ title derivation is conservative and does not destroy the body; blank captures create no note (62.202417ms)
+✔ one capture save gate suppresses double taps while independent captures get separate IDs (29.773083ms)
+✔ the same durable capture ID retries idempotently and rejects a different payload (221.776458ms)
+✔ failed persistence or note commit leaves the capture checkpoint intact for retry (0.567209ms)
+✔ old async Save completion cannot clear newer input; successful current save clears its checkpoint (0.572583ms)
+✔ voice capture creates an ordinary canonical note with a safe title and body available for later editing (0.281ms)
+✔ Full Archive V2 includes a captured canonical note and its associated audio (22.468417ms)
+✔ a copied storage token cannot claim a per-note lock held by another component or tab (1.465917ms)
+✔ missing Web Locks is explicitly reported as unsupported, never as ownership (0.89125ms)
+✔ reopen keeps journal with equal timestamps and own earlier in-flight commit (9.364167ms)
+✔ one tab cannot clear a different tab journal; concurrent DB change recovers as copy (0.554208ms)
+✔ confirmed delete cleans only unchanged committed journals; same-ID import cannot apply retained draft in place (430.078375ms)
+✔ parser and repository share validation; future content is preserved without rewriting (205.447875ms)
+✔ serializes delayed A then newest B/C, preserves latest journal and does not show Saved early (4.187333ms)
+✔ C arriving while B saves is drained with the next expected revision (1.064042ms)
+✔ autosave and lifecycle share a flush and lifecycle uses the committed revision (1.067ms)
+✔ failed in-flight save retains newest draft and journal and blocks lifecycle without retry (0.533459ms)
+✔ cross-tab stale revision stays rejected; no adoption of another tab revision (0.19425ms)
+✔ unchanged draft does not save or increment revision; unsupported/trashed record can restore (2.051916ms)
+✔ deletion epoch prevents stale-tab save after same-ID reimport (0.692291ms)
+✔ organization mutation waits for draft autosave and uses its committed revision (1.283792ms)
+✔ failed draft save blocks organization mutation and retains its recovery journal (0.439ms)
+✔ 150 same-note revisions drain in bounded cycles and an outage leaves a durable Pending queue (1289.802584ms)
+✔ lost ACK on a later operation replays the stable ID without duplicating the server mutation (275.335792ms)
+✔ a push conflict blocks later same-note revisions while unrelated notes continue (7.515ms)
+✔ an unreachable paired server never reports synced, even with an empty outbox (1.266917ms)
+✔ transient pull failures wait for connection and expired pairing is reported separately (1.141625ms)
+✔ read-only discovery never creates a missing browser database (2.609875ms)
+✔ discovery leaves synthetic local records and schema unchanged; missing privacy stays excluded (29.738125ms)
+✔ content hash ignores client CAS/clocks but includes unknown semantic data (0.695416ms)
+✔ two separate factories represent isolated origins (28.5645ms)
+✔ sync retry delay uses bounded exponential equal jitter (0.935708ms)
+ℹ tests 106
+ℹ suites 0
+ℹ pass 106
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4527.088042
+        4.90 real         3.32 user         0.79 sys
+           103694336  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+               90743  page reclaims
+                1391  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                 680  messages sent
+                 290  messages received
+                   0  signals received
+                 359  voluntary context switches
+               61134  involuntary context switches
+           774081373  instructions retired
+           392322811  cycles elapsed
+            25551232  peak memory footprint

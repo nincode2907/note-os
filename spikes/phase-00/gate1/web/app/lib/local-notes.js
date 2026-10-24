@@ -3,10 +3,12 @@ import { normalizeTagList } from './note-organization.mjs';
 import { requireVerifiedArchive } from './archive-v2.mjs';
 import { addAudioAnchor, deleteAudioAnchor, emptyAudioAnchorSet, renameAudioAnchor, validateAudioAnchorSet } from './audio-anchors.mjs';
 import { canonicalJson } from './sync-protocol.mjs';
+import { validateAudioManifest } from './audio-sync-protocol.mjs';
+import { sha256 } from '@noble/hashes/sha2.js';
 export { NoteDocumentError } from './note-validation.mjs';
 
 const DATABASE_NAME = 'noteos-mvp-01';
-const DATABASE_VERSION = 4;
+const DATABASE_VERSION = 5;
 const STORE_NAME = 'notes';
 const RECORDINGS_STORE = 'recordings';
 const RECORDING_CHUNKS_STORE = 'recordingChunks';
@@ -16,6 +18,9 @@ const SYNC_STATE_STORE = 'syncState';
 const SYNC_CONFLICTS_STORE = 'syncConflicts';
 const SYNC_ENROLLMENT_STORE = 'syncEnrollment';
 const SYNC_QUARANTINE_STORE = 'syncQuarantine';
+const AUDIO_SYNC_APPROVALS_STORE = 'audioSyncApprovals';
+const AUDIO_SYNC_STATE_STORE = 'audioSyncState';
+const AUDIO_SYNC_CHUNKS_STORE = 'audioSyncChunks';
 
 export class NoteNotFoundError extends Error {
   constructor(id) {
@@ -127,6 +132,12 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
           if (!database.objectStoreNames.contains(SYNC_CONFLICTS_STORE)) database.createObjectStore(SYNC_CONFLICTS_STORE, { keyPath: 'id' });
           if (!database.objectStoreNames.contains(SYNC_ENROLLMENT_STORE)) database.createObjectStore(SYNC_ENROLLMENT_STORE, { keyPath: 'id' });
           if (!database.objectStoreNames.contains(SYNC_QUARANTINE_STORE)) database.createObjectStore(SYNC_QUARANTINE_STORE, { keyPath: 'operationId' });
+          if (!database.objectStoreNames.contains(AUDIO_SYNC_APPROVALS_STORE)) database.createObjectStore(AUDIO_SYNC_APPROVALS_STORE, { keyPath: 'noteId' });
+          if (!database.objectStoreNames.contains(AUDIO_SYNC_STATE_STORE)) database.createObjectStore(AUDIO_SYNC_STATE_STORE, { keyPath: 'recordingId' });
+          if (!database.objectStoreNames.contains(AUDIO_SYNC_CHUNKS_STORE)) {
+            const chunks = database.createObjectStore(AUDIO_SYNC_CHUNKS_STORE, { keyPath: 'id' });
+            chunks.createIndex('transferSequence', ['transferId', 'sequence'], { unique: true });
+          }
         };
         request.onsuccess = () => {
           request.result.onversionchange = () => request.result.close();
@@ -629,6 +640,11 @@ function assertAudioTimestamp(value, label) {
 function assertRecordingState(state) {
   if (!['recording', 'paused', 'complete', 'interrupted', 'failed'].includes(state)) throw new TypeError('Invalid recording state.');
 }
+async function audioBlobSha256(blob) {
+  const hash = sha256.create();
+  for (let offset = 0; offset < blob.size; offset += 1024 * 1024) hash.update(new Uint8Array(await blob.slice(offset, offset + 1024 * 1024).arrayBuffer()));
+  return Array.from(hash.digest(), value => value.toString(16).padStart(2, '0')).join('');
+}
 
 export function createAudioRepository(indexedDBFactory = globalThis.indexedDB, databaseName = DATABASE_NAME) {
   let databasePromise;
@@ -637,6 +653,21 @@ export function createAudioRepository(indexedDBFactory = globalThis.indexedDB, d
     if (!databasePromise) {
       databasePromise = new Promise((resolve, reject) => {
         const request = indexedDBFactory.open(databaseName, DATABASE_VERSION);
+        request.onupgradeneeded = () => {
+          const database = request.result;
+          if (!database.objectStoreNames.contains(STORE_NAME)) { const store = database.createObjectStore(STORE_NAME, { keyPath: 'id' }); store.createIndex('lifecycle', 'lifecycle'); store.createIndex('updatedAt', 'updatedAt'); }
+          if (!database.objectStoreNames.contains(RECORDINGS_STORE)) { const store = database.createObjectStore(RECORDINGS_STORE, { keyPath: 'id' }); store.createIndex('noteId', 'noteId'); store.createIndex('status', 'status'); store.createIndex('updatedAt', 'updatedAt'); }
+          if (!database.objectStoreNames.contains(RECORDING_CHUNKS_STORE)) { const store = database.createObjectStore(RECORDING_CHUNKS_STORE, { keyPath: 'id' }); store.createIndex('recordingId', 'recordingId'); store.createIndex('recordingSequence', ['recordingId', 'sequence'], { unique: true }); }
+          if (!database.objectStoreNames.contains(SYNC_OUTBOX_STORE)) database.createObjectStore(SYNC_OUTBOX_STORE, { keyPath: 'operationId' });
+          if (!database.objectStoreNames.contains(SYNC_BASELINES_STORE)) database.createObjectStore(SYNC_BASELINES_STORE, { keyPath: 'id' });
+          if (!database.objectStoreNames.contains(SYNC_STATE_STORE)) database.createObjectStore(SYNC_STATE_STORE, { keyPath: 'key' });
+          if (!database.objectStoreNames.contains(SYNC_CONFLICTS_STORE)) database.createObjectStore(SYNC_CONFLICTS_STORE, { keyPath: 'id' });
+          if (!database.objectStoreNames.contains(SYNC_ENROLLMENT_STORE)) database.createObjectStore(SYNC_ENROLLMENT_STORE, { keyPath: 'id' });
+          if (!database.objectStoreNames.contains(SYNC_QUARANTINE_STORE)) database.createObjectStore(SYNC_QUARANTINE_STORE, { keyPath: 'operationId' });
+          if (!database.objectStoreNames.contains(AUDIO_SYNC_APPROVALS_STORE)) database.createObjectStore(AUDIO_SYNC_APPROVALS_STORE, { keyPath: 'noteId' });
+          if (!database.objectStoreNames.contains(AUDIO_SYNC_STATE_STORE)) database.createObjectStore(AUDIO_SYNC_STATE_STORE, { keyPath: 'recordingId' });
+          if (!database.objectStoreNames.contains(AUDIO_SYNC_CHUNKS_STORE)) { const store = database.createObjectStore(AUDIO_SYNC_CHUNKS_STORE, { keyPath: 'id' }); store.createIndex('transferSequence', ['transferId', 'sequence'], { unique: true }); }
+        };
         request.onsuccess = () => { request.result.onversionchange = () => request.result.close(); resolve(request.result); };
         request.onerror = () => reject(request.error ?? new Error('Could not open local audio storage.'));
         request.onblocked = () => reject(new Error('Local audio storage is open in another tab. Close older noteOS tabs and retry.'));
@@ -732,7 +763,7 @@ export function createAudioRepository(indexedDBFactory = globalThis.indexedDB, d
     try {
       const recording = await requestResult(store.get(recordingId));
       if (!recording) throw abort(tx, new NoteNotFoundError(recordingId));
-      const updated = { ...recording, title: title.trim(), updatedAt: Date.now() }; store.put(updated); await done; return updated;
+      const updated = { ...recording, title: title.trim(), updatedAt: Date.now() }; store.put(updated); await done; notifySyncStateChanged(); return updated;
     } catch (error) { try { await done; } catch { /* Consume the abort. */ } throw error; }
   }
   async function chunks(recordingId) {
@@ -748,7 +779,7 @@ export function createAudioRepository(indexedDBFactory = globalThis.indexedDB, d
       const current = validateAudioAnchorSet(recording.audioAnchors, recordingId, { durationMs: recording.durationMs, durationKnown: !['recording', 'paused'].includes(recording.status) && recording.durationMs > 0 && recording.nativeProvenance?.durationKnown !== false });
       const audioAnchors = update(current, recording);
       const updated = { ...recording, audioAnchors };
-      store.put(updated); await done; return updated;
+      store.put(updated); await done; notifySyncStateChanged(); return updated;
     } catch (error) { try { await done; } catch { /* Consume transaction abort before returning the original error. */ } throw error; }
   }
   async function listAnchors(recordingId) {
@@ -790,5 +821,83 @@ export function createAudioRepository(indexedDBFactory = globalThis.indexedDB, d
       return next;
     } catch (error) { try { await done; } catch { /* Consume transaction abort. */ } throw error; }
   }
-  return { list, listUnfinished, get, create, appendChunk, setStatus, rename, chunks, listAnchors, addAnchor, renameAnchor, removeAnchor, remove, recover };
+  async function getSyncApproval(noteId) {
+    const database = await openDatabase(), tx = database.transaction(AUDIO_SYNC_APPROVALS_STORE, 'readonly');
+    return (await run(tx, tx.objectStore(AUDIO_SYNC_APPROVALS_STORE).get(noteId))) ?? null;
+  }
+  async function listSyncApprovals() {
+    const database = await openDatabase(), tx = database.transaction(AUDIO_SYNC_APPROVALS_STORE, 'readonly');
+    return await run(tx, tx.objectStore(AUDIO_SYNC_APPROVALS_STORE).getAll());
+  }
+  async function setSyncApproval(noteId, approved) {
+    if (typeof approved !== 'boolean') throw new TypeError('Audio approval must be explicit.');
+    const database = await openDatabase(), tx = database.transaction([STORE_NAME, SYNC_BASELINES_STORE, AUDIO_SYNC_APPROVALS_STORE], 'readwrite'), done = transactionResult(tx);
+    try {
+      const note = await requestResult(tx.objectStore(STORE_NAME).get(noteId));
+      if (!note || !['PRIVATE_SERVER', 'CLOUD_ALLOWED'].includes(note.privacy)) throw abort(tx, new NoteStateError('Audio sync requires an existing note explicitly classified PRIVATE_SERVER or CLOUD_ALLOWED.'));
+      if (approved && !(await requestResult(tx.objectStore(SYNC_BASELINES_STORE).get(noteId)))) throw abort(tx, new NoteStateError('Sync this note text first, then approve audio for this note.'));
+      tx.objectStore(AUDIO_SYNC_APPROVALS_STORE).put({ noteId, approved, updatedAt: Date.now() });
+      await done; notifySyncStateChanged(); return { noteId, approved };
+    } catch (error) { try { await done; } catch {} throw error; }
+  }
+  async function listSyncCandidates() {
+    const database = await openDatabase(), tx = database.transaction([RECORDINGS_STORE, AUDIO_SYNC_APPROVALS_STORE, STORE_NAME], 'readonly'), done = transactionResult(tx);
+    const [recordings, approvals, notes] = await Promise.all([requestResult(tx.objectStore(RECORDINGS_STORE).getAll()), requestResult(tx.objectStore(AUDIO_SYNC_APPROVALS_STORE).getAll()), requestResult(tx.objectStore(STORE_NAME).getAll())]); await done;
+    const approved = new Set(approvals.filter(row => row.approved === true).map(row => row.noteId)), noteMap = new Map(notes.map(row => [row.id, row]));
+    return recordings.filter(row => row.status === 'complete' && approved.has(row.noteId) && ['PRIVATE_SERVER', 'CLOUD_ALLOWED'].includes(noteMap.get(row.noteId)?.privacy));
+  }
+  async function getSyncStateForRecording(recordingId) {
+    const database = await openDatabase(), tx = database.transaction(AUDIO_SYNC_STATE_STORE, 'readonly');
+    return (await run(tx, tx.objectStore(AUDIO_SYNC_STATE_STORE).get(recordingId))) ?? null;
+  }
+  async function putSyncState(state) {
+    if (!state || typeof state.recordingId !== 'string') throw new TypeError('Invalid audio sync state.');
+    const database = await openDatabase(), tx = database.transaction(AUDIO_SYNC_STATE_STORE, 'readwrite'), done = transactionResult(tx);
+    tx.objectStore(AUDIO_SYNC_STATE_STORE).put({ ...state, updatedAt: Date.now() }); await done; notifySyncStateChanged();
+  }
+  async function listDownloadedChunks(transferId) {
+    const database = await openDatabase(), tx = database.transaction(AUDIO_SYNC_CHUNKS_STORE, 'readonly');
+    return (await run(tx, tx.objectStore(AUDIO_SYNC_CHUNKS_STORE).index('transferSequence').getAll(IDBKeyRange.bound([transferId, 0], [transferId, Number.MAX_SAFE_INTEGER])))).sort((a,b) => a.sequence-b.sequence);
+  }
+  async function putDownloadedChunk(transferId, sequence, blob, sha256) {
+    const database = await openDatabase(), tx = database.transaction(AUDIO_SYNC_CHUNKS_STORE, 'readwrite'), done = transactionResult(tx);
+    tx.objectStore(AUDIO_SYNC_CHUNKS_STORE).put({ id: `${transferId}:${sequence}`, transferId, sequence, blob, sha256 }); await done;
+  }
+  async function finalizeDownload(manifestValue, blob, localChunks) {
+    const manifest = validateAudioManifest(manifestValue);
+    if (!(blob instanceof Blob) || blob.size !== manifest.totalBytes || !Array.isArray(localChunks) || localChunks.length !== manifest.chunks.length) throw new NoteStateError('Downloaded audio is incomplete.');
+    const wholeHash = await audioBlobSha256(blob);
+    for (let index = 0; index < localChunks.length; index++) if (localChunks[index].size !== manifest.chunks[index].byteLength || await audioBlobSha256(localChunks[index]) !== manifest.chunks[index].sha256) throw new NoteStateError('Downloaded audio chunk verification failed.');
+    if (wholeHash !== manifest.sha256) throw new NoteStateError('Downloaded audio object verification failed.');
+    const database = await openDatabase(), tx = database.transaction([STORE_NAME, RECORDINGS_STORE, RECORDING_CHUNKS_STORE, AUDIO_SYNC_CHUNKS_STORE], 'readwrite'), done = transactionResult(tx);
+    try {
+      const note = await requestResult(tx.objectStore(STORE_NAME).get(manifest.recording.noteId));
+      if (!note || !['PRIVATE_SERVER', 'CLOUD_ALLOWED'].includes(note.privacy)) throw abort(tx, new NoteStateError('The parent note is not available for approved audio sync.'));
+      const recordings = tx.objectStore(RECORDINGS_STORE), existing = await requestResult(recordings.get(manifest.recording.id));
+      if (existing && existing.ownerId !== 'audio-sync') throw abort(tx, new NoteStateError('A local recording with this ID already exists; both versions are preserved for review.'));
+      const saved = { ...manifest.recording, status: 'complete', ownerId: 'audio-sync', chunkCount: localChunks.length, audioAnchors: manifest.anchors, syncState: 'verified-here', syncSha256: manifest.sha256, syncServerVersion: manifest.serverVersion ?? 1 };
+      recordings.put(saved);
+      const chunks = tx.objectStore(RECORDING_CHUNKS_STORE);
+      for (let index = 0; index < localChunks.length; index++) chunks.put({ id: `${saved.id}:${index}`, recordingId: saved.id, sequence: index, blob: localChunks[index] });
+      const remoteChunks = tx.objectStore(AUDIO_SYNC_CHUNKS_STORE);
+      for (const row of await requestResult(remoteChunks.index('transferSequence').getAllKeys(IDBKeyRange.bound([manifest.transferId, 0], [manifest.transferId, Number.MAX_SAFE_INTEGER])))) remoteChunks.delete(row);
+      await done; notifyLocalCommit(); return saved;
+    } catch (error) { try { await done; } catch {} throw error; }
+  }
+  async function replaceAnchors(recordingId, anchors) {
+    const database = await openDatabase(), tx = database.transaction(RECORDINGS_STORE, 'readwrite'), done = transactionResult(tx), store = tx.objectStore(RECORDINGS_STORE);
+    try { const row = await requestResult(store.get(recordingId)); if (!row) throw abort(tx, new NoteNotFoundError(recordingId)); const valid = validateAudioAnchorSet(anchors, recordingId, { durationMs: row.durationMs, durationKnown: row.durationMs > 0 }); const updated = { ...row, audioAnchors: valid, updatedAt: Date.now() }; store.put(updated); await done; notifySyncStateChanged(); return updated; }
+    catch (error) { try { await done; } catch {} throw error; }
+  }
+  async function applyRemoteAudioMetadata(recordingId, remote) {
+    if (!remote?.recording || !remote.anchors) throw new TypeError('Remote audio metadata is incomplete.');
+    const database = await openDatabase(), tx = database.transaction(RECORDINGS_STORE, 'readwrite'), done = transactionResult(tx), store = tx.objectStore(RECORDINGS_STORE);
+    try {
+      const local = await requestResult(store.get(recordingId)); if (!local) throw abort(tx, new NoteNotFoundError(recordingId));
+      const anchors = validateAudioAnchorSet(remote.anchors, recordingId, { durationMs: remote.recording.durationMs, durationKnown: remote.recording.durationMs > 0 });
+      const updated = { ...local, ...remote.recording, id: local.id, noteId: local.noteId, status: local.status, ownerId: local.ownerId, audioAnchors: anchors, updatedAt: Math.max(local.updatedAt, remote.recording.updatedAt ?? 0) };
+      store.put(updated); await done; notifySyncStateChanged(); return updated;
+    } catch (error) { try { await done; } catch {} throw error; }
+  }
+  return { list, listUnfinished, get, create, appendChunk, setStatus, rename, chunks, listAnchors, addAnchor, renameAnchor, removeAnchor, remove, recover, getSyncApproval, listSyncApprovals, setSyncApproval, listSyncCandidates, getSyncStateForRecording, putSyncState, listDownloadedChunks, putDownloadedChunk, finalizeDownload, replaceAnchors, applyRemoteAudioMetadata };
 }
