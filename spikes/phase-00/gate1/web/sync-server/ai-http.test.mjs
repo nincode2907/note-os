@@ -215,3 +215,24 @@ test('concurrent duplicate requests create one logical job and a durable revoke 
   assert.equal(host.db.prepare('SELECT status FROM ai_jobs').get().status, 'CANCELED');
   assert.equal(claimAiJob(host.db, 'synthetic-worker', { now: Date.now() }), null);
 });
+
+test('09B-1A: an unpersisted HTTP revoke returns 503, then grant and analysis request return REVOCATION_PENDING until the retry commits', async t => {
+  const note = noteFixture('http-revoke-pending'), host = setup(t, note), device = host.pair(); host.device = device;
+  const committed = host.db.prepare('SELECT server_version serverVersion,content_hash contentHash FROM sync_entities WHERE id=?').get(note.id);
+  const revision = { ...committed, serverEpoch: serverMeta(host.db).serverEpoch };
+  assert.equal((await call(host, `consents/${note.id}`, { method: 'PUT', body: grantBody(note.id, revision) })).status, 200);
+  host.db.exec("CREATE TRIGGER ai_test_fail_revoke BEFORE UPDATE ON ai_note_consent BEGIN SELECT RAISE(ABORT,'synthetic'); END");
+  const revokeBody = { protocolVersion: 1, requestId: crypto.randomUUID() };
+  const failed = await call(host, `consents/${note.id}`, { method: 'DELETE', body: revokeBody });
+  assert.equal(failed.status, 503); assert.equal((await failed.json()).error, 'AI_REVOCATION_NOT_PERSISTED');
+  host.db.exec('DROP TRIGGER ai_test_fail_revoke');
+  const regrant = await call(host, `consents/${note.id}`, { method: 'PUT', body: grantBody(note.id, revision) });
+  assert.equal(regrant.status, 409); assert.equal((await regrant.json()).error, 'REVOCATION_PENDING');
+  const request = await call(host, 'analysis-requests', { method: 'POST', body: requestBody(note.id, revision) });
+  assert.equal(request.status, 409); assert.equal((await request.json()).error, 'REVOCATION_PENDING');
+  assert.equal(host.db.prepare('SELECT count(*) n FROM ai_jobs').get().n, 0);
+  const retried = await call(host, `consents/${note.id}`, { method: 'DELETE', body: revokeBody });
+  assert.equal(retried.status, 200); assert.equal((await retried.json()).consent.state, 'REVOKED');
+  const fresh = await call(host, `consents/${note.id}`, { method: 'PUT', body: grantBody(note.id, revision) });
+  assert.equal(fresh.status, 200); assert.equal((await fresh.json()).consent.consentEpoch, 3);
+});

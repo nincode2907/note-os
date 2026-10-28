@@ -60,7 +60,7 @@ function mapError(error) {
     ['AI_DISABLED', 503], ['SYNC_REQUIRED', 409], ['STALE_REVISION', 409], ['SERVER_EPOCH_CHANGED', 409],
     ['CONSENT_REQUIRED', 403], ['CONSENT_CHANGED', 409], ['DEVICE_ONLY', 403], ['PRIVACY_REQUIRED', 403],
     ['PRIVACY_UNSUPPORTED', 403], ['NOTE_INACTIVE', 409], ['IDEMPOTENCY_CONFLICT', 409],
-    ['RATE_LIMITED', 429], ['AI_REVOCATION_NOT_PERSISTED', 503],
+    ['RATE_LIMITED', 429], ['AI_REVOCATION_NOT_PERSISTED', 503], ['REVOCATION_PENDING', 409], ['AI_CONTROL_UNAVAILABLE', 503],
   ]);
   if (error?.code && known.has(error.code)) return fail(error.code, known.get(error.code));
   if (error?.status === 413) return fail('payload_too_large', 413);

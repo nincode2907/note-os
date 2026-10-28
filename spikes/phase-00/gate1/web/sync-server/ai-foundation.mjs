@@ -6,6 +6,10 @@ import { assertNoteRecord } from '../app/lib/note-validation.mjs';
 import { normalizeTagLabel, tagKey } from '../app/lib/note-organization.mjs';
 import { canonicalJson } from '../app/lib/sync-protocol.mjs';
 import { serverMeta, transaction } from './storage.mjs';
+import {
+  aiNoteKey, clearSatisfiedRevocationIntents, ensureAiControlPlane, inferenceBlockReason, listAiControlState,
+  persistAutomaticInferenceStop, persistRevocationIntent, recordWorkerHeartbeat, removeRevocationIntent,
+} from './ai-control.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MIGRATION = join(HERE, 'migrations/001-ai-foundation.sql');
@@ -38,7 +42,7 @@ export function aiFeatureFlags(env = process.env) {
 
 /** Apply only when explicitly called by a reviewed migration path. openStore never calls this. */
 export function applyAiSchema(db) {
-  return transaction(db, () => {
+  const version = transaction(db, () => {
     db.exec(readFileSync(MIGRATION, 'utf8'));
     const current = db.prepare('SELECT max(version) version FROM ai_schema_migrations').get().version ?? 0;
     if (current === 1) db.exec(readFileSync(BRIDGE_MIGRATION, 'utf8'));
@@ -46,6 +50,8 @@ export function applyAiSchema(db) {
     if (versions.join(',') !== '1,2') throw new Error('AI migration ledger requires review');
     return versions.at(-1);
   });
+  ensureAiControlPlane(db);
+  return version;
 }
 
 function parseConsent(row) {
@@ -94,7 +100,10 @@ function boundedScopes(scopes) {
 function grantNoteConsentInTransaction(db, noteId, { state = 'APPROVED_LOCAL_ONLY', scopes = ['organize'], providerBoundary = 'MOCK', actorId = null, actorDeviceId = null, env = process.env, now = nowDefault() } = {}) {
   if (!aiFeatureFlags(env).organizeEnabled) throw new Error('AI organize is disabled');
   assertNoteId(noteId);
-  if (isAiRevocationFailClosed(noteId)) throw new Error('AI consent state is uncertain; persist revocation before granting consent');
+  if (isAiRevocationFailClosed(noteId)) throw bridgeFailure('REVOCATION_PENDING');
+  const blocked = inferenceBlockReason(db, noteId);
+  if (blocked === 'revocation_state_uncertain') throw bridgeFailure('REVOCATION_PENDING');
+  if (blocked === 'control_plane_unavailable') throw bridgeFailure('AI_CONTROL_UNAVAILABLE', 503);
   if (!['APPROVED_LOCAL_ONLY','APPROVED_CLOUD_ALLOWED'].includes(state) || !['MOCK','STRICT_LOCAL','EXTERNAL_CLOUD'].includes(providerBoundary)) throw new TypeError('Invalid AI consent');
   const normalizedScopes = boundedScopes(scopes), scopesJson = canonicalJson(normalizedScopes);
   const noteRow = db.prepare("SELECT record_json recordJson,lifecycle FROM sync_entities WHERE entity_type='note' AND id=?").get(noteId);
@@ -138,20 +147,60 @@ function revokeNoteConsentInTransaction(db, noteId, { actorId = null, actorDevic
       return { noteId, state: 'REVOKED', consentEpoch, canceledJobs, purgedSuggestions, alreadyRevoked };
 }
 
+/**
+ * Cross-process revocation: a durable write-ahead intent marker is created before the
+ * SQLite transaction. Every process blocks dispatch/publication while a marker exists,
+ * so a failed or interrupted commit stays fail-closed until a retry or reconcile commits.
+ */
+function persistRevocation(db, noteId, commit, { onIntentPersisted } = {}) {
+  const wasLatched = revocationFailClosedNotes.has(noteId);
+  revocationFailClosedNotes.add(noteId);
+  let intent = null;
+  try { intent = persistRevocationIntent(db, noteId); } catch { intent = null; }
+  if (intent) onIntentPersisted?.(intent);
+  let result;
+  try { result = commit(); }
+  catch (cause) {
+    if (cause?.code === 'IDEMPOTENCY_CONFLICT' || cause instanceof TypeError) {
+      // A rejected caller request rolled back before any write: restore the prior state exactly.
+      if (!wasLatched) revocationFailClosedNotes.delete(noteId);
+      if (intent) { try { removeRevocationIntent(db, intent); } catch { /* over-blocks until reconcile */ } }
+      throw cause;
+    }
+    // Keep this process latched. Without a per-note intent, stop all inference globally.
+    let controlPlane = intent ? 'revocation_intent_persisted' : 'unavailable';
+    if (!intent) { try { persistAutomaticInferenceStop(db); controlPlane = 'global_stop_persisted'; } catch { /* reported below */ } }
+    throw Object.assign(new Error('AI consent revocation was not persisted; inference is paused'), { code: 'AI_REVOCATION_NOT_PERSISTED', controlPlane, cause });
+  }
+  revocationFailClosedNotes.delete(noteId);
+  // The committed REVOKED row is authoritative; a marker that cannot be removed only over-blocks.
+  try { clearSatisfiedRevocationIntents(db, noteId, Date.now()); } catch { /* reconcile retries */ }
+  return result;
+}
+
 export function revokeNoteConsent(db, noteId, options = {}) {
   assertNoteId(noteId);
-  revocationFailClosedNotes.add(noteId);
-  try {
-    const result = transaction(db, () => revokeNoteConsentInTransaction(db, noteId, options));
-    revocationFailClosedNotes.delete(noteId);
-    return result;
-  } catch (cause) {
-    // Keep this process fail-closed until a later revocation retry commits. A caller
-    // must surface the error; never acknowledge an unpersisted revoke as successful.
-    throw Object.assign(new Error('AI consent revocation was not persisted; inference is paused for this note'), {
-      code: 'AI_REVOCATION_NOT_PERSISTED', cause,
-    });
+  return persistRevocation(db, noteId, () => transaction(db, () => revokeNoteConsentInTransaction(db, noteId, options)), options);
+}
+
+/** Complete durable revocation intents left by a crash or failed commit. Safe to repeat. */
+export function reconcileAiRevocationIntents(db, { now = nowDefault() } = {}) {
+  const { pendingRevocationKeys } = listAiControlState(db);
+  if (!pendingRevocationKeys.length) return { completed: [], unmatched: [] };
+  const known = new Map();
+  for (const sql of ['SELECT note_id id FROM ai_note_consent', 'SELECT DISTINCT note_id id FROM ai_jobs', "SELECT id FROM sync_entities WHERE entity_type='note'"]) {
+    for (const row of db.prepare(sql).all()) known.set(aiNoteKey(row.id), row.id);
   }
+  const completed = [], unmatched = [];
+  for (const key of pendingRevocationKeys) {
+    const noteId = known.get(key);
+    if (!noteId) { unmatched.push(key); continue; }
+    transaction(db, () => revokeNoteConsentInTransaction(db, noteId, { reasonCode: 'recovered_revocation_intent', now }));
+    revocationFailClosedNotes.delete(noteId);
+    clearSatisfiedRevocationIntents(db, noteId, Date.now());
+    completed.push(noteId);
+  }
+  return { completed, unmatched };
 }
 
 function requestIdentity(requestId) {
@@ -172,14 +221,12 @@ export function readAiConsent(db, noteId) {
 }
 
 /** Atomically apply a device-scoped, replay-safe consent operation and its receipt. */
-export function applyAiConsentOperation(db, noteId, { action, requestId, actorDeviceId, expectedServerEpoch, expectedServerVersion, expectedContentHash, env = process.env, now = nowDefault() } = {}) {
+export function applyAiConsentOperation(db, noteId, { action, requestId, actorDeviceId, expectedServerEpoch, expectedServerVersion, expectedContentHash, env = process.env, now = nowDefault(), onIntentPersisted } = {}) {
   assertNoteId(noteId); requestIdentity(requestId);
   if (!['GRANT','REVOKE'].includes(action) || typeof actorDeviceId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(actorDeviceId)) throw new TypeError('Invalid AI consent operation');
   const operation = { action, noteId, actorDeviceId, protocolVersion: 1, ...(action === 'GRANT' ? { scope: 'organize', executionBoundary: 'MOCK', expectedServerEpoch, expectedServerVersion, expectedContentHash } : {}) };
   const requestHash = sha256(canonicalJson(operation));
-  if (action === 'REVOKE') revocationFailClosedNotes.add(noteId);
-  try {
-    const result = transaction(db, () => {
+  const commit = () => transaction(db, () => {
       const prior = db.prepare('SELECT request_hash requestHash,actor_device_id actorDeviceId,result_json resultJson FROM ai_consent_operations WHERE request_id=?').get(requestId);
       if (prior) {
         if (prior.requestHash !== requestHash || prior.actorDeviceId !== actorDeviceId) throw bridgeFailure('IDEMPOTENCY_CONFLICT');
@@ -207,12 +254,8 @@ export function applyAiConsentOperation(db, noteId, { action, requestId, actorDe
         .run(requestId, requestHash, actorDeviceId, noteId, action, canonicalJson(value), now);
       return value;
     });
-    if (action === 'REVOKE') revocationFailClosedNotes.delete(noteId);
-    return result;
-  } catch (cause) {
-    if (action !== 'REVOKE') throw cause;
-    throw Object.assign(new Error('AI consent revocation was not persisted; inference remains disabled'), { code: 'AI_REVOCATION_NOT_PERSISTED', cause });
-  }
+  if (action !== 'REVOKE') return commit();
+  return persistRevocation(db, noteId, commit, { onIntentPersisted });
 }
 
 function sourceForNote(db, noteId, serverVersion) {
@@ -232,7 +275,7 @@ function sourceForNote(db, noteId, serverVersion) {
 
 function enqueueAiJobInTransaction(db, noteId, { serverVersion, env = process.env, analysisPolicyVersion = 'ai-policy-v1', promptSchemaVersion = 1, modelIdentity = 'mock-v1', scope = 'organize', actorDeviceId = null, now = nowDefault() } = {}) {
   assertNoteId(noteId);
-  if (isAiRevocationFailClosed(noteId)) throw new Error('AI consent state is uncertain; inference is paused for this note');
+  if (isAiRevocationFailClosed(noteId) || inferenceBlockReason(db, noteId) === 'revocation_state_uncertain') throw bridgeFailure('REVOCATION_PENDING');
   const flags = aiFeatureFlags(env);
   if (!flags.organizeEnabled) throw new Error('AI organize is disabled');
   if (!Number.isSafeInteger(serverVersion) || serverVersion < 1) throw new TypeError('A committed server version is required');
@@ -336,6 +379,11 @@ export function recoverExpiredAiJobs(db, { now = nowDefault() } = {}) {
     for (const job of expired) {
       const consent = parseConsent(db.prepare('SELECT * FROM ai_note_consent WHERE note_id=?').get(job.note_id));
       const current = db.prepare("SELECT server_version serverVersion,lifecycle,content_hash contentHash,committed_cursor committedCursor FROM sync_entities WHERE entity_type='note' AND id=?").get(job.note_id);
+      if (controlBlock(db, job.note_id) === 'revocation_state_uncertain') {
+        db.prepare("UPDATE ai_jobs SET status='CANCELED',lease_until=NULL,worker_id=NULL,claim_token=NULL,updated_at=? WHERE id=?").run(now, job.id);
+        recovered.push({ id: job.id, status: 'CANCELED' });
+        continue;
+      }
       const valid = serverMeta(db).serverEpoch === job.server_epoch && consent?.consent_epoch === job.consent_epoch && consent.state !== 'REVOKED' && current?.serverVersion === job.target_server_version && current?.committedCursor === job.source_cursor && current?.lifecycle === 'active' && current?.contentHash === job.content_sha256;
       if (!valid) {
         db.prepare("UPDATE ai_jobs SET status='SUPERSEDED',lease_until=NULL,worker_id=NULL,claim_token=NULL,updated_at=? WHERE id=?").run(now, job.id);
@@ -442,8 +490,13 @@ export function validateAiSuggestion(value, note, { authorizedRelatedIds = [] } 
   return output;
 }
 
+function controlBlock(db, noteId) {
+  return isAiRevocationFailClosed(noteId) ? 'revocation_state_uncertain' : inferenceBlockReason(db, noteId);
+}
+
 function currentEligible(db, job, env) {
-  if (isAiRevocationFailClosed(job.note_id)) return { allowed: false, reason: 'revocation_state_uncertain' };
+  const blocked = controlBlock(db, job.note_id);
+  if (blocked) return { allowed: false, reason: blocked };
   const meta = serverMeta(db);
   if (meta.serverEpoch !== job.server_epoch) return { allowed: false, reason: 'server_epoch_changed' };
   let source;
@@ -474,33 +527,106 @@ export function createMockProvider({ output, onInvoke = () => {} } = {}) {
 }
 
 /** One manually/event-triggered job at a time. There is deliberately no polling loop. */
-export async function runOneAiJob(db, { workerId, provider, env = process.env, now = nowDefault(), clock = nowDefault, leaseMs = 30000 } = {}) {
+const CANCEL_ON_STOP = new Set(['revocation_state_uncertain', 'consent_changed']);
+
+/** Best-effort cancellation of a job this worker still owns; storage failure leaves lease expiry to recover it. */
+function cancelOwnedJob(db, job, workerId, reason, clock) {
+  if (!CANCEL_ON_STOP.has(reason)) return 0;
+  try {
+    return transaction(db, () => {
+      const at = readClock(clock);
+      const changed = db.prepare("UPDATE ai_jobs SET status='CANCELED',lease_until=NULL,worker_id=NULL,claim_token=NULL,updated_at=? WHERE id=? AND status='RUNNING' AND worker_id=? AND claim_token=?")
+        .run(at, job.id, workerId, job.claim_token).changes;
+      if (changed && db.prepare('SELECT count(*) AS n FROM ai_audit_log').get().n < MAX_AUDIT) audit(db, { action: 'JOB_CANCELED', noteId: job.note_id, jobId: job.id, actorId: workerId, reasonCode: reason, metadata: {}, now: at });
+      return changed;
+    });
+  } catch { return 0; }
+}
+
+/** Polls the control plane and job/consent rows while a provider call is in flight; aborts on any doubt. */
+function watchDispatchedJob(db, job, workerId, clock, stop, intervalMs) {
+  const timer = setInterval(() => {
+    let reason = null;
+    try {
+      reason = controlBlock(db, job.note_id);
+      if (!reason) {
+        const row = db.prepare('SELECT status,worker_id workerId,claim_token claimToken,lease_until leaseUntil FROM ai_jobs WHERE id=?').get(job.id);
+        const consent = db.prepare('SELECT state,consent_epoch consentEpoch FROM ai_note_consent WHERE note_id=?').get(job.note_id);
+        if (!row || row.status !== 'RUNNING' || row.workerId !== workerId || row.claimToken !== job.claim_token) reason = 'job_no_longer_owned';
+        else if (!(row.leaseUntil > readClock(clock))) reason = 'lease_expired_or_lost';
+        else if (!consent || consent.state === 'REVOKED' || consent.consentEpoch !== job.consent_epoch) reason = 'consent_changed';
+      }
+    } catch { reason = 'control_check_failed'; }
+    if (reason) stop(reason);
+  }, intervalMs);
+  timer.unref?.();
+  return () => clearInterval(timer);
+}
+
+export async function runOneAiJob(db, { workerId, provider, env = process.env, now = nowDefault(), clock = nowDefault, leaseMs = 30000, timeoutMs = 60000, watchdogMs = 100 } = {}) {
   const flags = aiFeatureFlags(env);
   if (!flags.organizeEnabled || !flags.inferenceEnabled) return { status: 'disabled', invoked: false };
   if (env.NODE_ENV !== 'test') return { status: 'mock_provider_test_only', invoked: false };
   if (!provider || provider.identity !== 'mock-v1' || provider.executionBoundary !== 'MOCK' || typeof provider.analyze !== 'function') return { status: 'provider_rejected', invoked: false };
-  const job = claimAiJob(db, workerId, { now, leaseMs });
+  let job;
+  try { job = claimAiJob(db, workerId, { now, leaseMs }); }
+  catch { return { status: 'blocked', reason: 'claim_not_persisted', invoked: false }; }
   if (!job) return { status: 'idle', invoked: false };
-  const dispatch = transaction(db, () => {
-    const eligible = currentEligible(db, job, env);
-    const dispatchNow = readClock(clock);
-    if (!hasLiveClaim(db, job, workerId, dispatchNow)) return { allowed: false, reason: 'lease_expired_or_lost' };
-    if (!eligible.allowed) {
-      const changed = db.prepare("UPDATE ai_jobs SET status='CANCELED',lease_until=NULL,worker_id=NULL,claim_token=NULL,updated_at=? WHERE id=? AND worker_id=? AND claim_token=?")
-        .run(dispatchNow, job.id, workerId, job.claim_token).changes;
-      if (changed) audit(db, { action: 'JOB_CANCELED', noteId: job.note_id, jobId: job.id, actorId: workerId, reasonCode: eligible.reason, metadata: {}, now: dispatchNow });
-      return { allowed: false, reason: eligible.reason };
-    }
-    return { allowed: true, note: eligible.note };
-  });
+  let dispatch;
+  try {
+    dispatch = transaction(db, () => {
+      const eligible = currentEligible(db, job, env);
+      const dispatchNow = readClock(clock);
+      if (!hasLiveClaim(db, job, workerId, dispatchNow)) return { allowed: false, reason: 'lease_expired_or_lost' };
+      if (!eligible.allowed) {
+        const changed = db.prepare("UPDATE ai_jobs SET status='CANCELED',lease_until=NULL,worker_id=NULL,claim_token=NULL,updated_at=? WHERE id=? AND worker_id=? AND claim_token=?")
+          .run(dispatchNow, job.id, workerId, job.claim_token).changes;
+        if (changed) audit(db, { action: 'JOB_CANCELED', noteId: job.note_id, jobId: job.id, actorId: workerId, reasonCode: eligible.reason, metadata: {}, now: dispatchNow });
+        return { allowed: false, reason: eligible.reason };
+      }
+      // Durable dispatch fence: both the SQLite write and the control-plane heartbeat
+      // must commit before any provider call, so a store that cannot persist a
+      // revocation cannot dispatch inference either.
+      db.prepare('UPDATE ai_jobs SET updated_at=? WHERE id=? AND worker_id=? AND claim_token=?').run(dispatchNow, job.id, workerId, job.claim_token);
+      recordWorkerHeartbeat(db, workerId, dispatchNow);
+      return { allowed: true, note: eligible.note };
+    });
+  } catch {
+    return { status: 'blocked', reason: 'dispatch_not_persisted', invoked: false };
+  }
   if (!dispatch.allowed) return { status: dispatch.reason === 'lease_expired_or_lost' ? 'discarded' : 'canceled', reason: dispatch.reason, invoked: false };
+  // Re-read the cross-process control plane after the fence committed and before the call.
+  const preInvoke = controlBlock(db, job.note_id);
+  if (preInvoke) {
+    cancelOwnedJob(db, job, workerId, preInvoke, clock);
+    return { status: 'aborted', reason: preInvoke, invoked: false };
+  }
   let result;
+  const controller = new AbortController();
+  let stopReason = null;
+  const stop = reason => { if (!stopReason) { stopReason = reason; controller.abort(Object.assign(new Error(reason), { code: reason })); } };
+  const stopWatch = watchDispatchedJob(db, job, workerId, clock, stop, watchdogMs);
+  const timer = setTimeout(() => stop('provider_timeout'), timeoutMs);
+  timer.unref?.();
   try {
     // The provider boundary is checked again immediately before the only allowed adapter call.
     if (provider.identity !== job.model_identity || provider.executionBoundary !== job.execution_boundary) throw new Error('Provider identity or boundary mismatch');
-    result = await provider.analyze(Object.freeze({ note: structuredClone(dispatch.note), sourceVersion: job.target_server_version, contentHash: job.content_sha256 }));
+    const aborted = new Promise((_, reject) => controller.signal.addEventListener('abort', () => reject(controller.signal.reason), { once: true }));
+    aborted.catch(() => {});
+    result = await Promise.race([
+      provider.analyze(Object.freeze({ note: structuredClone(dispatch.note), sourceVersion: job.target_server_version, contentHash: job.content_sha256 }), { signal: controller.signal }),
+      aborted,
+    ]);
   } catch {
+    if (stopReason && stopReason !== 'provider_timeout') {
+      cancelOwnedJob(db, job, workerId, stopReason, clock);
+      return { status: 'aborted', reason: stopReason, invoked: true };
+    }
     return retryAfterProviderFailure(db, job, workerId, clock, env);
+  } finally { stopWatch(); clearTimeout(timer); }
+  if (stopReason) {
+    cancelOwnedJob(db, job, workerId, stopReason, clock);
+    return { status: 'aborted', reason: stopReason, invoked: true };
   }
   let validated;
   try { validated = validateAiSuggestion(result, dispatch.note); }
