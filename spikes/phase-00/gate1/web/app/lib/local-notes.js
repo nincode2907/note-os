@@ -344,14 +344,14 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
       if (note.privacy === 'DEVICE_ONLY') throw abort(tx, new NoteStateError('This note is DEVICE_ONLY. AI will not change its privacy setting.'));
       if (!['PRIVATE_SERVER','CLOUD_ALLOWED'].includes(note.privacy)) throw abort(tx, new NoteStateError('This note does not have eligible server privacy.'));
       const consent = await requestResult(tx.objectStore(AI_CONSENT_CACHE_STORE).get(noteId));
-      if (!consent || consent.state !== 'APPROVED_LOCAL_ONLY' || consent.providerBoundary !== 'MOCK' || consent.consentEpoch !== consentEpoch || !consent.scopes.includes('organize')) throw abort(tx, new NoteStateError('Refresh and explicitly approve organize consent before requesting analysis.'));
+      if (!consent || consent.state !== 'APPROVED_LOCAL_ONLY' || !['MOCK','STRICT_LOCAL'].includes(consent.providerBoundary) || consent.consentEpoch !== consentEpoch || !consent.scopes.includes('organize')) throw abort(tx, new NoteStateError('Refresh and explicitly approve organize consent before requesting analysis.'));
       const store = tx.objectStore(AI_REQUEST_OUTBOX_STORE), prior = await requestResult(store.get(requestId));
       if (prior) {
         if (prior.kind !== 'analysis' || prior.noteId !== noteId || prior.localRevision !== localRevision || prior.consentEpoch !== consentEpoch) throw abort(tx, new NoteStateError('This request ID was already used for a different AI intent.'));
         await done; return { ...prior, reused: true };
       }
       await makeAiOutboxSpace(store);
-      const intent = { requestId, kind: 'analysis', noteId, localRevision, consentEpoch, scope: 'organize', executionBoundary: 'MOCK', status: 'WAITING_FOR_SYNC', createdAt: now, updatedAt: now };
+      const intent = { requestId, kind: 'analysis', noteId, localRevision, consentEpoch, scope: 'organize', executionBoundary: consent.providerBoundary, status: 'WAITING_FOR_SYNC', createdAt: now, updatedAt: now };
       store.add(intent); await done; notifySyncStateChanged(); return intent;
     } catch (error) { try { await done; } catch {} throw error; }
   }

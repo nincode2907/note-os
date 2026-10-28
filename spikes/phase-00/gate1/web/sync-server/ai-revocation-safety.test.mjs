@@ -67,7 +67,7 @@ function child(mode, root, args = [], extraEnv = {}) {
   });
   proc.stderr.on('data', chunk => { stderr += chunk; });
   const exited = new Promise(resolve => proc.on('exit', code => resolve({ code, events, stderr })));
-  const waitFor = (name, timeoutMs = 10000) => {
+  const waitFor = (name, timeoutMs = 60000) => {
     const prior = events.find(event => event.event === name);
     if (prior) return Promise.resolve(prior);
     return new Promise((resolve, reject) => {

@@ -33,11 +33,12 @@ export async function getAiConsent(noteId, { fetcher = fetch } = {}) {
   return (await requestAi(`consents/${encodeURIComponent(noteId)}`, { fetcher })).consent;
 }
 
-export async function grantAiConsent(noteId, revision, { fetcher = fetch, requestId = crypto.randomUUID() } = {}) {
+export async function grantAiConsent(noteId, revision, { fetcher = fetch, requestId = crypto.randomUUID(), executionBoundary = 'MOCK' } = {}) {
+  if (!['MOCK','STRICT_LOCAL'].includes(executionBoundary)) throw makeError('invalid_boundary', 400);
   await ensureAiSession({ fetcher });
   if (!revision || typeof revision.serverEpoch !== 'string' || !Number.isSafeInteger(revision.serverVersion) || revision.serverVersion < 1 || !/^[a-f0-9]{64}$/.test(revision.contentHash ?? '')) throw makeError('SYNC_REQUIRED', 409);
   const result = await requestAi(`consents/${encodeURIComponent(noteId)}`, {
-    method: 'PUT', fetcher, body: { protocolVersion: 1, requestId, scope: 'organize', executionBoundary: 'MOCK', expectedServerEpoch: revision.serverEpoch, expectedServerVersion: revision.serverVersion, expectedContentHash: revision.contentHash },
+    method: 'PUT', fetcher, body: { protocolVersion: 1, requestId, scope: 'organize', executionBoundary, expectedServerEpoch: revision.serverEpoch, expectedServerVersion: revision.serverVersion, expectedContentHash: revision.contentHash },
   });
   return result.consent;
 }
@@ -109,7 +110,7 @@ export async function deliverAiOutbox({ repository, fetcher = fetch, acknowledge
       const consent = (await requestAi(`consents/${encodeURIComponent(intent.noteId)}`, { fetcher })).consent;
       await repository.cacheAiConsent(consent);
       if (consent.state === 'REVOKED' || consent.state === 'NONE') { await repository.updateAiIntent(intent.requestId, 'CANCELED'); failed++; continue; }
-      if (consent.state !== 'APPROVED_LOCAL_ONLY' || consent.providerBoundary !== 'MOCK' || consent.consentEpoch !== intent.consentEpoch || !consent.scopes.includes('organize')) {
+      if (consent.state !== 'APPROVED_LOCAL_ONLY' || consent.providerBoundary !== intent.executionBoundary || consent.consentEpoch !== intent.consentEpoch || !consent.scopes.includes('organize')) {
         await repository.updateAiIntent(intent.requestId, 'NEEDS_CONSENT'); failed++; continue;
       }
       const result = await requestAi(REQUEST_PATH.slice('/api/v1/ai/'.length), {

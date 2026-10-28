@@ -6,6 +6,7 @@ import { assertNoteRecord } from '../app/lib/note-validation.mjs';
 import { normalizeTagLabel, tagKey } from '../app/lib/note-organization.mjs';
 import { canonicalJson } from '../app/lib/sync-protocol.mjs';
 import { serverMeta, transaction } from './storage.mjs';
+import { aiExecutionProfile } from './ai-provider-gateway.mjs';
 import {
   aiNoteKey, clearSatisfiedRevocationIntents, ensureAiControlPlane, inferenceBlockReason, listAiControlState,
   persistAutomaticInferenceStop, persistRevocationIntent, recordWorkerHeartbeat, removeRevocationIntent,
@@ -14,6 +15,8 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MIGRATION = join(HERE, 'migrations/001-ai-foundation.sql');
 const BRIDGE_MIGRATION = join(HERE, 'migrations/002-ai-consent-bridge.sql');
+const LOCAL_BOUNDARY_MIGRATION = join(HERE, 'migrations/003-ai-local-boundary.sql');
+export const AI_SCHEMA_VERSION = 3;
 const MAX_QUEUE = 1000;
 const MAX_CONSENT_ROWS = 1000;
 const MAX_JOB_ROWS = 10000;
@@ -44,10 +47,11 @@ export function aiFeatureFlags(env = process.env) {
 export function applyAiSchema(db) {
   const version = transaction(db, () => {
     db.exec(readFileSync(MIGRATION, 'utf8'));
-    const current = db.prepare('SELECT max(version) version FROM ai_schema_migrations').get().version ?? 0;
-    if (current === 1) db.exec(readFileSync(BRIDGE_MIGRATION, 'utf8'));
+    const current = () => db.prepare('SELECT max(version) version FROM ai_schema_migrations').get().version ?? 0;
+    if (current() === 1) db.exec(readFileSync(BRIDGE_MIGRATION, 'utf8'));
+    if (current() === 2) db.exec(readFileSync(LOCAL_BOUNDARY_MIGRATION, 'utf8'));
     const versions = db.prepare('SELECT version FROM ai_schema_migrations ORDER BY version').all().map(row => row.version);
-    if (versions.join(',') !== '1,2') throw new Error('AI migration ledger requires review');
+    if (versions.join(',') !== '1,2,3') throw new Error('AI migration ledger requires review');
     return versions.at(-1);
   });
   ensureAiControlPlane(db);
@@ -108,6 +112,11 @@ function grantNoteConsentInTransaction(db, noteId, { state = 'APPROVED_LOCAL_ONL
   const normalizedScopes = boundedScopes(scopes), scopesJson = canonicalJson(normalizedScopes);
   const noteRow = db.prepare("SELECT record_json recordJson,lifecycle FROM sync_entities WHERE entity_type='note' AND id=?").get(noteId);
   if (!noteRow || noteRow.lifecycle !== 'active' || JSON.parse(noteRow.recordJson).lifecycle !== 'active') throw new Error('Consent requires an existing active synced note');
+  // Defense in depth: no consent row is ever created for an ineligible privacy class.
+  const privacy = JSON.parse(noteRow.recordJson).privacy;
+  if (privacy === 'DEVICE_ONLY') throw bridgeFailure('DEVICE_ONLY', 403);
+  if (privacy === undefined || privacy === null) throw bridgeFailure('PRIVACY_REQUIRED', 403);
+  if (!['PRIVATE_SERVER','CLOUD_ALLOWED'].includes(privacy)) throw bridgeFailure('PRIVACY_UNSUPPORTED', 403);
   const previous = db.prepare('SELECT consent_epoch FROM ai_note_consent WHERE note_id=?').get(noteId);
   if (!previous && db.prepare('SELECT count(*) AS n FROM ai_note_consent').get().n >= MAX_CONSENT_ROWS) throw new Error('AI consent capacity reached');
   const consentEpoch = (previous?.consent_epoch ?? 0) + 1;
@@ -224,7 +233,7 @@ export function readAiConsent(db, noteId) {
 export function applyAiConsentOperation(db, noteId, { action, requestId, actorDeviceId, expectedServerEpoch, expectedServerVersion, expectedContentHash, env = process.env, now = nowDefault(), onIntentPersisted } = {}) {
   assertNoteId(noteId); requestIdentity(requestId);
   if (!['GRANT','REVOKE'].includes(action) || typeof actorDeviceId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(actorDeviceId)) throw new TypeError('Invalid AI consent operation');
-  const operation = { action, noteId, actorDeviceId, protocolVersion: 1, ...(action === 'GRANT' ? { scope: 'organize', executionBoundary: 'MOCK', expectedServerEpoch, expectedServerVersion, expectedContentHash } : {}) };
+  const operation = { action, noteId, actorDeviceId, protocolVersion: 1, ...(action === 'GRANT' ? { scope: 'organize', executionBoundary: aiExecutionProfile(env).executionBoundary, expectedServerEpoch, expectedServerVersion, expectedContentHash } : {}) };
   const requestHash = sha256(canonicalJson(operation));
   const commit = () => transaction(db, () => {
       const prior = db.prepare('SELECT request_hash requestHash,actor_device_id actorDeviceId,result_json resultJson FROM ai_consent_operations WHERE request_id=?').get(requestId);
@@ -245,7 +254,7 @@ export function applyAiConsentOperation(db, noteId, { action, requestId, actorDe
         if (note.privacy === undefined || note.privacy === null) throw bridgeFailure('PRIVACY_REQUIRED');
         if (note.privacy === 'DEVICE_ONLY') throw bridgeFailure('DEVICE_ONLY');
         if (!['PRIVATE_SERVER','CLOUD_ALLOWED'].includes(note.privacy)) throw bridgeFailure('PRIVACY_UNSUPPORTED');
-        value = grantNoteConsentInTransaction(db, noteId, { state: 'APPROVED_LOCAL_ONLY', scopes: ['organize'], providerBoundary: 'MOCK', actorId: actorDeviceId, actorDeviceId, env, now });
+        value = grantNoteConsentInTransaction(db, noteId, { state: 'APPROVED_LOCAL_ONLY', scopes: ['organize'], providerBoundary: aiExecutionProfile(env).executionBoundary, actorId: actorDeviceId, actorDeviceId, env, now });
       } else {
         const current = db.prepare('SELECT state FROM ai_note_consent WHERE note_id=?').get(noteId);
         value = current ? revokeNoteConsentInTransaction(db, noteId, { actorId: actorDeviceId, actorDeviceId, now }) : { noteId, state: 'NONE', consentEpoch: null, alreadyRevoked: true };
@@ -273,7 +282,10 @@ function sourceForNote(db, noteId, serverVersion) {
   return { note, sourceCursor: event.sourceCursor, contentHash };
 }
 
-function enqueueAiJobInTransaction(db, noteId, { serverVersion, env = process.env, analysisPolicyVersion = 'ai-policy-v1', promptSchemaVersion = 1, modelIdentity = 'mock-v1', scope = 'organize', actorDeviceId = null, now = nowDefault() } = {}) {
+function enqueueAiJobInTransaction(db, noteId, { serverVersion, env = process.env, analysisPolicyVersion = 'ai-policy-v1', promptSchemaVersion = 1, modelIdentity: requestedModel, scope = 'organize', actorDeviceId = null, now = nowDefault() } = {}) {
+  const profile = aiExecutionProfile(env), { executionBoundary } = profile;
+  // Synthetic MOCK jobs may name a test model; an attested local job always uses the configured identity.
+  const modelIdentity = executionBoundary === 'MOCK' && requestedModel !== undefined ? requestedModel : profile.modelIdentity;
   assertNoteId(noteId);
   if (isAiRevocationFailClosed(noteId) || inferenceBlockReason(db, noteId) === 'revocation_state_uncertain') throw bridgeFailure('REVOCATION_PENDING');
   const flags = aiFeatureFlags(env);
@@ -281,10 +293,10 @@ function enqueueAiJobInTransaction(db, noteId, { serverVersion, env = process.en
   if (!Number.isSafeInteger(serverVersion) || serverVersion < 1) throw new TypeError('A committed server version is required');
   const source = sourceForNote(db, noteId, serverVersion);
   const consent = parseConsent(db.prepare('SELECT * FROM ai_note_consent WHERE note_id=?').get(noteId));
-  const policy = evaluateAiPolicy({ note: source.note, consent, scope, executionBoundary: 'MOCK' });
+  const policy = evaluateAiPolicy({ note: source.note, consent, scope, executionBoundary, localExecutionAttested: profile.localExecutionAttested });
   if (!policy.allowed) throw Object.assign(new Error('AI policy rejected request'), { reason: policy.reason });
   const meta = serverMeta(db);
-  const dedupeKey = sha256(canonicalJson({ noteId, serverEpoch: meta.serverEpoch, serverVersion, sourceCursor: source.sourceCursor, contentHash: source.contentHash, consentEpoch: policy.consentEpoch, scope, analysisPolicyVersion, promptSchemaVersion, modelIdentity, executionBoundary: 'MOCK' }));
+  const dedupeKey = sha256(canonicalJson({ noteId, serverEpoch: meta.serverEpoch, serverVersion, sourceCursor: source.sourceCursor, contentHash: source.contentHash, consentEpoch: policy.consentEpoch, scope, analysisPolicyVersion, promptSchemaVersion, modelIdentity, executionBoundary }));
   const prior = db.prepare('SELECT id,status FROM ai_jobs WHERE dedupe_key=?').get(dedupeKey);
   if (prior) return { id: prior.id, status: prior.status, reused: true };
   if (db.prepare("SELECT count(*) AS n FROM ai_jobs WHERE status IN ('QUEUED','RUNNING')").get().n >= MAX_QUEUE) throw new Error('AI queue capacity reached');
@@ -293,7 +305,7 @@ function enqueueAiJobInTransaction(db, noteId, { serverVersion, env = process.en
   const id = randomUUID();
   db.prepare(`INSERT INTO ai_jobs(id,note_id,server_epoch,source_cursor,target_server_version,content_sha256,consent_epoch,
     analysis_policy_version,prompt_schema_version,model_identity,execution_boundary,dedupe_key,scope,status,attempts,run_after,created_at,updated_at)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'QUEUED',0,?,?,?)`).run(id,noteId,meta.serverEpoch,source.sourceCursor,serverVersion,source.contentHash,policy.consentEpoch,analysisPolicyVersion,promptSchemaVersion,modelIdentity,'MOCK',dedupeKey,scope,now,now,now);
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'QUEUED',0,?,?,?)`).run(id,noteId,meta.serverEpoch,source.sourceCursor,serverVersion,source.contentHash,policy.consentEpoch,analysisPolicyVersion,promptSchemaVersion,modelIdentity,executionBoundary,dedupeKey,scope,now,now,now);
   audit(db, { action: 'JOB_ENQUEUED', noteId, jobId: id, actorId: actorDeviceId, reasonCode: 'explicit_request', metadata: { serverVersion, sourceCursor: source.sourceCursor, contentHash: source.contentHash, consentEpoch: policy.consentEpoch, analysisPolicyVersion, promptSchemaVersion, modelIdentity, ...(actorDeviceId ? { actorDeviceId } : {}) }, now });
   return { id, status: 'QUEUED', reused: false };
 }
@@ -314,7 +326,7 @@ export function createAiAnalysisRequest(db, envelope, { actorDeviceId, env = pro
       return { ...JSON.parse(prior.resultJson), replayed: true };
     }
     if (!aiFeatureFlags(env).organizeEnabled) throw bridgeFailure('AI_DISABLED', 503);
-    if (envelope.protocolVersion !== 1 || envelope.scope !== 'organize' || envelope.executionBoundary !== 'MOCK' ||
+    if (envelope.protocolVersion !== 1 || envelope.scope !== 'organize' || envelope.executionBoundary !== aiExecutionProfile(env).executionBoundary ||
       typeof envelope.expectedServerEpoch !== 'string' || envelope.expectedServerEpoch.length < 1 || envelope.expectedServerEpoch.length > 128 ||
       !Number.isSafeInteger(envelope.expectedServerVersion) || envelope.expectedServerVersion < 1 ||
       !/^[a-f0-9]{64}$/.test(envelope.expectedContentHash ?? '') || !Number.isSafeInteger(envelope.consentEpoch) || envelope.consentEpoch < 1) throw new TypeError('Invalid AI analysis request');
@@ -333,7 +345,7 @@ export function createAiAnalysisRequest(db, envelope, { actorDeviceId, env = pro
     const consent = parseConsent(db.prepare('SELECT * FROM ai_note_consent WHERE note_id=?').get(envelope.noteId));
     if (!consent || consent.state === 'REVOKED') throw bridgeFailure('CONSENT_REQUIRED');
     if (consent.consent_epoch !== envelope.consentEpoch || consent.provider_boundary !== envelope.executionBoundary) throw bridgeFailure('CONSENT_CHANGED');
-    const policy = evaluateAiPolicy({ note: source.note, consent, scope: envelope.scope, executionBoundary: envelope.executionBoundary });
+    const policy = evaluateAiPolicy({ note: source.note, consent, scope: envelope.scope, executionBoundary: envelope.executionBoundary, localExecutionAttested: aiExecutionProfile(env).localExecutionAttested });
     if (!policy.allowed) throw bridgeFailure(policy.reason === 'device_only' ? 'DEVICE_ONLY' : 'CONSENT_REQUIRED');
     const job = enqueueAiJobInTransaction(db, envelope.noteId, { serverVersion: envelope.expectedServerVersion, scope: envelope.scope, actorDeviceId, env, now });
     const result = { requestId: envelope.requestId, jobId: job.id, status: job.status, reused: job.reused };
@@ -504,7 +516,9 @@ function currentEligible(db, job, env) {
   catch { return { allowed: false, reason: 'source_stale' }; }
   if (source.sourceCursor !== job.source_cursor || source.contentHash !== job.content_sha256) return { allowed: false, reason: 'source_stale' };
   const consent = parseConsent(db.prepare('SELECT * FROM ai_note_consent WHERE note_id=?').get(job.note_id));
-  const decision = evaluateAiPolicy({ note: source.note, consent, scope: job.scope, executionBoundary: job.execution_boundary });
+  const profile = aiExecutionProfile(env);
+  const localExecutionAttested = job.execution_boundary === 'STRICT_LOCAL' && profile.localExecutionAttested && profile.modelIdentity === job.model_identity;
+  const decision = evaluateAiPolicy({ note: source.note, consent, scope: job.scope, executionBoundary: job.execution_boundary, localExecutionAttested });
   if (!decision.allowed || decision.consentEpoch !== job.consent_epoch) return { allowed: false, reason: decision.allowed ? 'consent_epoch_changed' : decision.reason };
   if (!aiFeatureFlags(env).organizeEnabled || !aiFeatureFlags(env).inferenceEnabled) return { allowed: false, reason: 'feature_disabled' };
   return { allowed: true, note: source.note };
@@ -527,6 +541,23 @@ export function createMockProvider({ output, onInvoke = () => {} } = {}) {
 }
 
 /** One manually/event-triggered job at a time. There is deliberately no polling loop. */
+/**
+ * Only two provider lanes exist: the in-process Mock (tests only) and an attested
+ * STRICT_LOCAL gateway backend matching the configured profile. Anything else,
+ * including every EXTERNAL_CLOUD provider, is refused before a job is claimed.
+ */
+function admitProvider(provider, env) {
+  if (provider?.executionBoundary === 'MOCK') {
+    if (env.NODE_ENV !== 'test') return 'mock_provider_test_only';
+    return provider.identity === 'mock-v1' && typeof provider.analyze === 'function' ? null : 'provider_rejected';
+  }
+  if (provider?.executionBoundary === 'STRICT_LOCAL') {
+    const profile = aiExecutionProfile(env);
+    return profile.localExecutionAttested && provider.localExecutionAttested === true && provider.identity === profile.modelIdentity && typeof provider.analyze === 'function' ? null : 'local_execution_not_proven';
+  }
+  return 'provider_rejected';
+}
+
 const CANCEL_ON_STOP = new Set(['revocation_state_uncertain', 'consent_changed']);
 
 /** Best-effort cancellation of a job this worker still owns; storage failure leaves lease expiry to recover it. */
@@ -566,8 +597,8 @@ function watchDispatchedJob(db, job, workerId, clock, stop, intervalMs) {
 export async function runOneAiJob(db, { workerId, provider, env = process.env, now = nowDefault(), clock = nowDefault, leaseMs = 30000, timeoutMs = 60000, watchdogMs = 100 } = {}) {
   const flags = aiFeatureFlags(env);
   if (!flags.organizeEnabled || !flags.inferenceEnabled) return { status: 'disabled', invoked: false };
-  if (env.NODE_ENV !== 'test') return { status: 'mock_provider_test_only', invoked: false };
-  if (!provider || provider.identity !== 'mock-v1' || provider.executionBoundary !== 'MOCK' || typeof provider.analyze !== 'function') return { status: 'provider_rejected', invoked: false };
+  const admission = admitProvider(provider, env);
+  if (admission) return { status: admission, invoked: false };
   let job;
   try { job = claimAiJob(db, workerId, { now, leaseMs }); }
   catch { return { status: 'blocked', reason: 'claim_not_persisted', invoked: false }; }
@@ -617,12 +648,12 @@ export async function runOneAiJob(db, { workerId, provider, env = process.env, n
       provider.analyze(Object.freeze({ note: structuredClone(dispatch.note), sourceVersion: job.target_server_version, contentHash: job.content_sha256 }), { signal: controller.signal }),
       aborted,
     ]);
-  } catch {
+  } catch (error) {
     if (stopReason && stopReason !== 'provider_timeout') {
       cancelOwnedJob(db, job, workerId, stopReason, clock);
       return { status: 'aborted', reason: stopReason, invoked: true };
     }
-    return retryAfterProviderFailure(db, job, workerId, clock, env);
+    return retryAfterProviderFailure(db, job, workerId, clock, env, { permanent: error?.permanent === true && !stopReason });
   } finally { stopWatch(); clearTimeout(timer); }
   if (stopReason) {
     cancelOwnedJob(db, job, workerId, stopReason, clock);
@@ -658,12 +689,12 @@ export async function runOneAiJob(db, { workerId, provider, env = process.env, n
     db.prepare("INSERT INTO ai_suggestions(id,job_id,note_id,target_server_version,content_sha256,schema_version,status,payload_json,provider_identity,created_at,updated_at) VALUES(?,?,?,?,?,1,'PENDING_REVIEW',?,?,?,?)")
       .run(suggestionId,job.id,job.note_id,job.target_server_version,job.content_sha256,payload,provider.identity,publishNow,publishNow);
     db.prepare("UPDATE ai_jobs SET status='COMPLETED',lease_until=NULL,worker_id=NULL,claim_token=NULL,updated_at=? WHERE id=? AND worker_id=? AND claim_token=?").run(publishNow, job.id, workerId, job.claim_token);
-    audit(db, { action: 'JOB_COMPLETED', noteId: job.note_id, jobId: job.id, actorId: workerId, reasonCode: 'suggestion_created', metadata: { suggestionId, provider: 'mock-v1', schemaVersion: 1 }, now: publishNow });
+    audit(db, { action: 'JOB_COMPLETED', noteId: job.note_id, jobId: job.id, actorId: workerId, reasonCode: 'suggestion_created', metadata: { suggestionId, provider: provider.identity, schemaVersion: 1 }, now: publishNow });
     return { status: 'COMPLETED', invoked: true, suggestionId };
   });
 }
 
-function retryAfterProviderFailure(db, job, workerId, clock, env) {
+function retryAfterProviderFailure(db, job, workerId, clock, env, { permanent = false } = {}) {
   return transaction(db, () => {
     const eligible = currentEligible(db, job, env);
     const publishNow = readClock(clock);
@@ -673,10 +704,10 @@ function retryAfterProviderFailure(db, job, workerId, clock, env) {
         .run(publishNow, job.id, workerId, job.claim_token);
       return { status: 'discarded', invoked: true, reason: eligible.reason };
     }
-    if (job.attempts >= MAX_ATTEMPTS) {
+    if (permanent || job.attempts >= MAX_ATTEMPTS) {
       db.prepare("UPDATE ai_jobs SET status='FAILED_NEEDS_REVIEW',lease_until=NULL,worker_id=NULL,claim_token=NULL,updated_at=? WHERE id=? AND worker_id=? AND claim_token=?").run(publishNow, job.id, workerId, job.claim_token);
-      audit(db, { action: 'JOB_FAILED_NEEDS_REVIEW', noteId: job.note_id, jobId: job.id, reasonCode: 'attempt_limit', metadata: { attempts: job.attempts }, now: publishNow });
-      return { status: 'FAILED_NEEDS_REVIEW', invoked: true };
+      audit(db, { action: 'JOB_FAILED_NEEDS_REVIEW', noteId: job.note_id, jobId: job.id, reasonCode: permanent ? 'provider_permanent_error' : 'attempt_limit', metadata: { attempts: job.attempts }, now: publishNow });
+      return { status: 'FAILED_NEEDS_REVIEW', invoked: true, ...(permanent ? { reason: 'provider_permanent_error' } : {}) };
     }
     const delay = Math.min(300000, 1000 * (2 ** Math.max(0, job.attempts - 1)));
     db.prepare("UPDATE ai_jobs SET status='QUEUED',run_after=?,lease_until=NULL,worker_id=NULL,claim_token=NULL,updated_at=? WHERE id=? AND worker_id=? AND claim_token=?").run(publishNow + delay, publishNow, job.id, workerId, job.claim_token);

@@ -30,8 +30,8 @@ function slowProvider(holdMs) {
 try {
   if (mode === 'worker') {
     const db = openStore(root);
-    const holdMs = Number(process.env.HOLD_MS ?? 8000);
-    const result = await runOneAiJob(db, { workerId, provider: slowProvider(holdMs), env, leaseMs: 60000, timeoutMs: 30000, watchdogMs: Number(process.env.WATCHDOG_MS ?? 50) });
+    const holdMs = Number(process.env.HOLD_MS ?? 30000);
+    const result = await runOneAiJob(db, { workerId, provider: slowProvider(holdMs), env, leaseMs: 120000, timeoutMs: 60000, watchdogMs: Number(process.env.WATCHDOG_MS ?? 50) });
     emit({ event: 'result', result });
     db.close();
   } else if (mode === 'revoke-crash') {

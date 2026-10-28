@@ -10,7 +10,7 @@ type Intent = { requestId: string; kind: string; status: string; localRevision?:
 const stateText: Record<string,string> = {
   WAITING_FOR_SYNC: 'Waiting for Text Sync to acknowledge this exact revision.',
   WAITING_FOR_NETWORK: 'Revocation is saved on this device and will reach the server when it reconnects.',
-  QUEUED: 'Request accepted into the local synthetic queue. No analysis was run.',
+  QUEUED: 'Request accepted by the paired Mac. Any suggestion waits in the AI inbox for your review; the note is not changed.',
   CANCELED: 'This unsent request was canceled.',
   STALE: 'The note changed before delivery. Nothing was queued for a different revision.',
   NEEDS_CONSENT: 'Server consent changed. Review consent and make a new explicit request.',
@@ -23,6 +23,7 @@ export function AiConsentPanel({ noteId, localRevision, privacy, lifecycle, canR
   const [available, setAvailable] = useState(false), [paired, setPaired] = useState(true), [consent, setConsent] = useState<Consent | null>(null);
   const [latestIntent, setLatestIntent] = useState<Intent | null>(null), [baselineReady, setBaselineReady] = useState(false);
   const [confirmed, setConfirmed] = useState(false), [busy, setBusy] = useState(false), [message, setMessage] = useState('');
+  const [boundary, setBoundary] = useState<'MOCK' | 'STRICT_LOCAL'>('MOCK'), [inferenceAvailable, setInferenceAvailable] = useState(false);
   const busyRef = useRef(false);
 
   const refresh = useCallback(async () => {
@@ -36,6 +37,7 @@ export function AiConsentPanel({ noteId, localRevision, privacy, lifecycle, canR
       const state = await discoverAi();
       if (!state.enabled) { setAvailable(false); return; }
       setAvailable(true);
+      setBoundary(state.executionBoundary === 'STRICT_LOCAL' ? 'STRICT_LOCAL' : 'MOCK'); setInferenceAvailable(state.inferenceAvailable === true);
       if (privacy === 'DEVICE_ONLY' || !['PRIVATE_SERVER','CLOUD_ALLOWED'].includes(privacy ?? '')) return;
       try {
         const fresh = await getAiConsent(noteId);
@@ -76,25 +78,29 @@ export function AiConsentPanel({ noteId, localRevision, privacy, lifecycle, canR
 
   if (!available) return null;
   const eligiblePrivacy = ['PRIVATE_SERVER','CLOUD_ALLOWED'].includes(privacy ?? '');
-  const hasConsent = consent?.state === 'APPROVED_LOCAL_ONLY' && consent.providerBoundary === 'MOCK' && consent.scopes?.includes('organize');
+  const hasConsent = consent?.state === 'APPROVED_LOCAL_ONLY' && consent.providerBoundary === boundary && consent.scopes?.includes('organize');
+  const local = boundary === 'STRICT_LOCAL';
+  const boundaryLabel = local ? 'local model on the paired Mac' : 'MOCK test boundary';
 
   return <section className="ai-consent-panel" aria-labelledby={`ai-title-${noteId}`}>
     <h2 id={`ai-title-${noteId}`}>AI request controls</h2>
-    <p>Consent and an analysis request are separate actions. This server only accepts the MOCK test boundary: it will queue metadata and will not run a model or send content to an external provider.</p>
+    <p>Consent and an analysis request are separate actions. {local
+      ? `Analysis runs only on a local model on your paired Mac through the local AI Gateway${inferenceAvailable ? '' : ' (currently paused)'}. Note content is never sent to a cloud provider, and suggestions never change the note until you approve them.`
+      : 'This server only accepts the MOCK test boundary: it will queue metadata and will not run a model or send content to an external provider.'}</p>
     {privacy === 'DEVICE_ONLY' ? <div className="notice">This note is DEVICE_ONLY. AI requests are unavailable, and noteOS will not change its privacy setting.</div>
       : !eligiblePrivacy ? <div className="notice">This note has no eligible server privacy classification. AI consent is unavailable.</div>
         : <>
           {!paired && <div className="notice">{message || 'Pair this browser in Sync Setup before using AI requests.'}</div>}
           {paired && <>
-            <p className="ai-consent-state" aria-live="polite">Server consent: <strong>{hasConsent ? 'Granted for organize · MOCK only' : consent?.state === 'REVOKED' ? 'Revoked' : 'None'}</strong></p>
+            <p className="ai-consent-state" aria-live="polite">Server consent: <strong>{hasConsent ? `Granted for organize · ${local ? 'local model only' : 'MOCK only'}` : consent?.state === 'REVOKED' ? 'Revoked' : 'None'}</strong></p>
             {!hasConsent && <div className="ai-consent-confirm">
-              <label><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} disabled={busy || !baselineReady || !canRequest} /> I allow explicit organize requests for this note using the MOCK boundary. This does not authorize an external provider.</label>
+              <label><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} disabled={busy || !baselineReady || !canRequest} /> I allow explicit organize requests for this note using the {boundaryLabel}. This does not authorize an external provider.</label>
               <p>Sending content to an external provider is unavailable in this phase.</p>
               <button className="btn" type="button" disabled={busy || !confirmed || !baselineReady || !canRequest || typeof navigator === 'undefined' || !navigator.onLine || lifecycle !== 'active'} onClick={() => void perform(async () => {
                 const baseline = await repository.getSyncBaseline(noteId), sync = await repository.getSyncState();
                 if (!baseline || baseline.localRevision !== localRevision || !sync.state.history?.serverEpoch) throw Object.assign(new Error('Sync this exact note revision to the paired Mac first.'), { code: 'SYNC_REQUIRED' });
-                return grantAiConsent(noteId, { serverEpoch: sync.state.history.serverEpoch, serverVersion: baseline.serverVersion, contentHash: baseline.contentHash });
-              }, 'Consent recorded for organize requests at the MOCK boundary. No model is enabled.')}>Grant consent</button>
+                return grantAiConsent(noteId, { serverEpoch: sync.state.history.serverEpoch, serverVersion: baseline.serverVersion, contentHash: baseline.contentHash }, { executionBoundary: boundary });
+              }, local ? 'Consent recorded for organize requests on the local model. Nothing is analyzed until you request it.' : 'Consent recorded for organize requests at the MOCK boundary. No model is enabled.')}>Grant consent</button>
               {!baselineReady && <span className="save-state">Sync this exact revision before granting.</span>}
             </div>}
             {hasConsent && <div className="ai-request-actions">

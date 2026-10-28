@@ -1,6 +1,7 @@
 import { authenticate } from './auth.mjs';
 import { allowedOrigin } from './http.mjs';
-import { applyAiConsentOperation, consumeAiBridgeRateLimit, createAiAnalysisRequest, readAiConsent } from './ai-foundation.mjs';
+import { AI_SCHEMA_VERSION, aiFeatureFlags, applyAiConsentOperation, consumeAiBridgeRateLimit, createAiAnalysisRequest, readAiConsent } from './ai-foundation.mjs';
+import { aiExecutionProfile } from './ai-provider-gateway.mjs';
 import { openStore } from './storage.mjs';
 
 const baseHeaders = { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' };
@@ -36,22 +37,22 @@ async function bodyJson(request) {
   }
 }
 
-function consentEnvelope(body, action) {
+function consentEnvelope(body, action, boundary) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return false;
-  if (action === 'GRANT') return Object.keys(body).sort().join(',') === 'executionBoundary,expectedContentHash,expectedServerEpoch,expectedServerVersion,protocolVersion,requestId,scope' && body.protocolVersion === 1 && UUID.test(body.requestId ?? '') && body.scope === 'organize' && body.executionBoundary === 'MOCK' && typeof body.expectedServerEpoch === 'string' && body.expectedServerEpoch.length <= 128 && Number.isSafeInteger(body.expectedServerVersion) && /^[a-f0-9]{64}$/.test(body.expectedContentHash ?? '');
+  if (action === 'GRANT') return Object.keys(body).sort().join(',') === 'executionBoundary,expectedContentHash,expectedServerEpoch,expectedServerVersion,protocolVersion,requestId,scope' && body.protocolVersion === 1 && UUID.test(body.requestId ?? '') && body.scope === 'organize' && body.executionBoundary === boundary && typeof body.expectedServerEpoch === 'string' && body.expectedServerEpoch.length <= 128 && Number.isSafeInteger(body.expectedServerVersion) && /^[a-f0-9]{64}$/.test(body.expectedContentHash ?? '');
   return Object.keys(body).sort().join(',') === 'protocolVersion,requestId' && body.protocolVersion === 1 && UUID.test(body.requestId ?? '');
 }
 
-function analysisEnvelope(body) {
+function analysisEnvelope(body, boundary) {
   const keys = ['consentEpoch','executionBoundary','expectedContentHash','expectedServerEpoch','expectedServerVersion','noteId','protocolVersion','requestId','scope'];
   return Boolean(body && typeof body === 'object' && !Array.isArray(body) && Object.keys(body).sort().join(',') === keys.sort().join(',') &&
     body.protocolVersion === 1 && UUID.test(body.requestId ?? '') && typeof body.noteId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(body.noteId) &&
     typeof body.expectedServerEpoch === 'string' && body.expectedServerEpoch.length <= 128 && Number.isSafeInteger(body.expectedServerVersion) &&
-    /^[a-f0-9]{64}$/.test(body.expectedContentHash ?? '') && Number.isSafeInteger(body.consentEpoch) && body.scope === 'organize' && body.executionBoundary === 'MOCK');
+    /^[a-f0-9]{64}$/.test(body.expectedContentHash ?? '') && Number.isSafeInteger(body.consentEpoch) && body.scope === 'organize' && body.executionBoundary === boundary);
 }
 
 function migrationReady(db) {
-  try { return db.prepare('SELECT 1 FROM ai_schema_migrations WHERE version=2').get() !== undefined; }
+  try { return db.prepare('SELECT max(version) version FROM ai_schema_migrations').get().version === AI_SCHEMA_VERSION; }
   catch { return false; }
 }
 
@@ -79,9 +80,11 @@ export async function handleAi(request, action, env = process.env) {
     if (url.search) return fail('query_parameters_not_supported', 400);
     const origin = allowedOrigin(request, env);
     if (!origin) return fail('origin_denied', 403);
+    const profile = aiExecutionProfile(env);
+    const availability = { externalProviderAvailable: false, inferenceAvailable: aiFeatureFlags(env).inferenceEnabled && profile.localExecutionAttested };
     if (action === 'status') {
       if (request.method !== 'GET') return fail('method_not_allowed', 405);
-      return response({ enabled: true, scope: 'organize', executionBoundary: 'MOCK', inferenceAvailable: false });
+      return response({ enabled: true, scope: 'organize', executionBoundary: profile.executionBoundary, inferenceAvailable: availability.inferenceAvailable });
     }
     const consentMatch = action.match(/^consents\/([A-Za-z0-9_-]{1,128})$/);
     const requestMatch = action.match(/^analysis-requests\/([0-9a-f-]{36})$/i);
@@ -100,7 +103,7 @@ export async function handleAi(request, action, env = process.env) {
     if (!migrationReady(db)) return fail('ai_schema_unavailable', 503);
     consumeAiBridgeRateLimit(db, device.id);
 
-    if (isConsentRead) return response({ consent: readAiConsent(db, consentMatch[1]), externalProviderAvailable: false, inferenceAvailable: false });
+    if (isConsentRead) return response({ consent: readAiConsent(db, consentMatch[1]), ...availability });
     if (isRequestRead) {
       const requestId = requestMatch[1];
       if (!UUID.test(requestId)) return fail('invalid_request_id', 400);
@@ -114,13 +117,13 @@ export async function handleAi(request, action, env = process.env) {
     const body = await bodyJson(request);
     if (isConsentGrant || isConsentRevoke) {
       const actionName = isConsentGrant ? 'GRANT' : 'REVOKE';
-      if (!consentEnvelope(body, actionName)) return fail('invalid_consent_request', 400);
+      if (!consentEnvelope(body, actionName, profile.executionBoundary)) return fail('invalid_consent_request', 400);
       const result = applyAiConsentOperation(db, consentMatch[1], { action: actionName, requestId: body.requestId, actorDeviceId: device.id, expectedServerEpoch: body.expectedServerEpoch, expectedServerVersion: body.expectedServerVersion, expectedContentHash: body.expectedContentHash, env });
-      return response({ consent: result, externalProviderAvailable: false, inferenceAvailable: false });
+      return response({ consent: result, ...availability });
     }
-    if (!analysisEnvelope(body)) return fail('invalid_analysis_request', 400);
+    if (!analysisEnvelope(body, profile.executionBoundary)) return fail('invalid_analysis_request', 400);
     const result = createAiAnalysisRequest(db, body, { actorDeviceId: device.id, env });
-    return response({ ...result, inferenceAvailable: false });
+    return response({ ...result, inferenceAvailable: availability.inferenceAvailable });
   } catch (error) {
     return mapError(error);
   } finally { db?.close(); }
