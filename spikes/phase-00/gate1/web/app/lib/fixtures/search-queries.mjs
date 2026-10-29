@@ -1,0 +1,28 @@
+// Hand-labelled synthetic search queries over sync-server/ai-eval/synthetic-notes.mjs.
+// type: exact (same words), paraphrase (synonyms, same language), cross (other language), noaccent (Vietnamese typed without diacritics).
+export const SEARCH_QUERIES = Object.freeze([
+  { q: 'thông cáo báo chí', type: 'exact', relevant: ['vi-01'] },
+  { q: 'Lisbon flights', type: 'exact', relevant: ['en-04'] },
+  { q: '健康診断', type: 'exact', relevant: ['ja-03'] },
+  { q: 'Bayesian inference', type: 'exact', relevant: ['en-05'] },
+  { q: 'electricity bill', type: 'paraphrase', relevant: ['ja-02', 'vi-02'] },
+  { q: 'trip planning hotel', type: 'paraphrase', relevant: ['en-04', 'vi-04', 'ja-04'] },
+  { q: 'doctor appointment', type: 'paraphrase', relevant: ['vi-03', 'ja-03', 'en-03'] },
+  { q: 'household chores', type: 'paraphrase', relevant: ['vi-06', 'ja-06', 'en-06'] },
+  { q: 'chi tiêu hàng tháng', type: 'paraphrase', relevant: ['vi-02'] },
+  { q: 'buy groceries milk', type: 'paraphrase', relevant: ['en-08', 'vi-08', 'ja-08'] },
+  { q: 'tax return deadline', type: 'cross', relevant: ['vi-10', 'ja-10'] },
+  { q: 'thuế', type: 'cross', relevant: ['vi-10', 'ja-10'] },
+  { q: 'du lịch', type: 'cross', relevant: ['vi-04', 'ja-04', 'en-04'] },
+  { q: '会議', type: 'cross', relevant: ['ja-01', 'vi-01', 'en-01'] },
+  { q: 'học tiếng Nhật', type: 'cross', relevant: ['vi-05'] },
+  { q: 'insurance', type: 'cross', relevant: ['en-10'] },
+  { q: '掃除', type: 'cross', relevant: ['ja-06', 'vi-06'] },
+  { q: 'release date', type: 'cross', relevant: ['ja-07', 'vi-07'] },
+  { q: 'savings', type: 'cross', relevant: ['en-02', 'vi-02', 'ja-02'] },
+  { q: 'hoa don internet', type: 'noaccent', relevant: ['vi-02'] },
+  { q: 'kham rang', type: 'noaccent', relevant: ['vi-03'] },
+  { q: 'tieng nhat', type: 'noaccent', relevant: ['vi-05'] },
+  { q: 'quyet toan thue', type: 'noaccent', relevant: ['vi-10'] },
+  { q: 'da lat homestay', type: 'noaccent', relevant: ['vi-04'] },
+]);

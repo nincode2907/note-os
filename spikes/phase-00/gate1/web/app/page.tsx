@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createNotesRepository, makeEmptyNote } from './lib/local-notes.js';
 import { filterNotes, filterNotesByTags, sortNotes } from './lib/mvp-utils.mjs';
 import { tagKey } from './lib/note-organization.mjs';
+import { createSearchIndex } from './lib/semantic-search.mjs';
 import { captureSnapshotIsCurrent, commitQuickCaptureSnapshot, makeQuickCaptureNote, normalizeQuickCaptureInput, QuickCaptureSaveGate } from './lib/quick-capture.mjs';
 
 type SortMode = 'updated' | 'created' | 'title';
@@ -33,6 +34,8 @@ export default function Home() {
   const [notes, setNotes] = useState<any[]>([]);
   const [syncNotes, setSyncNotes] = useState<Record<string, any>>({});
   const [query, setQuery] = useState('');
+  const [searchMode, setSearchMode] = useState<'smart' | 'exact'>('smart');
+  const searchIndexRef = useRef<ReturnType<typeof createSearchIndex> | null>(null);
   const [sort, setSort] = useState<SortMode>('updated');
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [preferencesReady, setPreferencesReady] = useState(false);
@@ -93,10 +96,22 @@ export default function Home() {
     return [...labels.values()].sort((left, right) => left.localeCompare(right, undefined, { sensitivity: 'base' }));
   }, [notes]);
 
-  const visibleNotes = useMemo(() => {
+  // Smart search ranks by meaning on this device (no network); Exact keeps the original
+  // substring filter, which is also the fallback if the index cannot be used.
+  const search = useMemo(() => {
+    if (searchMode === 'smart' && query.trim()) {
+      try {
+        searchIndexRef.current ??= createSearchIndex();
+        searchIndexRef.current.sync(notes);
+        const byId = new Map(notes.map((note) => [note.id, note]));
+        const ranked = searchIndexRef.current.search(query, { limit: 200 }).map((row) => byId.get(row.id)).filter(Boolean);
+        return { notes: filterNotesByTags(ranked, selectedTags), engine: 'smart' as const };
+      } catch { /* fall back to keyword filtering below */ }
+    }
     const matched = filterNotes(notes, query, 'active');
-    return sortNotes(filterNotesByTags(matched, selectedTags), sort);
-  }, [notes, query, selectedTags, sort]);
+    return { notes: sortNotes(filterNotesByTags(matched, selectedTags), sort), engine: query.trim() ? 'keyword' as const : 'none' as const };
+  }, [notes, query, selectedTags, sort, searchMode]);
+  const visibleNotes = search.notes;
 
   async function createNote() {
     try { const note = await createNotesRepository().create(makeEmptyNote()); location.assign(`/notes/${encodeURIComponent(note.id)}`); }
@@ -173,7 +188,9 @@ export default function Home() {
       <div className={`quick-capture-status ${captureStatus.startsWith('Could not') ? 'is-error' : ''}`} role="status" aria-live="polite">{captureStatus}</div>
     </form>
     <div className="notes-controls">
-      <div className="search-row"><label className="screen-reader" htmlFor="note-search">Search notes</label><input id="note-search" className="searchbox" type="search" placeholder="Search titles, notes and tags…" value={query} onChange={(event) => setQuery(event.target.value)} /><span className="toolbar-label">{visibleNotes.length} {visibleNotes.length === 1 ? 'note' : 'notes'}</span></div>
+      <div className="search-row"><label className="screen-reader" htmlFor="note-search">Search notes</label><input id="note-search" className="searchbox" type="search" placeholder="Search titles, notes and tags…" value={query} onChange={(event) => setQuery(event.target.value)} /><span className="toolbar-label">{visibleNotes.length} {visibleNotes.length === 1 ? 'note' : 'notes'}</span>
+        <div className="search-mode" role="group" aria-label="Search mode"><button type="button" aria-pressed={searchMode === 'smart'} onClick={() => setSearchMode('smart')} title="Find notes by meaning across Vietnamese, English and Japanese. Runs on this device.">Smart</button><button type="button" aria-pressed={searchMode === 'exact'} onClick={() => setSearchMode('exact')} title="Match the exact text you type.">Exact</button></div></div>
+      {search.engine === 'smart' && <p className="search-hint">Ranked by meaning · searched on this device, nothing is sent anywhere</p>}
       <label className="sort-control"><span>Sort</span><select aria-label="Sort notes" value={sort} onChange={(event) => setSort(event.target.value as SortMode)}><option value="updated">Recently updated</option><option value="created">Recently created</option><option value="title">Title A–Z</option></select></label>
     </div>
     {availableTags.length > 0 && <div className="tag-filter-row" aria-label="Filter notes by tag"><span className="toolbar-label">Tags</span>{availableTags.map((tag) => <button key={tagKey(tag)} type="button" className={`tag-chip tag-filter ${selectedTags.some((item) => tagKey(item) === tagKey(tag)) ? 'is-selected' : ''}`} aria-pressed={selectedTags.some((item) => tagKey(item) === tagKey(tag))} onClick={() => toggleTag(tag)}>{tag}</button>)}{selectedTags.length > 0 && <button className="text-button" onClick={() => setSelectedTags([])}>Clear tags</button>}</div>}

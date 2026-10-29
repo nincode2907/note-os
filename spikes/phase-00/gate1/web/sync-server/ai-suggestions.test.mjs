@@ -139,3 +139,22 @@ test('HTTP inbox routes require the paired AI session and validate decision enve
   assert.equal(conflict.status, 409); assert.deepEqual(await conflict.json(), { error: 'DECISION_CONFLICT', current: { decision: 'APPROVED', version: 1 } });
   assert.equal((await call(`suggestions/${id}/decisions`, { method: 'GET' })).status, 405);
 });
+
+test('09F: meaning-based related notes come only from currently consented notes and disappear after revocation', async t => {
+  const host = setup(t);
+  const { SYNTHETIC_NOTES, syntheticNoteRecord } = await import('./ai-eval/synthetic-notes.mjs');
+  const pick = id => syntheticNoteRecord(SYNTHETIC_NOTES.find(row => row.id === id));
+  const source = pick('vi-02'), similar = pick('ja-02'), unconsented = pick('en-02');
+  for (const record of [source, similar, unconsented]) host.commit(record);
+  grantNoteConsent(host.db, similar.id, { state: 'APPROVED_LOCAL_ONLY', providerBoundary: 'MOCK', env });
+  const budget = { ...output, categorySuggestion: null, tagCandidates: [], taskCandidates: [], shortSummary: 'Synthetic budget summary.' };
+  const publishWith = async () => {
+    enqueueAiJob(host.db, source.id, { serverVersion: 1, env, analysisPolicyVersion: `p-${crypto.randomUUID().slice(0, 8)}` });
+    assert.equal((await runOneAiJob(host.db, { workerId: 'w', provider: createMockProvider({ output: budget }), env })).status, 'COMPLETED');
+    return JSON.parse(host.db.prepare('SELECT payload_json p FROM ai_suggestions WHERE note_id=? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(source.id).p).relatedCandidates;
+  };
+  grantNoteConsent(host.db, source.id, { state: 'APPROVED_LOCAL_ONLY', providerBoundary: 'MOCK', env });
+  assert.deepEqual(await publishWith(), [{ id: similar.id, reason: 'similar_content' }], 'Vietnamese budget note relates to the Japanese household-budget note, not to the unconsented English one');
+  revokeNoteConsent(host.db, similar.id);
+  assert.deepEqual(await publishWith(), []);
+});

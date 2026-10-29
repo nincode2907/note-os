@@ -134,7 +134,7 @@ export function AiSuggestionsPanel({ note, canApply, applyTags, applyDocument }:
                   : <p className="ai-value">{label}</p>}
               </div>
               {item.quote && <p className="ai-quote"><span>From your note</span> “{item.quote}”</p>}
-              {item.kind === 'related' && <p className="ai-quote"><span>Why</span> {item.reason === 'title_match' ? 'Same title' : 'Shares tags'} with another note you allowed AI to organize.</p>}
+              {item.kind === 'related' && <p className="ai-quote"><span>Why</span> {item.reason === 'title_match' ? 'Same title' : item.reason === 'similar_content' ? 'Similar content' : 'Shares tags'} with another note you allowed AI to organize.</p>}
               {!decided && applicability.status === 'ready' && <div className="ai-diff" aria-label="Change preview"><span>{preview.area}</span>{preview.add.map(line => <ins key={line}>+ {line}</ins>)}</div>}
               {(applicability.status !== 'ready' || deferred) && <p className="ai-item-status">{deferred && applicability.status === 'ready' ? 'Saved for later.' : STATUS_TEXT[applicability.reason ?? applicability.status] ?? STATUS_TEXT[applicability.status]}{item.state?.decision === 'EDITED' ? ' (edited)' : ''}</p>}
               <div className="ai-actions">

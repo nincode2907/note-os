@@ -22,7 +22,7 @@ COPY --from=build /app/sync-server/auth.mjs /app/sync-server/http.mjs /app/sync-
 COPY --from=build /app/sync-server/migrations ./sync-server/migrations
 # On-demand AI Organize worker (sync-server/ai-worker.mjs) and its runtime imports.
 COPY --from=build /app/sync-server/ai-foundation.mjs /app/sync-server/ai-control.mjs /app/sync-server/ai-http.mjs /app/sync-server/ai-provider-gateway.mjs /app/sync-server/ai-suggestions.mjs /app/sync-server/ai-taxonomy.mjs /app/sync-server/ai-worker.mjs /app/sync-server/ai-maintenance.mjs /app/sync-server/ai-migrate.mjs /app/sync-server/ai-pilot-preflight.mjs ./sync-server/
-COPY --from=build /app/app/lib/note-validation.mjs /app/app/lib/note-organization.mjs ./app/lib/
+COPY --from=build /app/app/lib/note-validation.mjs /app/app/lib/note-organization.mjs /app/app/lib/semantic-search.mjs ./app/lib/
 COPY --from=build /app/packages/document-engine/src ./packages/document-engine/src
 COPY --from=build /app/app/lib/sync-protocol.mjs /app/app/lib/audio-anchors.mjs /app/app/lib/audio-sync-protocol.mjs ./app/lib/
 RUN mkdir -p /var/lib/noteos-sync && chown -R node:node /var/lib/noteos-sync /app/.next

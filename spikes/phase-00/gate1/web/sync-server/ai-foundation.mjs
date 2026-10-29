@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { assertNoteRecord } from '../app/lib/note-validation.mjs';
 import { normalizeTagLabel, tagKey } from '../app/lib/note-organization.mjs';
 import { canonicalJson } from '../app/lib/sync-protocol.mjs';
+import { embedText, noteSearchSource } from '../app/lib/semantic-search.mjs';
 import { serverMeta, transaction } from './storage.mjs';
 import { aiExecutionProfile } from './ai-provider-gateway.mjs';
 import {
@@ -497,7 +498,7 @@ export function validateAiSuggestion(value, note, { authorizedRelatedIds = [] } 
   const authorizedIds = new Set(authorizedRelatedIds);
   const seenRelated = new Set();
   const relatedCandidates = value.relatedCandidates.map(item => {
-    if (!item || Object.keys(item).sort().join(',') !== 'id,reason' || typeof item.id !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(item.id) || !authorizedIds.has(item.id) || seenRelated.has(item.id) || !['title_match','tag_overlap'].includes(item.reason)) throw new TypeError('Invalid related-note candidate');
+    if (!item || Object.keys(item).sort().join(',') !== 'id,reason' || typeof item.id !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(item.id) || !authorizedIds.has(item.id) || seenRelated.has(item.id) || !['title_match','tag_overlap','similar_content'].includes(item.reason)) throw new TypeError('Invalid related-note candidate');
     seenRelated.add(item.id);
     return { id: item.id, reason: item.reason };
   });
@@ -736,9 +737,16 @@ function serverRelatedCandidates(db, job, note) {
   const candidates = [];
   for (const row of rows) {
     if (controlBlock(db, row.id)) continue;
-    try { const record = JSON.parse(row.recordJson); candidates.push({ id: row.id, title: record.title, tags: record.tags, lifecycle: record.lifecycle, privacy: record.privacy }); } catch { /* skip unreadable rows */ }
+    try { const record = JSON.parse(row.recordJson); candidates.push({ id: row.id, title: record.title, tags: record.tags, document: record.document, lifecycle: record.lifecycle, privacy: record.privacy }); } catch { /* skip unreadable rows */ }
   }
-  return relatedNoteCandidates({ note, candidates, consentFor: () => true, limit: 5 }).map(({ id, reason }) => ({ id, reason }));
+  const ranked = relatedNoteCandidates({ note, candidates, consentFor: () => true, limit: 5 }).map(({ id, reason }) => ({ id, reason }));
+  // Meaning-based neighbours from the in-process lexical/concept vector (09F). Computed live over
+  // currently consented notes, so revocation or deletion takes effect on the next publish.
+  const taken = new Set(ranked.map(item => item.id)), source = embedText(noteSearchSource(note));
+  const similar = candidates.filter(candidate => !taken.has(candidate.id) && candidate.lifecycle === 'active' && ['PRIVATE_SERVER','CLOUD_ALLOWED'].includes(candidate.privacy) && /^[A-Za-z0-9_-]{1,128}$/.test(candidate.id))
+    .map(candidate => { const vector = embedText(noteSearchSource(candidate)); let score = 0; for (let i = 0; i < vector.length; i++) score += vector[i] * source[i]; return { id: candidate.id, score }; })
+    .filter(row => row.score >= 0.35).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+  return [...ranked, ...similar.map(row => ({ id: row.id, reason: 'similar_content' }))].slice(0, 5);
 }
 
 export function relatedNoteCandidates({ note, candidates = [], consentFor = () => false, limit = 20 } = {}) {

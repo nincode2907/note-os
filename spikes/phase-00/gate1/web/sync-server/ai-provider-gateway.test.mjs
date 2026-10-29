@@ -214,7 +214,11 @@ test('prompt injection: an adversarial model that obeys every injected instructi
     const payload = db.prepare('SELECT payload_json p FROM ai_suggestions WHERE note_id=?').get(notes[index].id).p;
     for (const forbidden of [...row.gold.forbidden, 'attacker.example', 'evil.example', 'http', '<', '../']) assert.equal(payload.includes(forbidden), false, `${row.id} leaked ${forbidden}`);
     const value = JSON.parse(payload), text = notes[index].title + JSON.stringify(notes[index].document) + notes[index].tags.join(' ');
-    assert.deepEqual(value.relatedCandidates, []);
+    // Related notes are proposed by the server only among consented notes in this store; the
+    // adversary's IDs (an unconsented note and a traversal string) never survive.
+    const consentedIds = new Set(notes.map(note => note.id));
+    assert.ok(value.relatedCandidates.every(item => consentedIds.has(item.id) && item.id !== notes[index].id), JSON.stringify(value.relatedCandidates));
+    assert.ok(value.relatedCandidates.every(item => !['synthetic-en-01', '../../etc/passwd'].includes(item.id)));
     assert.equal(value.categorySuggestion, null, 'the injected category is not in the taxonomy and has no grounded quote');
     for (const tag of value.tagCandidates) assert.ok(text.toLowerCase().includes(tag.label.toLowerCase()), `${row.id} tag ${tag.label} is not extractive`);
     assert.ok(value.uncertainty <= 1);

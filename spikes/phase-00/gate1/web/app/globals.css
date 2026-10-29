@@ -380,3 +380,10 @@ a.ai-inbox-row:hover { transform: translateY(-1px); border-color: var(--ai-accen
   .ai-actions .btn { flex: 1 1 calc(50% - 7px); min-height: 44px; }
   .ai-inbox-row { grid-template-columns: 1fr; }
 }
+
+/* Phase 09F — on-device smart search toggle. */
+.search-mode { display: inline-flex; flex: none; padding: 2px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); }
+.search-mode button { min-height: 32px; padding: 4px 11px; border: 0; border-radius: 999px; background: transparent; color: var(--muted); font-size: 12px; font-weight: 600; transition: background .15s ease, color .15s ease; }
+.search-mode button[aria-pressed="true"] { background: var(--ink); color: white; }
+.search-hint { margin: 6px 2px 0; color: var(--muted); font-size: 11px; }
+@media (max-width: 720px) { .search-mode button { min-height: 40px; } }
