@@ -5,10 +5,10 @@ import { createServer } from 'node:http';
 import { FAKE_MODELS } from './fake-models.mjs';
 
 /**
- * @param {{ models?: Array<{id:string, provider:string, state?:string|null}>, brain?: string,
+ * @param {{ models?: Array<{id:string, provider:string, state?:string|null}>, brain?: string, port?: number,
  *   latencyMs?: number|((index:number)=>number), fault?: (index:number, body:any)=>string|null }} options
  */
-export async function startFakeGateway({ models = [{ id: 'synthetic-local-8b', provider: 'ollama', state: 'available' }, { id: 'gpt-cloud', provider: 'codex', state: 'remote' }], brain = 'heuristic', latencyMs = 0, fault = () => null } = {}) {
+export async function startFakeGateway({ models = [{ id: 'synthetic-local-8b', provider: 'ollama', state: 'available' }, { id: 'gpt-cloud', provider: 'codex', state: 'remote' }], brain = 'heuristic', latencyMs = 0, fault = () => null, port = 0 } = {}) {
   const requests = [];
   let index = 0;
   const server = createServer((req, res) => {
@@ -49,10 +49,10 @@ export async function startFakeGateway({ models = [{ id: 'synthetic-local-8b', p
       send(200, { id: `fake-${current}`, object: 'chat.completion', model: body.model, choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }], usage: { prompt_tokens: Math.ceil(promptChars / 4), completion_tokens: Math.ceil(content.length / 4) } });
     });
   });
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const { port } = server.address();
+  await new Promise((resolve, reject) => server.once('error', reject).listen(port, '127.0.0.1', resolve));
+  const bound = server.address().port;
   return {
-    origin: `http://127.0.0.1:${port}`, port, requests,
+    origin: `http://127.0.0.1:${bound}`, port: bound, requests,
     close: () => new Promise(resolve => { server.closeAllConnections?.(); server.close(() => resolve()); }),
   };
 }

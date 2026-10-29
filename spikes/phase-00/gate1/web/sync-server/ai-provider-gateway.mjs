@@ -1,6 +1,6 @@
 import { request as httpRequest } from 'node:http';
 import { tagKey, normalizeTagLabel } from '../app/lib/note-organization.mjs';
-import { CATEGORY_SYNONYMS } from './ai-eval/synthetic-notes.mjs';
+import { CATEGORY_SYNONYMS } from './ai-taxonomy.mjs';
 
 // Adapter for the existing OpenAI-compatible Local AI Gateway (codex-server). The
 // Gateway can route to the cloud (`codex`) or to local backends (`ollama`, `lmstudio`).

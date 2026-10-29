@@ -8,7 +8,7 @@ import { sha256 } from '@noble/hashes/sha2.js';
 export { NoteDocumentError } from './note-validation.mjs';
 
 const DATABASE_NAME = 'noteos-mvp-01';
-const DATABASE_VERSION = 6;
+const DATABASE_VERSION = 7;
 const STORE_NAME = 'notes';
 const RECORDINGS_STORE = 'recordings';
 const RECORDING_CHUNKS_STORE = 'recordingChunks';
@@ -23,6 +23,9 @@ const AUDIO_SYNC_STATE_STORE = 'audioSyncState';
 const AUDIO_SYNC_CHUNKS_STORE = 'audioSyncChunks';
 const AI_REQUEST_OUTBOX_STORE = 'aiRequestOutbox';
 const AI_CONSENT_CACHE_STORE = 'aiConsentCache';
+const AI_APPLY_RECEIPTS_STORE = 'aiApplyReceipts';
+const AI_DECISION_OUTBOX_STORE = 'aiDecisionOutbox';
+const AI_DECISION_STATES = ['PENDING', 'DELIVERED', 'CONFLICT', 'FAILED'];
 
 export class NoteNotFoundError extends Error {
   constructor(id) {
@@ -142,6 +145,8 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
           }
           if (!database.objectStoreNames.contains(AI_REQUEST_OUTBOX_STORE)) database.createObjectStore(AI_REQUEST_OUTBOX_STORE, { keyPath: 'requestId' });
           if (!database.objectStoreNames.contains(AI_CONSENT_CACHE_STORE)) database.createObjectStore(AI_CONSENT_CACHE_STORE, { keyPath: 'noteId' });
+          if (!database.objectStoreNames.contains(AI_APPLY_RECEIPTS_STORE)) database.createObjectStore(AI_APPLY_RECEIPTS_STORE, { keyPath: 'id' }).createIndex('noteId', 'noteId', { unique: false });
+          if (!database.objectStoreNames.contains(AI_DECISION_OUTBOX_STORE)) database.createObjectStore(AI_DECISION_OUTBOX_STORE, { keyPath: 'requestId' });
         };
         request.onsuccess = () => {
           request.result.onversionchange = () => request.result.close();
@@ -392,6 +397,64 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
     const database = await openDatabase(), tx = database.transaction(AI_REQUEST_OUTBOX_STORE, 'readwrite'), done = transactionResult(tx), store = tx.objectStore(AI_REQUEST_OUTBOX_STORE);
     try { const row = await requestResult(store.get(requestId)); if (!row) { await done; return null; } const updated = { ...row, status, updatedAt: Date.now(), ...(typeof jobId === 'string' ? { jobId } : {}), ...(typeof serverStatus === 'string' ? { serverStatus } : {}) }; store.put(updated); await done; notifySyncStateChanged(); return updated; }
     catch (error) { try { await done; } catch {} throw error; }
+  }
+
+  /**
+   * Local undo receipt for one applied AI suggestion item. It lives beside the note it
+   * changed; a document receipt keeps the pre-apply document so undo can be an exact
+   * inverse while the note is still at the applied revision.
+   */
+  async function recordAiApplyReceipt(receipt) {
+    if (!receipt || typeof receipt.suggestionId !== 'string' || typeof receipt.itemKey !== 'string' || typeof receipt.noteId !== 'string' || !['tags','document'].includes(receipt.type) || !Number.isSafeInteger(receipt.beforeRevision) || !Number.isSafeInteger(receipt.afterRevision)) throw new TypeError('Invalid AI apply receipt.');
+    const database = await openDatabase(), tx = database.transaction(AI_APPLY_RECEIPTS_STORE, 'readwrite'), done = transactionResult(tx), store = tx.objectStore(AI_APPLY_RECEIPTS_STORE);
+    const rows = await requestResult(store.getAll());
+    if (rows.length >= 500) {
+      const oldest = rows.sort((left, right) => Number(Boolean(right.undoneAt)) - Number(Boolean(left.undoneAt)) || left.appliedAt - right.appliedAt)[0];
+      store.delete(oldest.id);
+    }
+    const row = { ...receipt, id: `${receipt.suggestionId}:${receipt.itemKey}`, appliedAt: receipt.appliedAt ?? Date.now(), undoneAt: null };
+    store.put(row); await done; return row;
+  }
+
+  async function listAiApplyReceipts(noteId) {
+    const database = await openDatabase(), tx = database.transaction(AI_APPLY_RECEIPTS_STORE, 'readonly');
+    const rows = await requestResult(tx.objectStore(AI_APPLY_RECEIPTS_STORE).index('noteId').getAll(noteId)); await transactionResult(tx);
+    return rows;
+  }
+
+  async function markAiApplyReceiptUndone(id, now = Date.now()) {
+    const database = await openDatabase(), tx = database.transaction(AI_APPLY_RECEIPTS_STORE, 'readwrite'), done = transactionResult(tx), store = tx.objectStore(AI_APPLY_RECEIPTS_STORE);
+    const row = await requestResult(store.get(id));
+    if (row) store.put({ ...row, undoneAt: now, beforeDocument: null, insertedNode: null });
+    await done; return row ? { ...row, undoneAt: now } : null;
+  }
+
+  /** Durable outbox for owner decisions so offline approvals reach the paired Mac later. */
+  async function queueAiDecision(entry) {
+    if (!entry || !/^[0-9a-f-]{36}$/i.test(entry.requestId ?? '') || !/^[0-9a-f-]{36}$/i.test(entry.suggestionId ?? '') || typeof entry.itemKey !== 'string' || !['APPROVED','EDITED','REJECTED','DEFERRED','UNDONE'].includes(entry.decision) || !Number.isSafeInteger(entry.expectedVersion)) throw new TypeError('Invalid AI decision.');
+    const database = await openDatabase(), tx = database.transaction(AI_DECISION_OUTBOX_STORE, 'readwrite'), done = transactionResult(tx), store = tx.objectStore(AI_DECISION_OUTBOX_STORE);
+    const rows = await requestResult(store.getAll());
+    if (rows.length >= 1000) {
+      const settled = rows.filter(row => row.status !== 'PENDING').sort((left, right) => left.updatedAt - right.updatedAt)[0];
+      if (!settled) { abort(tx, new NoteStateError('The local AI decision queue is full. Connect to the paired Mac to deliver decisions.')); try { await done; } catch {} throw new NoteStateError('The local AI decision queue is full. Connect to the paired Mac to deliver decisions.'); }
+      store.delete(settled.requestId);
+    }
+    const now = Date.now(), row = { requestId: entry.requestId, suggestionId: entry.suggestionId, noteId: entry.noteId, itemKey: entry.itemKey, decision: entry.decision, expectedVersion: entry.expectedVersion, appliedLocalRevision: entry.appliedLocalRevision ?? null, status: 'PENDING', createdAt: now, updatedAt: now };
+    store.put(row); await done; notifySyncStateChanged(); return row;
+  }
+
+  async function listAiDecisions(noteId = null) {
+    const database = await openDatabase(), tx = database.transaction(AI_DECISION_OUTBOX_STORE, 'readonly');
+    const rows = await requestResult(tx.objectStore(AI_DECISION_OUTBOX_STORE).getAll()); await transactionResult(tx);
+    return rows.filter(row => noteId === null || row.noteId === noteId).sort((left, right) => left.createdAt - right.createdAt || left.requestId.localeCompare(right.requestId));
+  }
+
+  async function updateAiDecision(requestId, status, extra = {}) {
+    if (!AI_DECISION_STATES.includes(status)) throw new TypeError('Invalid AI decision state.');
+    const database = await openDatabase(), tx = database.transaction(AI_DECISION_OUTBOX_STORE, 'readwrite'), done = transactionResult(tx), store = tx.objectStore(AI_DECISION_OUTBOX_STORE);
+    const row = await requestResult(store.get(requestId));
+    if (row) store.put({ ...row, status, updatedAt: Date.now(), ...(typeof extra.serverVersion === 'number' ? { serverVersion: extra.serverVersion } : {}), ...(typeof extra.error === 'string' ? { error: extra.error } : {}) });
+    await done; return row ? { ...row, status } : null;
   }
 
   async function recordSyncConflict(operationId, conflict) {
@@ -741,7 +804,7 @@ export function createNotesRepository(indexedDBFactory = globalThis.indexedDB, d
     }
   }
 
-  return { list, get, hasExistingDatabase, create, createIfMissing, save, updateOrganization, setLifecycle, deleteForever, importNotes, snapshotArchive, importArchive, setSyncEnrollment, authorizePrivateServerAudio, getAudioSyncReadiness, setDefaultSyncEnrollment, listSyncOutbox, getSyncState, getSyncOverview, quarantineSyncOperation, getSyncBaseline, setSyncPaired, saveSyncRecovery, recordSyncConflict, commitSyncPull, acknowledgeSyncOperations, getAiConsentCache, cacheAiConsent, createAiAnalysisIntent, queueAiConsentRevoke, listAiIntents, listPendingAiIntents, updateAiIntent };
+  return { list, get, hasExistingDatabase, create, createIfMissing, save, updateOrganization, setLifecycle, deleteForever, importNotes, snapshotArchive, importArchive, setSyncEnrollment, authorizePrivateServerAudio, getAudioSyncReadiness, setDefaultSyncEnrollment, listSyncOutbox, getSyncState, getSyncOverview, quarantineSyncOperation, getSyncBaseline, setSyncPaired, saveSyncRecovery, recordSyncConflict, commitSyncPull, acknowledgeSyncOperations, getAiConsentCache, cacheAiConsent, createAiAnalysisIntent, queueAiConsentRevoke, listAiIntents, listPendingAiIntents, updateAiIntent, recordAiApplyReceipt, listAiApplyReceipts, markAiApplyReceiptUndone, queueAiDecision, listAiDecisions, updateAiDecision };
 }
 
 function assertAudioTimestamp(value, label) {
@@ -780,6 +843,8 @@ export function createAudioRepository(indexedDBFactory = globalThis.indexedDB, d
           if (!database.objectStoreNames.contains(AUDIO_SYNC_CHUNKS_STORE)) { const store = database.createObjectStore(AUDIO_SYNC_CHUNKS_STORE, { keyPath: 'id' }); store.createIndex('transferSequence', ['transferId', 'sequence'], { unique: true }); }
           if (!database.objectStoreNames.contains(AI_REQUEST_OUTBOX_STORE)) database.createObjectStore(AI_REQUEST_OUTBOX_STORE, { keyPath: 'requestId' });
           if (!database.objectStoreNames.contains(AI_CONSENT_CACHE_STORE)) database.createObjectStore(AI_CONSENT_CACHE_STORE, { keyPath: 'noteId' });
+          if (!database.objectStoreNames.contains(AI_APPLY_RECEIPTS_STORE)) database.createObjectStore(AI_APPLY_RECEIPTS_STORE, { keyPath: 'id' }).createIndex('noteId', 'noteId', { unique: false });
+          if (!database.objectStoreNames.contains(AI_DECISION_OUTBOX_STORE)) database.createObjectStore(AI_DECISION_OUTBOX_STORE, { keyPath: 'requestId' });
         };
         request.onsuccess = () => { request.result.onversionchange = () => request.result.close(); resolve(request.result); };
         request.onerror = () => reject(request.error ?? new Error('Could not open local audio storage.'));

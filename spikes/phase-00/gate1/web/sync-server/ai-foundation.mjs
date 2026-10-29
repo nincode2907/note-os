@@ -16,7 +16,8 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const MIGRATION = join(HERE, 'migrations/001-ai-foundation.sql');
 const BRIDGE_MIGRATION = join(HERE, 'migrations/002-ai-consent-bridge.sql');
 const LOCAL_BOUNDARY_MIGRATION = join(HERE, 'migrations/003-ai-local-boundary.sql');
-export const AI_SCHEMA_VERSION = 3;
+const DECISIONS_MIGRATION = join(HERE, 'migrations/004-ai-suggestion-decisions.sql');
+export const AI_SCHEMA_VERSION = 4;
 const MAX_QUEUE = 1000;
 const MAX_CONSENT_ROWS = 1000;
 const MAX_JOB_ROWS = 10000;
@@ -50,8 +51,9 @@ export function applyAiSchema(db) {
     const current = () => db.prepare('SELECT max(version) version FROM ai_schema_migrations').get().version ?? 0;
     if (current() === 1) db.exec(readFileSync(BRIDGE_MIGRATION, 'utf8'));
     if (current() === 2) db.exec(readFileSync(LOCAL_BOUNDARY_MIGRATION, 'utf8'));
+    if (current() === 3) db.exec(readFileSync(DECISIONS_MIGRATION, 'utf8'));
     const versions = db.prepare('SELECT version FROM ai_schema_migrations ORDER BY version').all().map(row => row.version);
-    if (versions.join(',') !== '1,2,3') throw new Error('AI migration ledger requires review');
+    if (versions.join(',') !== '1,2,3,4') throw new Error('AI migration ledger requires review');
     return versions.at(-1);
   });
   ensureAiControlPlane(db);
@@ -660,7 +662,11 @@ export async function runOneAiJob(db, { workerId, provider, env = process.env, n
     return { status: 'aborted', reason: stopReason, invoked: true };
   }
   let validated;
-  try { validated = validateAiSuggestion(result, dispatch.note); }
+  try {
+    const related = serverRelatedCandidates(db, job, dispatch.note);
+    if (result && typeof result === 'object' && !Array.isArray(result)) result = { ...result, relatedCandidates: related };
+    validated = validateAiSuggestion(result, dispatch.note, { authorizedRelatedIds: related.map(item => item.id) });
+  }
   catch {
     return transaction(db, () => {
       const eligible = currentEligible(db, job, env);
@@ -714,6 +720,22 @@ function retryAfterProviderFailure(db, job, workerId, clock, env, { permanent = 
     audit(db, { action: 'JOB_RETRIED', noteId: job.note_id, jobId: job.id, reasonCode: 'provider_timeout_or_error', metadata: { attempts: job.attempts, delayMs: delay }, now: publishNow });
     return { status: 'QUEUED', invoked: true, runAfter: publishNow + delay };
   });
+}
+
+/**
+ * Related notes are proposed by noteOS, never by the model: only active, eligible notes
+ * whose own consent is currently approved for the same boundary can be named, and only
+ * their IDs plus a reason code are stored.
+ */
+function serverRelatedCandidates(db, job, note) {
+  const rows = db.prepare(`SELECT e.id,e.record_json recordJson FROM sync_entities e JOIN ai_note_consent c ON c.note_id=e.id
+    WHERE e.entity_type='note' AND e.lifecycle='active' AND e.id<>? AND c.state='APPROVED_LOCAL_ONLY' AND c.provider_boundary=? LIMIT 2000`).all(job.note_id, job.execution_boundary);
+  const candidates = [];
+  for (const row of rows) {
+    if (controlBlock(db, row.id)) continue;
+    try { const record = JSON.parse(row.recordJson); candidates.push({ id: row.id, title: record.title, tags: record.tags, lifecycle: record.lifecycle, privacy: record.privacy }); } catch { /* skip unreadable rows */ }
+  }
+  return relatedNoteCandidates({ note, candidates, consentFor: () => true, limit: 5 }).map(({ id, reason }) => ({ id, reason }));
 }
 
 export function relatedNoteCandidates({ note, candidates = [], consentFor = () => false, limit = 20 } = {}) {

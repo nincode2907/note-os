@@ -2,6 +2,7 @@ import { authenticate } from './auth.mjs';
 import { allowedOrigin } from './http.mjs';
 import { AI_SCHEMA_VERSION, aiFeatureFlags, applyAiConsentOperation, consumeAiBridgeRateLimit, createAiAnalysisRequest, readAiConsent } from './ai-foundation.mjs';
 import { aiExecutionProfile } from './ai-provider-gateway.mjs';
+import { decideSuggestionItem, listNoteSuggestions, listSuggestionInbox, validateDecisionEnvelope } from './ai-suggestions.mjs';
 import { openStore } from './storage.mjs';
 
 const baseHeaders = { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' };
@@ -62,8 +63,10 @@ function mapError(error) {
     ['CONSENT_REQUIRED', 403], ['CONSENT_CHANGED', 409], ['DEVICE_ONLY', 403], ['PRIVACY_REQUIRED', 403],
     ['PRIVACY_UNSUPPORTED', 403], ['NOTE_INACTIVE', 409], ['IDEMPOTENCY_CONFLICT', 409],
     ['RATE_LIMITED', 429], ['AI_REVOCATION_NOT_PERSISTED', 503], ['REVOCATION_PENDING', 409], ['AI_CONTROL_UNAVAILABLE', 503],
+    ['DECISION_CONFLICT', 409], ['DECISION_NOT_ALLOWED', 409], ['SUGGESTION_REVOKED', 410], ['SUGGESTION_NOT_FOUND', 404],
+    ['ITEM_NOT_FOUND', 404], ['DECISION_CAPACITY_REACHED', 507],
   ]);
-  if (error?.code && known.has(error.code)) return fail(error.code, known.get(error.code));
+  if (error?.code && known.has(error.code)) return error.current ? response({ error: error.code, current: error.current }, known.get(error.code)) : fail(error.code, known.get(error.code));
   if (error?.status === 413) return fail('payload_too_large', 413);
   if (error?.status === 400) return fail('invalid_json', 400);
   if (error?.status === 403) return fail(error.code ?? 'csrf_denied', 403);
@@ -93,7 +96,13 @@ export async function handleAi(request, action, env = process.env) {
     const isConsentGrant = Boolean(consentMatch) && request.method === 'PUT';
     const isConsentRevoke = Boolean(consentMatch) && request.method === 'DELETE';
     const isRequestRead = Boolean(requestMatch) && request.method === 'GET';
-    if (!(isCollection || isConsentRead || isConsentGrant || isConsentRevoke || isRequestRead)) return fail(consentMatch || requestMatch || action === 'analysis-requests' ? 'method_not_allowed' : 'route_not_found', consentMatch || requestMatch || action === 'analysis-requests' ? 405 : 404);
+    const noteSuggestionsMatch = action.match(/^suggestions\/notes\/([A-Za-z0-9_-]{1,128})$/);
+    const decisionMatch = action.match(/^suggestions\/([0-9a-f-]{36})\/decisions$/i);
+    const isInbox = action === 'suggestions' && request.method === 'GET';
+    const isNoteSuggestions = Boolean(noteSuggestionsMatch) && request.method === 'GET';
+    const isDecision = Boolean(decisionMatch) && request.method === 'POST';
+    const known = consentMatch || requestMatch || action === 'analysis-requests' || action === 'suggestions' || noteSuggestionsMatch || decisionMatch;
+    if (!(isCollection || isConsentRead || isConsentGrant || isConsentRevoke || isRequestRead || isInbox || isNoteSuggestions || isDecision)) return fail(known ? 'method_not_allowed' : 'route_not_found', known ? 405 : 404);
 
     const cookieName = origin.protocol === 'https:' ? '__Secure-noteos_ai' : 'noteos_ai_local';
     const cookies = (request.headers.get('cookie') ?? '').split(';').map(value => value.trim()).filter(value => value.startsWith(`${cookieName}=`));
@@ -104,6 +113,8 @@ export async function handleAi(request, action, env = process.env) {
     consumeAiBridgeRateLimit(db, device.id);
 
     if (isConsentRead) return response({ consent: readAiConsent(db, consentMatch[1]), ...availability });
+    if (isInbox) return response({ suggestions: listSuggestionInbox(db) });
+    if (isNoteSuggestions) return response({ suggestions: listNoteSuggestions(db, noteSuggestionsMatch[1]) });
     if (isRequestRead) {
       const requestId = requestMatch[1];
       if (!UUID.test(requestId)) return fail('invalid_request_id', 400);
@@ -115,6 +126,10 @@ export async function handleAi(request, action, env = process.env) {
     }
 
     const body = await bodyJson(request);
+    if (isDecision) {
+      if (!validateDecisionEnvelope(body)) return fail('invalid_decision_request', 400);
+      return response(decideSuggestionItem(db, decisionMatch[1], body, { actorDeviceId: device.id }));
+    }
     if (isConsentGrant || isConsentRevoke) {
       const actionName = isConsentGrant ? 'GRANT' : 'REVOKE';
       if (!consentEnvelope(body, actionName, profile.executionBoundary)) return fail('invalid_consent_request', 400);

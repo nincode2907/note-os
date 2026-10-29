@@ -24,15 +24,19 @@ export function AiConsentPanel({ noteId, localRevision, privacy, lifecycle, canR
   const [latestIntent, setLatestIntent] = useState<Intent | null>(null), [baselineReady, setBaselineReady] = useState(false);
   const [confirmed, setConfirmed] = useState(false), [busy, setBusy] = useState(false), [message, setMessage] = useState('');
   const [boundary, setBoundary] = useState<'MOCK' | 'STRICT_LOCAL'>('MOCK'), [inferenceAvailable, setInferenceAvailable] = useState(false);
-  const busyRef = useRef(false);
+  const busyRef = useRef(false), lastServerCheckRef = useRef(0);
 
-  const refresh = useCallback(async () => {
+  // Local cache reads are immediate; server checks are throttled because Sync emits bursts of
+  // state events and the paired Mac allows 60 AI requests per device per minute.
+  const refresh = useCallback(async (force = true) => {
     const cache = await repository.getAiConsentCache(noteId);
     const localIntents: Intent[] = await repository.listAiIntents(noteId);
     const baseline = await repository.getSyncBaseline(noteId);
     setLatestIntent(localIntents.filter(row => row.kind === 'analysis').at(-1) ?? localIntents.at(-1) ?? null);
     setBaselineReady(Boolean(baseline && baseline.localRevision === localRevision && baseline.serverVersion > 0));
     if (cache && cache.state !== 'REVOKE_PENDING') { setAvailable(true); setConsent(cache); }
+    if (!force && Date.now() - lastServerCheckRef.current < 15000) return;
+    lastServerCheckRef.current = Date.now();
     try {
       const state = await discoverAi();
       if (!state.enabled) { setAvailable(false); return; }
@@ -57,11 +61,11 @@ export function AiConsentPanel({ noteId, localRevision, privacy, lifecycle, canR
   }, [noteId, localRevision, privacy, repository]);
 
   useEffect(() => {
-    void refresh();
-    const changed = () => { void refresh(); };
+    void refresh(true);
+    const changed = () => { void refresh(false); }, online = () => { void refresh(true); };
     window.addEventListener('noteos:sync-state-changed', changed);
-    window.addEventListener('online', changed);
-    return () => { window.removeEventListener('noteos:sync-state-changed', changed); window.removeEventListener('online', changed); };
+    window.addEventListener('online', online);
+    return () => { window.removeEventListener('noteos:sync-state-changed', changed); window.removeEventListener('online', online); };
   }, [refresh]);
 
   async function perform(action: () => Promise<any>, success: string) {

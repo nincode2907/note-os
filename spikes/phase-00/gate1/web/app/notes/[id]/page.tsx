@@ -11,6 +11,7 @@ import { normalizeTagLabel, safeTagsForNoteCopy, tagKey } from '../../lib/note-o
 import { canonicalToMarkdown, createTiptapEditor, validateCanonicalDocument, toTiptapJSON } from '../../../packages/document-engine/src/index.js';
 import { AudioRecorder } from '../../ui/audio-recorder';
 import { AiConsentPanel } from '../../ui/ai-consent-panel';
+import { AiSuggestionsPanel } from '../../ui/ai-suggestions-panel';
 import { NoteIcon } from '../../ui/note-icon';
 
 type Note = { id: string; title: string; document: any; schemaVersion: number; createdAt: number; updatedAt: number; lifecycle: 'active' | 'archived' | 'trashed'; revision: number; privacy?: string; pinned?: boolean; tags?: string[] };
@@ -215,6 +216,42 @@ export default function NoteEditorPage() {
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not add this tag.'); }
   }
 
+  // AI suggestions are applied only on an explicit owner action, through the same save
+  // coordinator (revision CAS, recovery journal, Sync outbox) as a manual edit.
+  async function aiApplyTags(tags: string[]): Promise<Note | null> {
+    if (!editable || recoveryRef.current || !coordinatorRef.current) return null;
+    let saved: Note | null = null;
+    const ok = await operation(async () => {
+      const result = await coordinatorRef.current.updateMetadata({ tags });
+      if (result.ok) saved = result.note;
+      return result.ok;
+    });
+    return ok ? saved : null;
+  }
+
+  async function aiApplyDocument(next: any): Promise<Note | null> {
+    if (!editable || recoveryRef.current || !coordinatorRef.current) return null;
+    let saved: Note | null = null;
+    const ok = await operation(async () => {
+      const coordinator = coordinatorRef.current, previous = coordinator.snapshot();
+      if (previous.dirty || previous.inFlight) return false;
+      const converted = toTiptapJSON(next);
+      if (converted.status !== 'ready' || !converted.json || !editorRef.current?.commands.setContent(converted.json, { emitUpdate: false, errorOnInvalidContent: true })) throw new Error('Could not apply the suggestion to the editor safely.');
+      setDoc(next); coordinator.edit({ ...previous.draft, document: next });
+      const result = await coordinator.flush();
+      if (!result.ok) {
+        // Leave the editor on the last saved content, never on an unsaved AI edit.
+        const restored = toTiptapJSON(previous.note.document);
+        if (restored.json) editorRef.current?.commands.setContent(restored.json, { emitUpdate: false });
+        setDoc(previous.note.document); coordinator.edit({ title: previous.draft.title, document: previous.note.document });
+        return false;
+      }
+      saved = result.note;
+      return true;
+    });
+    return ok ? saved : null;
+  }
+
   function removeTag(tagToRemove: string) {
     const tags = (Array.isArray(note?.tags) ? note.tags : []).filter((tag) => tagKey(tag) !== tagKey(tagToRemove));
     void updateOrganization({ tags });
@@ -263,6 +300,7 @@ export default function NoteEditorPage() {
       </div>
     </section>}
     {note && note.lifecycle === 'active' && recordSchemaSupported && <AiConsentPanel noteId={note.id} localRevision={note.revision} privacy={note.privacy} lifecycle={note.lifecycle} canRequest={aiCanRequest} />}
+    {note && recordSchemaSupported && ['PRIVATE_SERVER', 'CLOUD_ALLOWED'].includes(note.privacy ?? '') && <AiSuggestionsPanel note={note} canApply={aiCanRequest} applyTags={aiApplyTags} applyDocument={aiApplyDocument} />}
     {validation?.status === 'supported' && note?.lifecycle === 'trashed' && <div className="notice">Restore this note to edit it. Its content is preserved below.</div>}
     {validation?.status === 'supported' && editable ? <><div className="editor-toolbar" role="toolbar" aria-label="Text formatting">
       <button className="tool-button mic-trigger" aria-label="Open audio recordings" title="Audio recordings" onClick={() => { setAudioOpenSignal((value) => value + 1); audioPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }); }}><NoteIcon name="mic" /></button><button className="tool-button" aria-label="Bold" title="Bold" onClick={() => editorRef.current?.chain().focus().toggleBold().run()}><NoteIcon name="bold" /></button><button className="tool-button" aria-label="Italic" title="Italic" onClick={() => editorRef.current?.chain().focus().toggleItalic().run()}><NoteIcon name="italic" /></button><button className="tool-button" aria-label="Strike" title="Strike" onClick={() => editorRef.current?.chain().focus().toggleStrike().run()}><NoteIcon name="strike" /></button><button className="tool-button" aria-label="Heading 2" title="Heading 2" onClick={() => editorRef.current?.chain().focus().toggleHeading({ level: 2 }).run()}><NoteIcon name="heading" /></button><button className="tool-button" aria-label="Bullet list" title="Bullet list" onClick={() => editorRef.current?.chain().focus().toggleBulletList().run()}><NoteIcon name="bullets" /></button><button className="tool-button" aria-label="Ordered list" title="Numbered list" onClick={() => editorRef.current?.chain().focus().toggleOrderedList().run()}><NoteIcon name="numbered" /></button><button className="tool-button" aria-label="Checklist" title="Checklist" onClick={toggleChecklist}><NoteIcon name="checklist" /></button><button className="tool-button" aria-label="Quote" title="Quote" onClick={() => editorRef.current?.chain().focus().toggleBlockquote().run()}><NoteIcon name="quote" /></button><button className="tool-button" aria-label="Code block" title="Code block" onClick={() => editorRef.current?.chain().focus().toggleCodeBlock().run()}><NoteIcon name="code" /></button>

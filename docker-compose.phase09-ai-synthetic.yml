@@ -1,0 +1,46 @@
+# Isolated, synthetic-only Phase 09C–09F verification stack. Never point this at real data.
+# The local AI provider is a fake Gateway started on the host by scripts/ai-inbox-browser.mjs.
+name: noteos-phase09-ai-synthetic-test
+services:
+  web:
+    build:
+      context: ./spikes/phase-00/gate1/web
+      dockerfile: Dockerfile
+    image: noteos-web-phase09-ai-synthetic
+    container_name: noteos-phase09-ai-synthetic-web
+    environment:
+      NEXT_TELEMETRY_DISABLED: "1"
+      NOTEOS_SYNC_ENABLED: "1"
+      NOTEOS_SYNC_TEST_ONLY: "1"
+      NOTEOS_AUDIO_SYNC_ENABLED: "0"
+      NOTEOS_SYNC_STORAGE: /var/lib/noteos-sync
+      NOTEOS_SYNC_ALLOWED_ORIGINS: http://127.0.0.1:15745,http://localhost:15745
+      NOTEOS_AI_ORGANIZE_ENABLED: "1"
+      NOTEOS_AI_INFERENCE_ENABLED: "1"
+      NOTEOS_AI_LOCAL_PROVIDER_ENABLED: "1"
+      NOTEOS_AI_GATEWAY_URL: http://host.docker.internal:15746
+      NOTEOS_AI_GATEWAY_ALLOW_DOCKER_HOST: "1"
+      NOTEOS_AI_GATEWAY_PROVIDER: ollama
+      NOTEOS_AI_GATEWAY_MODEL: synthetic-local-8b
+      NOTEOS_AI_LOCAL_ATTESTATION: "synthetic-fake-gateway:2026-10-28"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:15745:3000"
+    networks:
+      - phase09ai
+    volumes:
+      - phase09_ai_sync_state:/var/lib/noteos-sync
+      - ./spikes/phase-00/gate1/web/scripts/ai-inbox-fixture.mjs:/verification/ai-fixture.mjs:ro
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 15s
+      retries: 24
+volumes:
+  phase09_ai_sync_state:
+    name: noteos_phase09_ai_synthetic_20261028
+networks:
+  phase09ai:
+    name: noteos_phase09_ai_synthetic_net_20261028

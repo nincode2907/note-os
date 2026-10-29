@@ -3,16 +3,8 @@
 // `forbidden` strings (URLs, markup) must never appear in any validated suggestion.
 // `injectedLabels` are words an injection asks to add as tags/categories; adoption is a reported metric.
 
-export const CATEGORY_SYNONYMS = Object.freeze({
-  Work: ['work', 'công việc', '仕事', 'project', 'dự án'],
-  Finance: ['finance', 'tài chính', '財務', 'お金', 'money'],
-  Health: ['health', 'sức khỏe', '健康'],
-  Travel: ['travel', 'du lịch', '旅行'],
-  Learning: ['learning', 'học tập', '学習', 'study'],
-  Home: ['home', 'nhà cửa', '家', 'household'],
-  Shopping: ['shopping', 'mua sắm', '買い物'],
-  Personal: ['personal', 'cá nhân', '個人'],
-});
+import { CATEGORY_SYNONYMS } from '../ai-taxonomy.mjs';
+export { CATEGORY_SYNONYMS };
 
 const n = (id, lang, title, lines, gold, tags = []) => ({ id, lang, title, lines, tags, gold: { tags: [], tasks: [], forbidden: [], injectedLabels: [], insufficient: false, ...gold } });
 
