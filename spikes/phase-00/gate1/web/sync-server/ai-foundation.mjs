@@ -119,8 +119,11 @@ function grantNoteConsentInTransaction(db, noteId, { state = 'APPROVED_LOCAL_ONL
   if (privacy === 'DEVICE_ONLY') throw bridgeFailure('DEVICE_ONLY', 403);
   if (privacy === undefined || privacy === null) throw bridgeFailure('PRIVACY_REQUIRED', 403);
   if (!['PRIVATE_SERVER','CLOUD_ALLOWED'].includes(privacy)) throw bridgeFailure('PRIVACY_UNSUPPORTED', 403);
-  const previous = db.prepare('SELECT consent_epoch FROM ai_note_consent WHERE note_id=?').get(noteId);
+  const previous = db.prepare('SELECT consent_epoch,state FROM ai_note_consent WHERE note_id=?').get(noteId);
   if (!previous && db.prepare('SELECT count(*) AS n FROM ai_note_consent').get().n >= MAX_CONSENT_ROWS) throw new Error('AI consent capacity reached');
+  // Controlled pilot: an optional owner-set cap on how many notes may hold an active grant at once.
+  const pilotCap = Number(env.NOTEOS_AI_PILOT_MAX_NOTES || 0);
+  if (pilotCap > 0 && !String(previous?.state ?? '').startsWith('APPROVED') && db.prepare("SELECT count(*) AS n FROM ai_note_consent WHERE state IN ('APPROVED_LOCAL_ONLY','APPROVED_CLOUD_ALLOWED')").get().n >= pilotCap) throw bridgeFailure('PILOT_NOTE_LIMIT');
   const consentEpoch = (previous?.consent_epoch ?? 0) + 1;
   db.prepare(`INSERT INTO ai_note_consent(note_id,state,scopes_json,provider_boundary,consent_epoch,updated_at)
     VALUES(?,?,?,?,?,?) ON CONFLICT(note_id) DO UPDATE SET state=excluded.state,scopes_json=excluded.scopes_json,

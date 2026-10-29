@@ -64,7 +64,7 @@ function mapError(error) {
     ['PRIVACY_UNSUPPORTED', 403], ['NOTE_INACTIVE', 409], ['IDEMPOTENCY_CONFLICT', 409],
     ['RATE_LIMITED', 429], ['AI_REVOCATION_NOT_PERSISTED', 503], ['REVOCATION_PENDING', 409], ['AI_CONTROL_UNAVAILABLE', 503],
     ['DECISION_CONFLICT', 409], ['DECISION_NOT_ALLOWED', 409], ['SUGGESTION_REVOKED', 410], ['SUGGESTION_NOT_FOUND', 404],
-    ['ITEM_NOT_FOUND', 404], ['DECISION_CAPACITY_REACHED', 507],
+    ['ITEM_NOT_FOUND', 404], ['DECISION_CAPACITY_REACHED', 507], ['PILOT_NOTE_LIMIT', 409],
   ]);
   if (error?.code && known.has(error.code)) return error.current ? response({ error: error.code, current: error.current }, known.get(error.code)) : fail(error.code, known.get(error.code));
   if (error?.status === 413) return fail('payload_too_large', 413);
